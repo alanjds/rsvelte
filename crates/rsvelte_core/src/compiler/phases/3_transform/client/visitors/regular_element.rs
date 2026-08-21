@@ -32,7 +32,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::transition_dire
 use crate::compiler::phases::phase3_transform::client::visitors::use_directive::use_directive;
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::{
-    JsExpr, JsLiteral, JsPattern, JsStatement,
+    JsExpr, JsLiteral, JsPattern, JsStatement, JsUnaryOp,
 };
 use crate::compiler::phases::phase3_transform::utils::is_svelte_whitespace_only;
 use crate::compiler::phases::phase3_transform::utils::{
@@ -2169,6 +2169,15 @@ fn is_value_known_defined(
         JsExpr::Call(call) => js_expr_keypath(arena.get_expr(call.callee), arena)
             .as_deref()
             .is_some_and(is_known_defined_global_call),
+        // `scope.evaluate` adds FUNCTION for every function form, which is never nullish.
+        JsExpr::Arrow(_) | JsExpr::Function(_) => true,
+        // Every binary operator upstream enumerates yields a boolean, a number
+        // or a string; only an operator outside that set is UNKNOWN, and the
+        // JsBinaryOp enum has none.
+        JsExpr::Binary(_) => true,
+        // `void x` is upstream's only unary evaluating to `undefined`; `!`/`delete`
+        // give a boolean, `+`/`-`/`~` a number and `typeof` a string.
+        JsExpr::Unary(unary) => !matches!(unary.operator, JsUnaryOp::Void),
         // For identifiers: look up the binding to check if the initial value is defined.
         // This mirrors the official compiler's scope.evaluate() which, for identifiers,
         // checks if the binding is not updated, has an initial value, and is not a prop,
