@@ -199,7 +199,8 @@ pub fn napi_parse(source: String, options: Option<NapiParseOptions>) -> napi::Re
         capture_comments: true,
         ..ParseOptions::default()
     };
-    match rust_parse(&source, &rsvelte_core::Allocator::default(), parse_options) {
+    let source = rsvelte_core::compiler::remove_bom(&source);
+    match rust_parse(source, &rsvelte_core::Allocator::default(), parse_options) {
         Ok(ast) => {
             // Serialize within the AST's arena so `JsNodeId`s in the
             // Serialize impls resolve (mirrors `wasm::parse_svelte`).
@@ -212,7 +213,7 @@ pub fn napi_parse(source: String, options: Option<NapiParseOptions>) -> napi::Re
                 }
                 let mut value = serde_json::to_value(&ast)
                     .map_err(|e| napi::Error::from_reason(format!("serialize ast: {e}")))?;
-                let conv = rsvelte_core::compiler::legacy::Utf8ToUtf16::new(&source);
+                let conv = rsvelte_core::compiler::legacy::Utf8ToUtf16::new(source);
                 rsvelte_core::compiler::legacy::convert_positions_to_utf16(&mut value, &conv);
                 serde_json::to_string(&value)
                     .map_err(|e| napi::Error::from_reason(format!("serialize ast: {e}")))
@@ -257,7 +258,8 @@ pub fn napi_parse_envelope(
         options.as_ref().and_then(|o| o.skip_css_ast.as_ref()),
         "skipCssAst",
     )?;
-    let ast = rust_parse(&source, &rsvelte_core::Allocator::default(), parse_options)
+    let source = rsvelte_core::compiler::remove_bom(&source);
+    let ast = rust_parse(source, &rsvelte_core::Allocator::default(), parse_options)
         .map_err(|e| napi::Error::from_reason(format!("{e:?}")))?;
     // napi-rs's `Vec<u8> → Buffer` conversion is already zero-copy
     // (V8 adopts the `Vec`'s allocation); a bumpalo-backed variant
@@ -266,7 +268,7 @@ pub fn napi_parse_envelope(
     // `Vec::reserve` calls for envelopes that fit in a single growth
     // step.
     let buf = rsvelte_bindings_support::napi_raw_parse::encode_root_to_vec_with_flags(
-        &ast, &source, skip_loc, skip_css,
+        &ast, source, skip_loc, skip_css,
     );
     Ok(buf.into())
 }
