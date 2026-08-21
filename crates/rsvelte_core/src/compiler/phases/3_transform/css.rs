@@ -7471,9 +7471,11 @@ fn format_simple_selector_with_scope(
                     // has already been scoped (specificity bumped), ALL inner selectors
                     // should use :where() for scoping.
                     let inner = transform_is_not_args(
+                        sel,
                         args,
                         selector,
                         css_source,
+                        css_start,
                         name,
                         ctx,
                         use_direct_class,
@@ -7556,10 +7558,13 @@ fn format_simple_selector_with_scope(
 ///
 /// Note: For :not(), we never mark inner selectors as unused because :not(X) means
 /// "everything that is NOT X", which is always potentially matching something.
+#[allow(clippy::too_many_arguments)]
 fn transform_is_not_args(
+    sel: &Value,
     args: &Value,
     selector: &str,
     css_source: &str,
+    css_start: Option<usize>,
     pseudo_name: &str,
     ctx: Option<&CssContext>,
     use_direct_class: bool,
@@ -7603,6 +7608,13 @@ fn transform_is_not_args(
             }
         }
 
+        if let Some(css_start) = css_start
+            && let Some(spliced) =
+                splice_argument_list(sel, children, &selectors, css_source, css_start)
+        {
+            return spliced;
+        }
+
         for (i, (is_unused, selector)) in selectors.iter().enumerate() {
             if i > 0 {
                 result.push(' ');
@@ -7627,6 +7639,119 @@ fn transform_is_not_args(
     }
 
     result
+}
+
+/// Rebuild a pseudo-class argument list by editing the source the way upstream's
+/// `SelectorList` visitor does, rather than joining the transformed arguments
+/// with `", "`: everything the source has between two arguments — a comment
+/// above all — is copied through, and one `/* (unused) … */` spans a whole run
+/// of pruned arguments instead of one per argument.
+///
+/// `None` when the spans do not line up with the source, in which case the
+/// caller falls back to reconstructing the list.
+fn splice_argument_list(
+    sel: &Value,
+    children: &[Value],
+    // `(is_unused, transformed text)` per argument, in source order.
+    entries: &[(bool, String)],
+    css_source: &str,
+    css_start: usize,
+) -> Option<String> {
+    let rel = |node: &Value, key: &str| -> Option<usize> {
+        usize::try_from(node.get(key)?.as_u64()?)
+            .ok()?
+            .checked_sub(css_start)
+            .filter(|offset| *offset <= css_source.len())
+    };
+
+    let sel_start = rel(sel, "start")?;
+    let sel_end = rel(sel, "end")?;
+    if sel_end <= sel_start {
+        return None;
+    }
+    let open = css_source[sel_start..sel_end].find('(')? + sel_start;
+    let close = sel_end - 1;
+    if css_source.as_bytes().get(close) != Some(&b')') {
+        return None;
+    }
+    let content_start = open + 1;
+    if content_start > close || children.len() != entries.len() || children.is_empty() {
+        return None;
+    }
+
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(children.len());
+    for child in children {
+        let start = rel(child, "start")?;
+        let end = rel(child, "end")?;
+        if start < content_start || end > close || start > end {
+            return None;
+        }
+        if spans.last().is_some_and(|(_, prev_end)| start < *prev_end) {
+            return None;
+        }
+        spans.push((start, end));
+    }
+
+    // (from, to, text, is_insert) — an insertion sorts before a replacement that
+    // starts at the same offset, mirroring MagicString's `appendRight` /
+    // `prependRight` landing before the following chunk.
+    let mut edits: Vec<(usize, usize, String, bool)> = Vec::new();
+    for (i, &(start, end)) in spans.iter().enumerate() {
+        // A pruned argument keeps its source text: upstream never scopes one.
+        let text = if entries[i].0 {
+            css_source[start..end].to_string()
+        } else {
+            entries[i].1.clone()
+        };
+        edits.push((start, end, text, false));
+    }
+
+    let mut pruning = false;
+    let mut last = spans[0].0;
+    let mut has_previous_used = false;
+    for (i, &(start, end)) in spans.iter().enumerate() {
+        let used = !entries[i].0;
+        if used == pruning {
+            if pruning {
+                let mut comma = start;
+                while comma > content_start && css_source.as_bytes()[comma] != b',' {
+                    comma -= 1;
+                }
+                if css_source.as_bytes().get(comma) != Some(&b',') {
+                    return None;
+                }
+                let at = if has_previous_used { comma } else { comma + 1 };
+                edits.push((at, at, "*/".to_string(), true));
+            } else if i == 0 {
+                edits.push((start, start, "/* (unused) ".to_string(), true));
+            } else {
+                edits.push((last, start, " /* (unused) ".to_string(), false));
+            }
+            pruning = !pruning;
+        }
+        if !pruning && used {
+            has_previous_used = true;
+        }
+        last = end;
+    }
+    if pruning {
+        edits.push((last, last, "*/".to_string(), true));
+    }
+
+    edits.sort_by_key(|(from, _, _, is_insert)| (*from, !*is_insert));
+
+    let mut out = String::new();
+    let mut cursor = content_start;
+    for (from, to, text, _) in edits {
+        if from < cursor || to < from || to > close {
+            return None;
+        }
+        out.push_str(&css_source[cursor..from]);
+        out.push_str(&text);
+        cursor = to;
+    }
+    out.push_str(&css_source[cursor..close]);
+    Some(out)
 }
 
 /// Transform a complex selector inside :is()/:not()/:has() with optional :where() scoping
