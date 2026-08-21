@@ -9,7 +9,7 @@ use super::interfaces::{Svelte2TsxOptions, SvelteVersion};
 use super::magic_string::MagicString;
 use super::nodes::component_documentation::extract_component_documentation;
 use super::nodes::component_events::build_events_str;
-use super::nodes::generics::{compact_generic_params, split_generic_param_names};
+use super::nodes::generics::Generics;
 use super::nodes::slot::build_slots_str;
 use super::script::{ComponentEvents, ExportedNames};
 use super::template;
@@ -24,7 +24,7 @@ pub struct ComponentExportParams<'a> {
     pub template_info: &'a template::TemplateInfo<'a>,
     pub exported_names: &'a ExportedNames,
     pub events: &'a mut ComponentEvents,
-    pub generics_attribute: Option<&'a str>,
+    pub generics: &'a Generics,
     pub features: ComponentExportFeatures,
 }
 
@@ -81,7 +81,7 @@ pub fn add_component_export(
         template_info,
         exported_names,
         events,
-        generics_attribute,
+        generics,
         features,
     } = params;
 
@@ -200,7 +200,9 @@ pub fn add_component_export(
     };
 
     // Determine if this component has generics (either from generics= attribute or $$Generic)
-    let has_generics = !exported_names.dollar_generics.is_empty() || generics_attribute.is_some();
+    // `addComponentExport` keys on `Generics.has()` — the type parameters the
+    // TypeScript parse recognised, not the presence of the raw attribute.
+    let has_generics = !exported_names.dollar_generics.is_empty() || generics.has();
 
     // Build generics strings for component export
     let (generics_params, generics_names) = if !exported_names.dollar_generics.is_empty() {
@@ -220,12 +222,8 @@ pub fn add_component_export(
             .map(|(name, _)| name.clone())
             .collect();
         (params.join(","), names.join(","))
-    } else if let Some(g) = generics_attribute {
-        // Create compact params string (strip leading spaces from each param)
-        let params_str = compact_generic_params(g);
-        // Split generic params at top-level commas (not inside angle brackets)
-        let names = split_generic_param_names(g);
-        (params_str, names.join(","))
+    } else if generics.has() {
+        (generics.definition_list(), generics.reference_list())
     } else {
         (String::new(), String::new())
     };

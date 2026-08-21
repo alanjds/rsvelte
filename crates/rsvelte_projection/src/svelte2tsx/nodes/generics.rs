@@ -112,81 +112,116 @@ pub fn type_text_typeof_references_local_value(
     false
 }
 
-/// Split a generics string like "T extends Record<string, any>, U" into
-/// just the type parameter names: `["T", "U"]`.
-/// Handles nested angle brackets and commas inside constraints.
-pub fn split_generic_param_names(generics: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut depth = 0; // angle bracket depth
-    let mut current_start = 0;
-
-    for (i, ch) in generics.char_indices() {
-        match ch {
-            '<' => depth += 1,
-            '>' if depth > 0 => depth -= 1,
-            ',' if depth == 0 => {
-                let param = generics[current_start..i].trim();
-                names.push(extract_param_name(param));
-                current_start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    // Handle the last parameter
-    let param = generics[current_start..].trim();
-    if !param.is_empty() {
-        names.push(extract_param_name(param));
-    }
-    names
+/// The type parameters declared by `<script generics="…">` — mirrors
+/// `svelte2tsx/nodes/Generics.ts`. The `$$Generic` alias form is mutually
+/// exclusive with the attribute (upstream throws when both are present) and is
+/// collected into `ExportedNames::dollar_generics` instead.
+///
+/// Upstream never splits the attribute textually: it parses `<{raw}>() => {}`
+/// and reads the arrow function's type parameters, so a comma inside an object
+/// type, a tuple, a parameter list or a string literal is the parser's problem
+/// rather than the scanner's.
+#[derive(Debug, Default, Clone)]
+pub struct Generics {
+    /// The whole `T extends boolean`.
+    definitions: Vec<String>,
+    /// The `T` in `T extends boolean`.
+    references: Vec<String>,
+    /// The raw attribute value, kept only when non-empty. `createRenderFunction`
+    /// splices it onto `$$render` verbatim even when it does not parse.
+    raw: Option<String>,
 }
 
-/// Compact a generics string by stripping leading spaces from each top-level parameter.
-/// "A, B extends keyof A, C extends boolean" → "A,B extends keyof A,C extends boolean"
-pub fn compact_generic_params(generics: &str) -> String {
-    let mut result = String::new();
-    let mut depth = 0;
-    let mut after_comma = false;
-
-    for ch in generics.chars() {
-        match ch {
-            '<' => {
-                depth += 1;
-                result.push(ch);
-            }
-            '>' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-                result.push(ch);
-            }
-            ',' if depth == 0 => {
-                result.push(',');
-                after_comma = true;
-            }
-            ' ' | '\t' if after_comma => {
-                // Skip leading whitespace after comma at top level
-                continue;
-            }
-            _ => {
-                after_comma = false;
-                result.push(ch);
-            }
+impl Generics {
+    /// Parse the raw `generics` attribute value. An empty value is treated as
+    /// no attribute at all, exactly like upstream's `if (generics)` guard.
+    #[must_use]
+    pub fn from_attribute(raw: Option<&str>) -> Self {
+        let Some(raw) = raw.filter(|value| !value.is_empty()) else {
+            return Self::default();
+        };
+        let (definitions, references) = parse_type_parameters(raw);
+        Self {
+            definitions,
+            references,
+            raw: Some(raw.to_string()),
         }
     }
-    result
+
+    /// Whether the script tag declared a `generics` attribute at all — the
+    /// predicate `createRenderFunction` keys on.
+    #[must_use]
+    pub const fn has_attribute(&self) -> bool {
+        self.raw.is_some()
+    }
+
+    /// The raw attribute value (empty when there is no attribute).
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        self.raw.as_deref().unwrap_or_default()
+    }
+
+    /// Whether any type parameter was actually recognised — the predicate
+    /// `addComponentExport` keys on.
+    #[must_use]
+    pub fn has(&self) -> bool {
+        !self.definitions.is_empty()
+    }
+
+    /// `T extends boolean,U` — the definitions joined for a declaration site.
+    #[must_use]
+    pub fn definition_list(&self) -> String {
+        self.definitions.join(",")
+    }
+
+    /// `T,U` — the names joined for a reference site.
+    #[must_use]
+    pub fn reference_list(&self) -> String {
+        self.references.join(",")
+    }
+
+    /// The declared type parameter names.
+    #[must_use]
+    pub fn references(&self) -> &[String] {
+        &self.references
+    }
 }
 
-/// Extract the type parameter name from a parameter declaration,
-/// handling the `const` modifier (e.g., `const T extends ...` → `T`).
-fn extract_param_name(param: &str) -> String {
-    let mut words = param.split_whitespace();
-    let first = words.next().unwrap_or("");
-    if first == "const" {
-        // Skip `const` modifier, take the next word
-        words.next().unwrap_or(first).to_string()
-    } else {
-        first.to_string()
+/// Parse `<{raw}>() => {}` and return `(definitions, references)` read off the
+/// arrow function's type parameters, mirroring `Generics.getGenericTypeParameters`.
+fn parse_type_parameters(raw: &str) -> (Vec<String>, Vec<String>) {
+    use oxc_allocator::Allocator;
+    use oxc_ast::ast::{Expression, Statement};
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    let probe = format!("<{raw}>() => {{}}");
+    let allocator = Allocator::default();
+    // `.ts`, not `.tsx`: `<T>() => {}` must lex as a type parameter list.
+    let parsed = Parser::new(&allocator, &probe, SourceType::ts()).parse();
+    if parsed.panicked {
+        return (Vec::new(), Vec::new());
     }
+    let Some(Statement::ExpressionStatement(statement)) = parsed.program.body.first() else {
+        return (Vec::new(), Vec::new());
+    };
+    let Expression::ArrowFunctionExpression(arrow) = &statement.expression else {
+        return (Vec::new(), Vec::new());
+    };
+    let Some(type_parameters) = arrow.type_parameters.as_ref() else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut definitions = Vec::with_capacity(type_parameters.params.len());
+    let mut references = Vec::with_capacity(type_parameters.params.len());
+    for param in &type_parameters.params {
+        let (start, end) = (param.span.start as usize, param.span.end as usize);
+        let Some(text) = probe.get(start..end) else {
+            return (Vec::new(), Vec::new());
+        };
+        definitions.push(text.to_string());
+        references.push(param.name.name.to_string());
+    }
+    (definitions, references)
 }
 
 /// Extract the `generics` attribute value from a script tag text.

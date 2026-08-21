@@ -103,13 +103,9 @@ pub fn handle_snippet_block_as_component_prop(
 /// attaches every comment between `(` and that parameter to it, and no comment
 /// can precede the `(` (the parser only allows whitespace there), so the first
 /// `/` after the `(` opens that comment.
-fn params_text<'a>(block: &SnippetBlock, source: &'a str) -> &'a str {
-    let Some((first_start, _)) = block.parameters.first().and_then(get_expression_range) else {
-        return "";
-    };
-    let Some((_, last_end)) = block.parameters.last().and_then(get_expression_range) else {
-        return "";
-    };
+fn params_range(block: &SnippetBlock, source: &str) -> Option<(usize, usize)> {
+    let (first_start, _) = block.parameters.first().and_then(get_expression_range)?;
+    let (_, last_end) = block.parameters.last().and_then(get_expression_range)?;
     let start = params_open_paren(block, source)
         .and_then(|open| {
             let region = open + 1;
@@ -121,7 +117,11 @@ fn params_text<'a>(block: &SnippetBlock, source: &'a str) -> &'a str {
                 .map(|offset| region + offset)
         })
         .unwrap_or(first_start as usize);
-    slice_src(source, start, last_end as usize)
+    Some((start, last_end as usize))
+}
+
+fn params_text<'a>(block: &SnippetBlock, source: &'a str) -> &'a str {
+    params_range(block, source).map_or("", |(start, end)| slice_src(source, start, end))
 }
 
 /// Byte offset of the `(` that opens the snippet's parameter list. Only
@@ -170,28 +170,62 @@ fn params_open_paren(block: &SnippetBlock, source: &str) -> Option<usize> {
     (bytes.get(index) == Some(&b'(')).then_some(index)
 }
 
-/// Upstream reaches the standalone form through `transform()`, which turns the
-/// gap in front of the moved name into one space and then collapses whatever is
-/// left before `}` into a second one — so a snippet whose header ends flush
-/// against `}` gets a single space and every other shape gets two.
-fn opener_pad(block: &SnippetBlock, source: &str) -> &'static str {
-    let anchor = block
-        .parameters
-        .last()
-        .or(Some(&block.expression))
-        .and_then(get_expression_range)
-        .map(|(_, end)| end as usize);
-    let Some(mut kept_end) = anchor else {
-        return " ";
+/// Upstream reaches the standalone form through `transform()`, which overwrites
+/// every non-empty gap *between* the source ranges it keeps — plus the tail
+/// after the last one — with exactly one space, so the pad is the number of
+/// such gaps rather than a measurement of the region before `}`.
+fn opener_pad(block: &SnippetBlock, source: &str) -> String {
+    let one = || " ".to_string();
+    let Some((expr_start, expr_end)) = get_expression_range(&block.expression) else {
+        return one();
     };
-    let Some(rel) = source.get(kept_end..).and_then(|rest| rest.find('}')) else {
-        return " ";
+    let (expr_start, expr_end) = (expr_start as usize, expr_end as usize);
+    let params = params_range(block, source);
+    let anchor = params.map_or(expr_end, |(_, end)| end);
+    let Some(rel) = source.get(anchor..).and_then(|rest| rest.find('}')) else {
+        return one();
     };
-    let close = kept_end + rel + 1;
-    if kept_end < close - 1 {
-        kept_end += 1;
+    // `startEnd`: the `}` closing the snippet header is the transform's end.
+    let end = anchor + rel + 1;
+
+    // A kept range is widened by one character unless another kept range starts
+    // exactly where it ends, which is what makes `{#snippet s(a)}`'s two ranges
+    // adjacent and leaves no gap between them.
+    let widen = |range_end: usize| {
+        let collides = expr_start == range_end || params.is_some_and(|(s, _)| s == range_end);
+        if range_end + 1 < end && !collides {
+            range_end + 1
+        } else {
+            range_end
+        }
+    };
+    let mut kept: Vec<(usize, usize)> = Vec::with_capacity(2);
+    if expr_start != expr_end {
+        kept.push((expr_start, widen(expr_end)));
     }
-    if close - kept_end >= 2 { "  " } else { " " }
+    if let Some((start, param_end)) = params
+        && start != param_end
+    {
+        kept.push((start, widen(param_end)));
+    }
+
+    let mut spaces = 0usize;
+    let mut remove_start = block.start as usize;
+    for &(start, range_end) in &kept {
+        if remove_start < start && start < end {
+            spaces += 1;
+        }
+        remove_start = range_end;
+    }
+    // The first character after the last kept range is deleted outright; only
+    // what is still left before `}` collapses into a final space.
+    if remove_start < end {
+        remove_start += 1;
+    }
+    if remove_start < end {
+        spaces += 1;
+    }
+    " ".repeat(spaces.max(1))
 }
 
 pub fn handle_snippet_block_inner(

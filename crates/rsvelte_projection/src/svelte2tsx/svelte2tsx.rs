@@ -11,7 +11,7 @@ use super::create_render_function::{build_dollar_declarations, create_render_fun
 use super::helpers::rewrite_external_imports::{TextEdit, rewrite_external_specifiers_in_text};
 use super::magic_string::{GenerateMapOptions, MagicString};
 use super::nodes::component_name::derive_component_name;
-use super::nodes::generics::{extract_generics_from_script_tag, split_generic_param_names};
+use super::nodes::generics::{Generics, extract_generics_from_script_tag};
 use super::nodes::runes_detection::detect_runes_mode;
 use super::nodes::scripts::find_script_close_tag_start;
 use super::nodes::snippet_hoisting::hoist_top_level_snippets;
@@ -546,24 +546,15 @@ pub fn svelte2tsx(
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_string();
-    let script_generic_names: std::collections::HashSet<String> = ast
-        .instance
-        .as_ref()
-        .map(|instance| {
-            let tag_text = slice_src(
-                source,
-                instance.start as usize,
-                instance.content_offset as usize,
-            );
-            extract_generics_from_script_tag(tag_text)
-        })
-        .unwrap_or_default()
-        .map(|raw| {
-            split_generic_param_names(&raw)
-                .into_iter()
-                .collect::<std::collections::HashSet<String>>()
-        })
-        .unwrap_or_default();
+    let generics_raw = ast.instance.as_ref().and_then(|instance| {
+        let tag_text = slice_src(
+            source,
+            instance.start as usize,
+            instance.content_offset as usize,
+        );
+        extract_generics_from_script_tag(tag_text)
+    });
+    let generics = Generics::from_attribute(generics_raw.as_deref());
     let mut instance_imports = Vec::new();
     if let (Some(instance), Some(parsed)) = (&ast.instance, &parsed_scripts.instance) {
         instance_imports = super::script::process_instance_script(
@@ -582,8 +573,8 @@ pub fn svelte2tsx(
             &basename,
             options.emit_jsdoc,
             matches!(options.mode, Svelte2TsxMode::Dts),
-            &script_generic_names,
-        );
+            &generics,
+        )?;
     }
 
     // Step 7.48: Find and remove embedded `<script>` tags (those NOT matching
@@ -757,18 +748,6 @@ pub fn svelte2tsx(
         template_info.dollar_slot_names.as_deref(),
     );
 
-    // Detect generics attribute from the script tag (available for component export)
-    let mut generics_attribute: Option<String> = None;
-    if has_instance_script {
-        let instance = ast.instance.as_ref().unwrap();
-        let script_tag_text = slice_src(
-            source,
-            instance.start as usize,
-            instance.content_offset as usize,
-        );
-        generics_attribute = extract_generics_from_script_tag(script_tag_text);
-    }
-
     // Phase 2: Overwrite instance script tags and lift imports. Split into its
     // own module, but it must still run before Phase 3's moves — see the
     // ordering note above Phase 1.
@@ -789,6 +768,7 @@ pub fn svelte2tsx(
             has_slot_elements,
             &hoistable_snippet_ranges,
             &instance_imports,
+            &generics,
         );
     }
 
@@ -847,7 +827,7 @@ pub fn svelte2tsx(
             template_info: &template_info,
             exported_names: &exported_names,
             events: &mut events,
-            generics_attribute: generics_attribute.as_deref(),
+            generics: &generics,
             features: super::add_component_export::ComponentExportFeatures::default()
                 .with_slot_elements_if(has_slot_elements)
                 .with_top_level_await_if(has_top_level_await)

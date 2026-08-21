@@ -25,6 +25,8 @@ mod type_assertion;
 use std::collections::{HashMap, HashSet};
 
 use oxc_ast::ast as oxc;
+
+use super::nodes::generics::Generics;
 use oxc_span::GetSpan;
 
 use crate::ast::template::Script;
@@ -109,10 +111,13 @@ pub fn process_instance_script(
     basename: &str,
     emit_jsdoc: bool,
     is_dts_mode: bool,
-    script_generic_names: &HashSet<String>,
-) -> Vec<LiftedImport> {
+    generics: &Generics,
+) -> Result<Vec<LiftedImport>, super::utils::error::Svelte2TsxError> {
     let offset = script.content_offset;
+    let script_generic_names: HashSet<String> = generics.references().iter().cloned().collect();
+    let script_generic_names = &script_generic_names;
     let mut instance_imports = Vec::new();
+    let mut dollar_generic_error: Option<super::utils::error::Svelte2TsxError> = None;
     with_parsed_script(parsed, |program, raw_content| {
         let script_facts = ScriptFacts::collect(program, offset, raw_content, true, store_scan);
         // Official refuses to recognise a dispatcher without an import binding
@@ -366,6 +371,18 @@ pub fn process_instance_script(
                                         rel_end: type_alias.span.end,
                                     });
                                 }
+                                // Upstream's walk reaches the exported form too —
+                                // `export` is a modifier on the alias there, not a
+                                // wrapper node — so the alias is stripped and `T`
+                                // becomes a type parameter either way.
+                                add_if_is_generic(
+                                    type_alias,
+                                    export.span.start,
+                                    raw_content,
+                                    generics,
+                                    exported_names,
+                                    &mut dollar_generic_error,
+                                );
                             }
                             oxc::Declaration::TSInterfaceDeclaration(iface) => {
                                 let name = iface.id.name.to_string();
@@ -418,24 +435,14 @@ pub fn process_instance_script(
                             rel_end: type_alias.span.end,
                         });
                     }
-                    // Detect `type X = $$Generic;` or `type X = $$Generic<constraint>;`
-                    let type_text = &raw_content[type_alias.type_annotation.span().start as usize
-                        ..type_alias.type_annotation.span().end as usize];
-                    if type_text == "$$Generic" || type_text.starts_with("$$Generic<") {
-                        let name = type_alias.id.name.to_string();
-                        let constraint = if type_text.starts_with("$$Generic<") {
-                            // Extract the constraint from $$Generic<constraint>
-                            let inner = &type_text[10..type_text.len() - 1]; // skip "$$Generic<" and ">"
-                            Some(inner.to_string())
-                        } else {
-                            None
-                        };
-                        exported_names.dollar_generics.push((name, constraint));
-                        // Record the position to blank out later
-                        exported_names
-                            .dollar_generic_positions
-                            .push((type_alias.span.start, type_alias.span.end));
-                    }
+                    add_if_is_generic(
+                        type_alias,
+                        type_alias.span.start,
+                        raw_content,
+                        generics,
+                        exported_names,
+                        &mut dollar_generic_error,
+                    );
                 }
                 // Detect rune globals used as standalone expression statements,
                 // e.g. `$effect(() => { ... })` or `$effect.pre(() => { ... })`.
@@ -744,7 +751,89 @@ pub fn process_instance_script(
             instance_imports = collector.finish();
         }
     });
-    instance_imports
+    match dollar_generic_error {
+        Some(error) => Err(error),
+        None => Ok(instance_imports),
+    }
+}
+
+/// `type X = $$Generic` / `export type X = $$Generic<C>` — mirrors
+/// `Generics.addIfIsGeneric`, whose `is$$GenericType` matches the type
+/// reference by NAME and never resolves it, so a shadowing declaration in the
+/// same script does not disarm it.
+fn add_if_is_generic(
+    type_alias: &oxc::TSTypeAliasDeclaration<'_>,
+    remove_start: u32,
+    raw_content: &str,
+    generics: &Generics,
+    exported_names: &mut ExportedNames,
+    error: &mut Option<super::utils::error::Svelte2TsxError>,
+) {
+    let Some(type_arguments) = dollar_generic_arguments(type_alias, raw_content) else {
+        return;
+    };
+    if error.is_some() {
+        return;
+    }
+    if generics.has_attribute() {
+        *error = Some(super::utils::error::Svelte2TsxError::Script(
+            "Invalid $$Generic declaration: $$Generic definitions are not allowed when the generics attribute is present on the script tag".to_string(),
+        ));
+        return;
+    }
+    if type_arguments.len() > 1 {
+        *error = Some(super::utils::error::Svelte2TsxError::Script(
+            "Invalid $$Generic declaration: Only one type argument allowed".to_string(),
+        ));
+        return;
+    }
+    exported_names.dollar_generics.push((
+        type_alias.id.name.to_string(),
+        type_arguments.first().map(|arg| (*arg).to_string()),
+    ));
+    exported_names
+        .dollar_generic_positions
+        .push((remove_start, type_alias.span.end));
+}
+
+/// Whether the alias is a `$$Generic` declaration, ignoring its arguments.
+fn is_dollar_generic(type_alias: &oxc::TSTypeAliasDeclaration<'_>) -> bool {
+    dollar_generic_arguments(type_alias, "").is_some()
+}
+
+/// The type arguments of a `$$Generic` type reference, or `None` when the
+/// alias is not one.
+fn dollar_generic_arguments<'a>(
+    type_alias: &oxc::TSTypeAliasDeclaration<'_>,
+    raw_content: &'a str,
+) -> Option<Vec<&'a str>> {
+    let oxc::TSType::TSTypeReference(reference) = &type_alias.type_annotation else {
+        return None;
+    };
+    let oxc::TSTypeName::IdentifierReference(type_name) = &reference.type_name else {
+        return None;
+    };
+    if type_name.name != "$$Generic" {
+        return None;
+    }
+    Some(
+        reference
+            .type_arguments
+            .as_ref()
+            .map(|arguments| {
+                arguments
+                    .params
+                    .iter()
+                    .map(|param| {
+                        let span = param.span();
+                        raw_content
+                            .get(span.start as usize..span.end as usize)
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
 }
 /// Process a module script block (`<script context="module">`).
 ///
@@ -857,6 +946,9 @@ fn collect_module_names(
                 collect_exported_module_declaration(&export.declaration, exported_names)?;
             }
             oxc::Statement::TSTypeAliasDeclaration(t) => {
+                if is_dollar_generic(t) {
+                    return Err(dollar_generic_in_module_script_error());
+                }
                 let name = t.id.name.to_string();
                 if is_special_type_name(&name) {
                     return Err(sentinel_type_in_module_script_error(&name));
@@ -923,6 +1015,9 @@ fn collect_exported_module_declaration(
             }
         }
         oxc::Declaration::TSTypeAliasDeclaration(declaration) => {
+            if is_dollar_generic(declaration) {
+                return Err(dollar_generic_in_module_script_error());
+            }
             add_module_type_name(declaration.id.name.to_string(), exported_names)?;
         }
         oxc::Declaration::TSInterfaceDeclaration(declaration) => {
@@ -942,6 +1037,14 @@ fn add_module_type_name(
     }
     exported_names.module_type_names.insert(name);
     Ok(())
+}
+
+/// `type X = $$Generic` belongs to the instance script — mirrors official
+/// `processModuleScriptTag.ts`'s `generics.throwIfIsGeneric`.
+fn dollar_generic_in_module_script_error() -> super::utils::error::Svelte2TsxError {
+    super::utils::error::Svelte2TsxError::Script(
+        "$$Generic declarations are only allowed in the instance script".to_string(),
+    )
 }
 
 /// `$$Events`/`$$Slots`/`$$Props` can only be declared in the instance

@@ -7,8 +7,7 @@ use crate::ast::template::Root;
 use super::interfaces::{Svelte2TsxMode, Svelte2TsxOptions};
 use super::magic_string::MagicString;
 use super::nodes::generics::{
-    extract_generics_from_script_tag, split_generic_param_names, type_text_references_any,
-    type_text_typeof_references_local_value,
+    Generics, type_text_references_any, type_text_typeof_references_local_value,
 };
 use super::nodes::scripts::{LiftedImport, detect_top_level_await, find_script_close_tag_start};
 use super::script::ExportedNames;
@@ -37,6 +36,7 @@ pub fn process_instance_script_tag(
     has_slot_elements: bool,
     hoistable_snippet_ranges: &[(u32, u32)],
     imports: &[LiftedImport],
+    generics: &Generics,
 ) -> bool {
     let instance = ast.instance.as_ref().unwrap();
     let script_start = instance.start;
@@ -80,18 +80,11 @@ pub fn process_instance_script_tag(
     }
     let async_prefix = if has_top_level_await { "async " } else { "" };
 
-    // Detect `generics` attribute on the script tag
-    let script_tag_text = slice_src(source, script_start as usize, content_start as usize);
-    let generics_param = extract_generics_from_script_tag(script_tag_text);
     let use_jsdoc_generics = options.emit_jsdoc && !options.is_ts_file;
     // For JS files emitting JSDoc, the generics live on a `/** @template T */`
     // line *before* `function $$render()`, not as `<T>` on the function.
-    let template_comment = if use_jsdoc_generics {
-        generics_param
-            .as_ref()
-            .filter(|g| !g.is_empty())
-            .map(|g| format!("\n/** @template {g} */\n"))
-            .unwrap_or_default()
+    let template_comment = if use_jsdoc_generics && !generics.references().is_empty() {
+        format!("\n/** @template {} */\n", generics.references().join(", "))
     } else {
         String::new()
     };
@@ -103,19 +96,19 @@ pub fn process_instance_script_tag(
         // comment is emitted before the function declaration via
         // `template_comment`.
         String::new()
+    } else if generics.has_attribute() {
+        // `createRenderFunction` splices the RAW attribute onto `$$render`, so
+        // this keys on the attribute's presence rather than on `Generics::has`.
+        let g = generics.raw();
+        if options.is_ts_file {
+            // TS files: no ignore markers around generics
+            format!("<{g}>")
+        } else {
+            // JS files (non-JSDoc): wrap content in ignore markers
+            format!("</*\u{03A9}ignore_start\u{03A9}*/{g}>/*\u{03A9}ignore_end\u{03A9}*/")
+        }
     } else {
-        generics_param
-            .as_ref()
-            .map(|g| {
-                if options.is_ts_file {
-                    // TS files: no ignore markers around generics
-                    format!("<{g}>")
-                } else {
-                    // JS files (non-JSDoc): wrap content in ignore markers
-                    format!("</*\u{03A9}ignore_start\u{03A9}*/{g}>/*\u{03A9}ignore_end\u{03A9}*/")
-                }
-            })
-            .unwrap_or_default()
+        String::new()
     };
 
     let has_imports = !imports.is_empty();
@@ -147,12 +140,10 @@ pub fn process_instance_script_tag(
             );
             // Check if type references generics from $$render
             let has_generic_dep = !render_generics.is_empty()
-                && generics_param.as_ref().is_some_and(|g| {
-                    // Extract generic param names and check if any appear in the type
-                    split_generic_param_names(g)
-                        .iter()
-                        .any(|name| type_text.contains(name.as_str()))
-                });
+                && generics
+                    .references()
+                    .iter()
+                    .any(|name| type_text.contains(name.as_str()));
             // Check if type references a type/interface name that is
             // declared at the top level of the instance script AND
             // *isn't* also slated for hoisting. References to a
