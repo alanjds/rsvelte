@@ -2664,9 +2664,10 @@ impl<'a> Parser<'a> {
                         start: text_start as u32,
                         end: self.index as u32,
                         raw: Cow::Borrowed(text_content),
-                        // `textarea` is escapable raw text, so its content still
-                        // decodes character references.
-                        data: Cow::Owned(decode_html_entities(text_content, false)),
+                        // Upstream's `read_sequence` decodes with the
+                        // attribute-value rule, so a semicolon-less legacy
+                        // reference followed by a word character stays literal.
+                        data: Cow::Owned(decode_html_entities(text_content, true)),
                     }));
                 }
 
@@ -2687,7 +2688,7 @@ impl<'a> Parser<'a> {
                 start: text_start as u32,
                 end: self.index as u32,
                 raw: text_content.to_string().into(),
-                data: Cow::Owned(decode_html_entities(text_content, false)),
+                data: Cow::Owned(decode_html_entities(text_content, true)),
             }));
         }
 
