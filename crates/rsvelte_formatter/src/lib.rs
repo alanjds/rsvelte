@@ -217,6 +217,10 @@ fn format_attempt(
         expression::collect_template_edits(source, &root.fragment, 0, options, &mut edits)
     })?;
     indent::collect_indent_edits(source, &root.fragment, 0, options, &mut edits)?;
+    // Must follow the indent pass: coincident zero-length inserts are spliced in
+    // reverse push order, so pushing a synthetic `</tag>` last is what lands it
+    // before the separator the indent pass inserts at the same offset.
+    markup::collect_implicit_close_tag_edits(source, &root.fragment, &mut edits);
     if let Some(css) = &root.css {
         // Normalize the `<style …>` open tag (e.g. strip trailing space from
         // `<style >`) using the same routine that normalises `<script>` tags.
@@ -320,7 +324,17 @@ fn format_attempt(
     // zero-length-insert-before-range ordering). `applied` is already
     // overlap-resolved (for #1707's correct section remap), so apply_edits'
     // in-pass overlap check is a no-op here; it drains `applied`.
+    if std::env::var("FMTB_DEBUG").is_ok() {
+        let mut d = applied.clone();
+        d.sort_by_key(|(s, _, _)| *s);
+        for (s, e, t) in &d {
+            eprintln!("EDIT [{s},{e}) = {t:?}");
+        }
+    }
     let mut out = apply_edits(source, &mut applied);
+    if std::env::var("FMTB_DEBUG").is_ok() {
+        eprintln!("PRECOLLAPSE {out:?}");
+    }
     // Return the drained buffer to the arena so its capacity is reused.
     arenas.edits = applied;
 

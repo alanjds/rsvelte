@@ -85,7 +85,7 @@ pub(super) fn apply_edits(src: &str, mut edits: Vec<(u32, u32, String)>) -> Stri
 }
 
 /// The child fragments of a container node (for a generic recursive walk).
-pub(super) fn child_fragments<'b, 'a>(node: &'b TemplateNode<'a>) -> Vec<&'b Fragment<'a>> {
+pub(crate) fn child_fragments<'b, 'a>(node: &'b TemplateNode<'a>) -> Vec<&'b Fragment<'a>> {
     match node {
         TemplateNode::RegularElement(e) => vec![&e.fragment],
         TemplateNode::Component(c) => vec![&c.fragment],

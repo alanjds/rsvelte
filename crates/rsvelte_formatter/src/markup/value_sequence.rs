@@ -49,6 +49,7 @@ fn attr_text_chunk_doc(raw: &str, tw: usize) -> (Doc, usize) {
 ///    the legacy path's flat output is authoritative).
 fn render_value_sequence_doc(
     parts: &[AttributeValuePart],
+    texts: &[String],
     source: &str,
     options: &FormatOptions,
     attr_depth: usize,
@@ -62,10 +63,7 @@ fn render_value_sequence_doc(
     if interp_count < 2 {
         return Ok(None);
     }
-    if parts
-        .iter()
-        .any(|p| matches!(p, AttributeValuePart::Text(t) if t.raw.contains('\n')))
-    {
+    if texts.iter().any(|t| t.contains('\n')) {
         return Ok(None);
     }
 
@@ -84,10 +82,10 @@ fn render_value_sequence_doc(
     // Running flat column, so each interpolation's `broken` form is formatted at
     // its true (all-preceding-flat) start column.
     let mut col = start_col;
-    for part in parts {
+    for (index, part) in parts.iter().enumerate() {
         match part {
-            AttributeValuePart::Text(t) => {
-                let (doc, w) = attr_text_chunk_doc(t.raw.as_ref(), tw);
+            AttributeValuePart::Text(_) => {
+                let (doc, w) = attr_text_chunk_doc(texts[index].as_str(), tw);
                 docs.push(doc);
                 col += w;
             }
@@ -173,7 +171,8 @@ fn render_value_sequence_doc(
     // form RELATIVE (base_indent 0) so the downstream re-indent lands a broken
     // interpolation's continuation at `attr_indent + 2`, not `2*attr_indent + 2`.
     // (`fits` ignores indentation, so base_indent never changes a break decision.)
-    let text_led = matches!(parts.first(), Some(AttributeValuePart::Text(t)) if !t.raw.is_empty());
+    let text_led =
+        matches!(parts.first(), Some(AttributeValuePart::Text(_))) && !texts[0].is_empty();
     let base_indent = if text_led { attr_depth } else { 0 };
     let out = doc_print(
         &propagate_breaks(Doc::Concat(docs)),
@@ -206,12 +205,12 @@ impl InterpolatedValueContext<'_> {
         Ok(Some((inner.to_string(), options, first_pass)))
     }
 
-    fn trailing_metrics(&self, parts: &[AttributeValuePart]) -> (usize, bool) {
+    fn trailing_metrics(&self, parts: &[AttributeValuePart], texts: &[String]) -> (usize, bool) {
         let mut columns = 0;
-        for part in parts {
+        for (index, part) in parts.iter().enumerate() {
             match part {
-                AttributeValuePart::Text(text) => {
-                    let raw = text.raw.as_ref();
+                AttributeValuePart::Text(_) => {
+                    let raw = texts[index].as_str();
                     if let Some(newline) = raw.find('\n') {
                         columns += raw[..newline].visual_width(tab_width(self.options));
                         break;
@@ -236,8 +235,23 @@ pub(super) fn render_attribute_value_sequence(
     name_prefix: usize,
     narrow_value: bool,
     regular_attr: bool,
+    // `class` on a `RegularElement`: its literal text is whitespace-normalised
+    // before anything measures or emits it (see [`super::class_text`]).
+    class_text: bool,
 ) -> Result<String, FormatError> {
     let tw = tab_width(options);
+    let last_index = parts.len().saturating_sub(1);
+    let texts: Vec<String> = parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| match part {
+            AttributeValuePart::Text(t) if class_text => {
+                super::class_text::normalize_class_text(t.raw.as_ref(), index == last_index)
+            }
+            AttributeValuePart::Text(t) => t.raw.to_string(),
+            AttributeValuePart::ExpressionTag(_) => String::new(),
+        })
+        .collect();
     let context = InterpolatedValueContext {
         source,
         options,
@@ -250,7 +264,7 @@ pub(super) fn render_attribute_value_sequence(
     if narrow_value
         && regular_attr
         && let Some(body) =
-            render_value_sequence_doc(parts, source, options, attr_depth, name_prefix)?
+            render_value_sequence_doc(parts, &texts, source, options, attr_depth, name_prefix)?
     {
         return Ok(body);
     }
@@ -265,11 +279,11 @@ pub(super) fn render_attribute_value_sequence(
     let mut any_expr_wrapped = false;
     for (i, part) in parts.iter().enumerate() {
         match part {
-            AttributeValuePart::Text(t) => {
+            AttributeValuePart::Text(_) => {
                 // Emit the RAW source text, not the entity-decoded `data` — a value
                 // like `title="&quot;"` must keep `&quot;` (decoding it to `"` would
                 // prematurely close the quoted value and corrupt the markup).
-                out.push_str(t.raw.as_ref());
+                out.push_str(texts[i].as_str());
             }
             AttributeValuePart::ExpressionTag(tag) => {
                 let Some((inner_src, opts, first_pass)) = context.initial_format(tag)? else {
@@ -320,7 +334,7 @@ pub(super) fn render_attribute_value_sequence(
                     // SUBSEQUENT lines must not count toward this one's width (else a
                     // trivial `{r * 2}` is force-broken to fit a phantom-long line).
                     let (trailing_cols, has_trailing_expr) =
-                        context.trailing_metrics(&parts[i + 1..]);
+                        context.trailing_metrics(&parts[i + 1..], &texts[i + 1..]);
                     // Whether there are trailing expression tags after this one.
                     // When true, the closing `)` of an expanded-arg form would land
                     // on a line followed by the next interpolation, producing

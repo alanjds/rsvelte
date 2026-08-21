@@ -5,7 +5,7 @@ use crate::error::FormatError;
 use crate::indent::else_if_branch;
 use crate::options::FormatOptions;
 
-use super::close_tag::{find_close_tag_span, push_close_tag};
+use super::close_tag::{find_close_tag_span, needs_flush_implicit_close_tag, push_close_tag};
 use super::elements::is_block_element;
 use super::open_tag::push_open_tag;
 
@@ -85,6 +85,7 @@ fn collect_svelte_window_open_tag_edits(
             None,
             &window.fragment,
             depth,
+            false,
             options,
             edits,
         );
@@ -97,6 +98,7 @@ fn collect_svelte_window_open_tag_edits(
         None,
         depth,
         true,
+        false,
         false,
         options,
         edits,
@@ -118,11 +120,22 @@ fn collect_element_open_tag_edits(
     expression: Option<&Expression>,
     fragment: &Fragment,
     depth: usize,
+    regular_element: bool,
     options: &FormatOptions,
     edits: &mut Vec<(u32, u32, String)>,
 ) -> Result<(), FormatError> {
     handle_element(
-        source, start, end, name, attributes, expression, fragment, depth, options, edits,
+        source,
+        start,
+        end,
+        name,
+        attributes,
+        expression,
+        fragment,
+        depth,
+        regular_element,
+        options,
+        edits,
     )
 }
 
@@ -144,6 +157,7 @@ fn collect_plain_element_open_tag_edits(
                 None,
                 &element.fragment,
                 depth,
+                true,
                 options,
                 edits,
             )?;
@@ -159,6 +173,7 @@ fn collect_plain_element_open_tag_edits(
                 None,
                 &element.fragment,
                 depth,
+                false,
                 options,
                 edits,
             )?;
@@ -174,6 +189,7 @@ fn collect_plain_element_open_tag_edits(
                 None,
                 &element.fragment,
                 depth,
+                false,
                 options,
                 edits,
             )?;
@@ -189,6 +205,7 @@ fn collect_plain_element_open_tag_edits(
                 None,
                 &element.fragment,
                 depth,
+                false,
                 options,
                 edits,
             )?;
@@ -210,6 +227,7 @@ fn collect_plain_element_open_tag_edits(
                 None,
                 &element.fragment,
                 depth,
+                false,
                 options,
                 edits,
             )?;
@@ -265,6 +283,7 @@ pub fn collect_options_open_tag_edit(
         &attrs,
         None,
         0,
+        false,
         false,
         false,
         options,
@@ -325,6 +344,7 @@ fn handle_element(
     this_expression: Option<&Expression>,
     fragment: &Fragment,
     depth: usize,
+    regular_element: bool,
     options: &FormatOptions,
     edits: &mut Vec<(u32, u32, String)>,
 ) -> Result<(), FormatError> {
@@ -339,6 +359,7 @@ fn handle_element(
         depth,
         is_empty,
         empty_nonhug,
+        regular_element,
         options,
         edits,
     )?;
@@ -380,6 +401,7 @@ fn collect_node_open_tag_edits(
             Some(&c.expression),
             &c.fragment,
             depth,
+            false,
             options,
             edits,
         )?,
@@ -392,6 +414,7 @@ fn collect_node_open_tag_edits(
             Some(&e.tag),
             &e.fragment,
             depth,
+            false,
             options,
             edits,
         )?,
@@ -421,4 +444,36 @@ fn collect_node_open_tag_edits(
         _ => {}
     }
     Ok(())
+}
+
+/// Emit the synthetic `</tag>` for every element the parser closed implicitly
+/// whose content ends flush against the next node — `<ul><li>a<li>b</ul>`.
+/// prettier-plugin-svelte prints a close tag from the AST name whatever the
+/// source held, so both `<li>`s and the `<ul>` must come back closed.
+///
+/// This runs LAST, after the indent pass, and that is load-bearing: the close
+/// tag and the indent pass's separator are both zero-length inserts at the same
+/// offset, and coincident inserts are spliced in reverse push order — pushing
+/// the tag last is what puts `</li>` before the `\n` rather than after it.
+/// (The whitespace-terminated form of the same repair lives in
+/// [`super::close_tag::push_close_tag`] case 4, which has a span to rewrite and
+/// so needs no ordering trick.)
+pub fn collect_implicit_close_tag_edits(
+    source: &str,
+    fragment: &Fragment,
+    edits: &mut Vec<(u32, u32, String)>,
+) {
+    for (index, node) in fragment.nodes.iter().enumerate() {
+        if crate::prettier_ignore::preceded_by_prettier_ignore(&fragment.nodes, index) {
+            continue;
+        }
+        if let TemplateNode::RegularElement(element) = node
+            && needs_flush_implicit_close_tag(source, element.end, element.name.as_str())
+        {
+            edits.push((element.end, element.end, format!("</{}>", element.name)));
+        }
+        for child in crate::collapse::node_child_fragments(node) {
+            collect_implicit_close_tag_edits(source, child, edits);
+        }
+    }
 }

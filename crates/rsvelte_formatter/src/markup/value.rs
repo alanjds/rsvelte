@@ -402,8 +402,12 @@ pub(super) fn render_attribute_node(
     options: &FormatOptions,
     attr_depth: usize,
     narrow_value: bool,
+    // prettier-plugin-svelte normalises whitespace in the literal text of a
+    // `class` attribute, but only on a `RegularElement` — see [`class_text`].
+    regular_element: bool,
 ) -> Result<String, FormatError> {
     let tw = tab_width(options);
+    let class_text = regular_element && node.name.as_str() == "class";
     match &node.value {
         AttributeValue::True(_) => Ok(node.name.to_string()),
         AttributeValue::Expression(tag) => {
@@ -451,6 +455,7 @@ pub(super) fn render_attribute_node(
                 name_prefix,
                 narrow_value,
                 true,
+                class_text,
             )?;
             Ok(format!("{}=\"{}\"", node.name, body))
         }
@@ -547,6 +552,7 @@ pub(super) fn render_attribute_value_for_directive(
                 attr_depth,
                 prefix + 1,
                 narrow_value,
+                false,
                 false,
             )?;
             Ok(format!("\"{body}\""))

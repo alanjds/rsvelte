@@ -26,6 +26,7 @@
 //! - Children fragments (recursed into separately by the caller)
 
 mod attribute;
+mod class_text;
 mod close_tag;
 mod directive;
 mod elements;
@@ -37,4 +38,6 @@ mod value_sequence;
 mod walk;
 
 pub use elements::is_html_block_display_element;
-pub use walk::{collect_open_tag_edits, collect_options_open_tag_edit};
+pub use walk::{
+    collect_implicit_close_tag_edits, collect_open_tag_edits, collect_options_open_tag_edit,
+};

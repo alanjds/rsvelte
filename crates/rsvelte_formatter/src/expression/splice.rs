@@ -93,6 +93,58 @@ fn is_top_level_call_expression(source: &str, options: &FormatOptions) -> bool {
     )
 }
 
+/// Columns before a content tag's expression on the line it renders on — the
+/// `prefix_lead` [`format_content_expression_with_prefix`] measures against.
+///
+/// A tag that follows a `}` shares its line with the tags it abuts (`{a}{b}`),
+/// so their rendered widths push it right. The widths come from the edits those
+/// tags already pushed, NOT from the source column: the source layout is not
+/// the rendered one, and reading the column off the source charges this tag for
+/// an open tag that the collapse pass may have wrapped onto earlier lines — the
+/// case in #3102, where a member chain broke inside an element whose own
+/// attributes ended up wrapped. The chain is anchored at the element's content
+/// indent, which is the same column the first tag of a chain assumes.
+///
+/// Falls back to the source column when a link of the chain has no edit to
+/// measure (its rendered width is then unknown).
+fn adjacent_tag_prefix_lead(
+    source: &str,
+    tag_start: u32,
+    depth: usize,
+    options: &FormatOptions,
+    edits: &[(u32, u32, String)],
+) -> usize {
+    if tag_start == 0 || source.as_bytes().get(tag_start as usize - 1) != Some(&b'}') {
+        return 1;
+    }
+    let tw = tab_width(options);
+    let indent = depth * options.js.indent_width.value() as usize;
+    let mut chain: Vec<&str> = Vec::new();
+    let mut position = tag_start;
+    while position > 0 && source.as_bytes().get(position as usize - 1) == Some(&b'}') {
+        let Some(edit) = edits.iter().rev().find(|(_, end, _)| *end == position) else {
+            let line_start = source[..tag_start as usize]
+                .rfind('\n')
+                .map_or(0, |index| index + 1);
+            let source_column = source
+                .get(line_start..tag_start as usize)
+                .unwrap_or("")
+                .visual_width(tw);
+            return source_column.saturating_sub(indent) + 1;
+        };
+        chain.push(edit.2.as_str());
+        position = edit.0;
+    }
+    let mut column = indent;
+    for text in chain.iter().rev() {
+        match text.rfind('\n') {
+            Some(index) => column = text[index + 1..].visual_width(tw),
+            None => column += text.visual_width(tw),
+        }
+    }
+    column.saturating_sub(indent) + 1
+}
+
 pub(super) fn push_expression_tag(
     source: &str,
     tag: &ExpressionTag,
@@ -153,20 +205,7 @@ pub(super) fn push_expression_tag(
         return Ok(());
     }
 
-    let prefix_lead =
-        if tag.start > 0 && source.as_bytes().get(tag.start as usize - 1) == Some(&b'}') {
-            let line_start = source[..tag.start as usize]
-                .rfind('\n')
-                .map_or(0, |index| index + 1);
-            let source_column = source
-                .get(line_start..tag.start as usize)
-                .unwrap_or("")
-                .visual_width(tab_width(options));
-            let indent = depth * options.js.indent_width.value() as usize;
-            source_column.saturating_sub(indent) + 1
-        } else {
-            1
-        };
+    let prefix_lead = adjacent_tag_prefix_lead(source, tag.start, depth, options, edits);
     let formatted = format_content_expression_with_prefix(inner, options, depth, prefix_lead)?;
     edits.push((tag.start, tag.end, format!("{{{formatted}}}")));
     Ok(())

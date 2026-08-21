@@ -220,6 +220,24 @@ pub(super) fn push_close_tag(
     }
 }
 
+/// Whether `element_end` ends an element the parser closed implicitly whose
+/// content runs flush up to it — `<li>a` in `<ul><li>a<li>b</ul>`, where the
+/// next sibling's `<` is the very next byte.
+///
+/// [`push_close_tag`]'s case 4 repairs the same shape when the element's span
+/// ends in whitespace (it rewrites that whitespace into the close tag); with no
+/// whitespace to rewrite there is nothing to attach the tag to, so it is emitted
+/// as its own insert by [`super::collect_implicit_close_tag_edits`].
+pub(super) fn needs_flush_implicit_close_tag(source: &str, element_end: u32, tag_name: &str) -> bool {
+    if is_void_element(tag_name) || tag_name.starts_with('!') {
+        return false;
+    }
+    source
+        .as_bytes()
+        .get((element_end as usize).wrapping_sub(1))
+        .is_some_and(|&byte| byte != b'>' && !byte.is_ascii_whitespace())
+}
+
 /// prettier-plugin-svelte's `canOmitSoftlineBeforeClosingTag`, evaluated
 /// structurally from the text after the element's close tag (its caller already
 /// gates on `bracketSameLine`): `!hugsStartOfNextNode(node) ||

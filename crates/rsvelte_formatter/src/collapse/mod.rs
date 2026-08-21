@@ -67,6 +67,7 @@ use util::{
 };
 
 pub use util::template_node_span;
+pub(crate) use util::child_fragments as node_child_fragments;
 
 /// Conservative necessary condition for [`collapse_pure_text_elements`] to make
 /// any edit: some element (recursively) that a collapse pass could reflow. Three

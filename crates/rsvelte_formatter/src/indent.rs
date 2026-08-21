@@ -536,8 +536,15 @@ fn collect_indent_edits_inner(
                     && matches!(&fragment.nodes[last_idx + 1],
                         TemplateNode::Text(t) if is_whitespace_only(t.data.as_ref()));
                 if !has_trailing_ws {
-                    let is_implicitly_closed =
-                        source.as_bytes().get(e.end as usize - 1).copied() != Some(b'>');
+                    // Case 4 only fires when the element's span ends in the
+                    // whitespace it rewrites; an element whose content runs
+                    // flush to the next node (`<td>b</tr>`) is closed by
+                    // `markup::collect_implicit_close_tag_edits` instead, which
+                    // consumes nothing — so there is no newline to restore.
+                    let is_implicitly_closed = source
+                        .as_bytes()
+                        .get(e.end as usize - 1)
+                        .is_some_and(u8::is_ascii_whitespace);
                     let is_nonempty =
                         !e.fragment.nodes.iter().all(
                             |n| matches!(n, TemplateNode::Text(t) if crate::is_blank_text(t.data.as_ref())),
