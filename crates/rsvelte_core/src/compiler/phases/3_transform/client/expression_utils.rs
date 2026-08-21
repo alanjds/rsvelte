@@ -2086,6 +2086,13 @@ pub(super) fn expression_needs_proxy(expr: &str) -> bool {
         return false;
     }
 
+    // A ClassExpression is not on `should_proxy`'s no-proxy list, so it proxies.
+    if let Some(rest) = trimmed.strip_prefix("class")
+        && !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+    {
+        return true;
+    }
+
     // These prefixes settle the node type on their own, and must be decided
     // before the operator sniffs below: TS generics such as `new Map<K, V>()`
     // otherwise read as a top-level relational operator.

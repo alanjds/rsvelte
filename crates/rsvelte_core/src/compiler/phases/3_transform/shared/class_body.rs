@@ -136,7 +136,8 @@ pub(crate) struct ClassHeader {
 /// Both offsets come from the lexical scan, so a `class ` inside a comment or a
 /// string cannot start a "class header" and turn the function that follows into
 /// a class body (#2986), and an `{` inside a comment or inside the `extends`
-/// clause's arguments cannot be mistaken for the body brace.
+/// clause's arguments cannot be mistaken for the body brace — including the body
+/// of an inline `extends class { … }` heritage expression (#3072).
 pub(crate) fn find_class_header(source: &str) -> Option<ClassHeader> {
     let bytes = source.as_bytes();
     // Start of the identifier run in progress, and the significant code byte
@@ -151,20 +152,27 @@ pub(crate) fn find_class_header(source: &str) -> Option<ClassHeader> {
     let mut seen_after_keyword = false;
     let mut nesting = 0i32;
     let mut angle = 0i32;
+    // Unbracketed `class` keywords in the heritage clause: each one's `{` opens
+    // a *nested* body, and everything up to its matching `}` belongs to it.
+    let mut heritage_pending = 0i32;
+    let mut heritage_depth = 0i32;
 
     for (i, byte) in js_scan::code_bytes(bytes) {
         if let Some(start) = run_start
             && (i != prev_end || !js_scan::is_ident_byte(byte))
         {
             run_start = None;
-            if keyword.is_none()
-                && &bytes[start..prev_end] == b"class"
-                && !matches!(run_prev, Some(b'.') | Some(b'#'))
-            {
+            let is_class_word = &bytes[start..prev_end] == b"class"
+                && !matches!(run_prev, Some(b'.') | Some(b'#'));
+            if keyword.is_none() && is_class_word {
                 keyword = Some(start);
                 seen_after_keyword = false;
                 nesting = 0;
                 angle = 0;
+                heritage_pending = 0;
+                heritage_depth = 0;
+            } else if is_class_word && heritage_depth == 0 && nesting == 0 && angle == 0 {
+                heritage_pending += 1;
             }
         }
         prev_end = i + 1;
@@ -185,6 +193,14 @@ pub(crate) fn find_class_header(source: &str) -> Option<ClassHeader> {
         prev_sig = Some(byte);
 
         let Some(start) = keyword else { continue };
+        if heritage_depth > 0 {
+            match byte {
+                b'{' => heritage_depth += 1,
+                b'}' => heritage_depth -= 1,
+                _ => {}
+            }
+            continue;
+        }
         if !seen_after_keyword {
             // `class {` is the only punctuation that can follow the keyword; a
             // `:` (object key), `(` (method name) or `?` (optional member) means
@@ -205,10 +221,15 @@ pub(crate) fn find_class_header(source: &str) -> Option<ClassHeader> {
             b'<' if nesting == 0 => angle += 1,
             b'>' if nesting == 0 && angle > 0 => angle -= 1,
             b'{' if nesting == 0 && angle == 0 => {
-                return Some(ClassHeader {
-                    keyword: start,
-                    body_brace: i,
-                });
+                if heritage_pending > 0 {
+                    heritage_pending -= 1;
+                    heritage_depth = 1;
+                } else {
+                    return Some(ClassHeader {
+                        keyword: start,
+                        body_brace: i,
+                    });
+                }
             }
             // No class header contains a statement terminator.
             b';' if nesting == 0 => keyword = None,
@@ -586,6 +607,40 @@ mod tests {
             ("el.class = 'a';\nclass Foo {}", "class Foo {"),
             ("this.#class = 1;\nclass Foo {}", "class Foo {"),
             ("let superclass = 1;\nclass Foo {}", "class Foo {"),
+        ] {
+            assert_eq!(header_of(source), Some(header), "{source:?}");
+        }
+    }
+
+    /// An inline `extends class { … }` heritage body is not the subclass's body
+    /// (#3072); its braces have to be consumed before the real one is reached.
+    #[test]
+    fn inline_heritage_class_body_is_not_the_class_body() {
+        for (source, header) in [
+            ("class Sub extends class {} {}", "class Sub extends class {} {"),
+            (
+                "class Sub extends class { a = 1; } { b = 2; }",
+                "class Sub extends class { a = 1; } {",
+            ),
+            (
+                "class Sub extends class { m() { return {}; } } {}",
+                "class Sub extends class { m() { return {}; } } {",
+            ),
+            (
+                "class Sub extends class extends class {} {} {}",
+                "class Sub extends class extends class {} {} {",
+            ),
+            // Already-parenthesised and call-wrapped heritage stay bracketed.
+            ("class Sub extends (class {}) {}", "class Sub extends (class {}) {"),
+            (
+                "class Sub extends mixin(class {}) {}",
+                "class Sub extends mixin(class {}) {",
+            ),
+            // A string or comment inside the heritage body is text, not code.
+            (
+                "class Sub extends class { s = '}'; } {}",
+                "class Sub extends class { s = '}'; } {",
+            ),
         ] {
             assert_eq!(header_of(source), Some(header), "{source:?}");
         }

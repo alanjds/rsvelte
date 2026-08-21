@@ -513,6 +513,19 @@ fn expr_precedence(expr: &Expression) -> u8 {
     }
 }
 
+/// esrap prints `extends <expr>` bare. A class / function / object expression is
+/// a valid `LeftHandSideExpression` there despite its lower precedence, so
+/// parenthesising it is a byte divergence (#3072); anything below that would not
+/// parse without the parens, which esrap does not add.
+fn heritage_needs_parens(expr: &Expression) -> bool {
+    !matches!(
+        unparen(expr),
+        Expression::ClassExpression(_)
+            | Expression::FunctionExpression(_)
+            | Expression::ObjectExpression(_)
+    ) && expr_precedence(expr) < 19
+}
+
 /// Binary/logical operator precedence (esrap's `OPERATOR_PRECEDENCE`).
 fn binary_operator_precedence(op: &str) -> u8 {
     match op {
@@ -2344,7 +2357,13 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         }
         if let Some(heritage) = &node.heritage {
             ctx.write("extends ");
-            self.child_with_parens(&heritage.expression, 19, ctx);
+            if heritage_needs_parens(&heritage.expression) {
+                ctx.write_ascii(b'(');
+                self.print_expression(&heritage.expression, ctx);
+                ctx.write_ascii(b')');
+            } else {
+                self.print_expression(&heritage.expression, ctx);
+            }
             if let Some(ta) = &heritage.type_arguments {
                 self.type_parameter_instantiation(ta, ctx);
             }

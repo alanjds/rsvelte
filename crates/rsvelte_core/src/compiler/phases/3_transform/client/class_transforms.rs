@@ -6,7 +6,9 @@ use std::fmt::Write as _;
 use super::REGEX_INVALID_IDENTIFIER_CHARS;
 use super::expression_needs_proxy;
 use crate::compiler::phases::phase1_parse::utils::find_matching_bracket;
-use crate::compiler::phases::phase3_transform::shared::class_body::split_class_members_onto_lines;
+use crate::compiler::phases::phase3_transform::shared::class_body::{
+    self, split_class_members_onto_lines,
+};
 use crate::compiler::phases::phase3_transform::shared::js_scan::skip_opaque;
 
 /// JS-lexical-aware replacement for `find_matching_paren`: given `s` positioned
@@ -917,39 +919,75 @@ fn transform_class_fields_client_with_options(
     script: &str,
     retain_all_public_jsdoc: bool,
 ) -> String {
+    transform_class_fields_client_inner(script, retain_all_public_jsdoc, None)
+}
+
+/// `indent_override` is the indentation the emitted class must be printed at
+/// when the caller already knows it — a class that is not at the start of its
+/// own line (an `extends` heritage expression, a rune argument) has no source
+/// indentation of its own to read.
+fn transform_class_fields_client_inner(
+    script: &str,
+    retain_all_public_jsdoc: bool,
+    indent_override: Option<&str>,
+) -> String {
     // Check if script contains a class with $state or $derived fields
-    if memmem::find(script.as_bytes(), b"class ").is_none()
+    if memmem::find(script.as_bytes(), b"class").is_none()
         || (memmem::find(script.as_bytes(), b"$state").is_none()
             && memmem::find(script.as_bytes(), b"$derived").is_none())
     {
         return script.to_string();
     }
 
-    // Find the class body
-    let Some(class_pos) = memmem::find(script.as_bytes(), b"class ") else {
+    // The keyword and the body brace both come from the lexical scan: a `class`
+    // in a comment or a string is not a header (#2986), and the `{` of an inline
+    // `extends class { … }` heritage expression is not this class's body (#3072).
+    let Some(header) = class_body::find_class_header(script) else {
         return script.to_string();
     };
-
-    // Find the opening brace of the class
+    let class_pos = header.keyword;
+    let brace_pos = header.body_brace - class_pos;
     let after_class = &script[class_pos..];
-    let Some(brace_pos) = after_class.find('{') else {
-        return script.to_string();
-    };
-
-    let class_header = &after_class[..brace_pos + 1];
 
     // Synthesized members are printed relative to the class's own source
     // indentation: hard-coding one level made a module-level `class` (column 0)
     // come out one tab too deep, class body and closing brace alike.
-    let class_indent: String = {
-        let line_start = script[..class_pos].rfind('\n').map_or(0, |p| p + 1);
-        script[line_start..class_pos]
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect()
+    let class_indent: String = match indent_override {
+        Some(indent) => indent.to_string(),
+        None => {
+            let line_start = script[..class_pos].rfind('\n').map_or(0, |p| p + 1);
+            script[line_start..class_pos]
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect()
+        }
     };
     let member_indent = format!("{}\t", class_indent);
     let member_body_indent = format!("{}\t\t", class_indent);
+
+    // An inline class expression in the heritage clause is a class of its own:
+    // upstream reaches it through the ordinary walk, so its rune fields are
+    // lowered too (#3072). Everything after the `class` keyword up to the body
+    // brace is re-scanned; the outer keyword itself is skipped so the recursion
+    // cannot re-find this class.
+    const CLASS_KEYWORD_LEN: usize = "class".len();
+    let heritage_start = class_pos + CLASS_KEYWORD_LEN;
+    let class_header: String = if heritage_start < header.body_brace
+        && class_body::find_class_header(&script[heritage_start..header.body_brace]).is_some()
+    {
+        format!(
+            "{}{}{{",
+            &script[class_pos..heritage_start],
+            transform_class_fields_client_inner(
+                &script[heritage_start..header.body_brace],
+                retain_all_public_jsdoc,
+                Some(&class_indent),
+            )
+        )
+    } else {
+        after_class[..brace_pos + 1].to_string()
+    };
+    let class_header: &str = &class_header;
 
     // Find the matching closing brace with JS-lexical awareness so a `}` inside
     // a string / template / regex / comment (e.g. `return "}"`) doesn't truncate
@@ -1290,13 +1328,31 @@ fn transform_class_fields_client_with_options(
         // that follow it. Returning the whole script here would skip lowering
         // for every later class — e.g. a plain `Helper` before an
         // `export class Counter { count = $state(0) }`.
-        let before_and_current = &script[..class_body_end + 1];
         let after_class_body = &script[class_body_end + 1..];
         return format!(
-            "{}{}",
-            before_and_current,
+            "{}{}{}{}",
+            &script[..class_pos],
+            class_header,
+            &script[class_body_start..class_body_end + 1],
             transform_class_fields_client_with_options(after_class_body, retain_all_public_jsdoc)
         );
+    }
+
+    // A rune's argument is an expression like any other, so a class expression
+    // inside it is lowered too (#3071). Upstream reaches it by visiting the
+    // initializer; here the argument text is re-scanned, at the indentation the
+    // field itself is printed at.
+    for field in &mut fields {
+        if !field.constructor_declared
+            && memmem::find(field.value.as_bytes(), b"class").is_some()
+            && class_body::find_class_header(&field.value).is_some()
+        {
+            field.value = transform_class_fields_client_inner(
+                &field.value,
+                retain_all_public_jsdoc,
+                Some(&member_indent),
+            );
+        }
     }
 
     // Deconflict private backing names for public fields
