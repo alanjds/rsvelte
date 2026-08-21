@@ -263,9 +263,11 @@ pub fn remove_typescript_nodes_typed(
     visit_typed_children(node, arena)
 }
 
-/// Strip a `TSModuleDeclaration` (typed). Mirrors the Value-mutator namespace
-/// logic: error when the body contains non-type nodes, otherwise replace with an
-/// empty statement.
+/// Strip a `TSModuleDeclaration` (typed). Mirrors upstream's visitor: run the
+/// strip over every body entry, and error unless every one of them was *erased*
+/// by it. A statement that was already empty in the source is not erased —
+/// upstream compares each visited entry against the `b.empty` singleton, so
+/// `namespace N { ; }` is a namespace with a non-type node.
 fn strip_ts_module_declaration_typed(
     node: &mut JsNode,
     arena: &ParseArena,
@@ -282,10 +284,18 @@ fn strip_ts_module_declaration_typed(
             JsNode::BlockStatement { body, .. } => *body,
             _ => IdRange::empty(),
         };
-        let stmts = arena.get_js_children(stmts_range);
-        let has_non_type_nodes = stmts
-            .iter()
-            .any(|entry| !is_type_only_namespace_member(entry));
+        // Upstream maps the WHOLE body before testing it, so an error raised by
+        // a later entry (a nested `enum`, a nested namespace) wins over this
+        // node's own — visit every entry before deciding.
+        let mut has_non_type_nodes = false;
+        for entry in arena.get_js_children(stmts_range).to_vec() {
+            let was_empty = entry.node_type() == Some("EmptyStatement");
+            let mut visited = entry;
+            remove_typescript_nodes_typed(&mut visited, arena)?;
+            if was_empty || visited.node_type() != Some("EmptyStatement") {
+                has_non_type_nodes = true;
+            }
+        }
         if has_non_type_nodes {
             return Err(ParseError::typescript_invalid_feature(
                 "namespaces with non-type nodes",
@@ -299,27 +309,6 @@ fn strip_ts_module_declaration_typed(
 
     *node = typed_empty_statement(node);
     Ok(())
-}
-
-/// Classify a single namespace-body member as "safe to strip" (type-only).
-/// Mirrors the Value mutator's per-entry predicate (lines for `TSModuleDeclaration`).
-fn is_type_only_namespace_member(entry: &JsNode) -> bool {
-    match entry.node_type() {
-        Some("EmptyStatement")
-        | Some("TSInterfaceDeclaration")
-        | Some("TSTypeAliasDeclaration")
-        | Some("TSEnumDeclaration") => true,
-        Some("ExportNamedDeclaration") => {
-            // `export type ...`
-            if let JsNode::ExportNamedDeclaration { export_kind, .. } = entry
-                && export_kind.as_deref() == Some("type")
-            {
-                return true;
-            }
-            false
-        }
-        _ => false,
-    }
 }
 
 /// Strip type-only imports (typed). Whole `import type {...}` → empty; otherwise
