@@ -10,7 +10,8 @@
 //! What made it more than byte parity: the BOM became a template node, so the
 //! extra-node flag and the `$.next()` / `var fragment = root()` shape changed
 //! with it and a hydrating client walked a different node count than the server
-//! produced.
+//! produced. Measured against the broken tree, the three component tests
+//! reproduce exactly that and `module_entry_point` does not.
 
 use rsvelte_core::{CompileOptions, GenerateMode, ModuleCompileOptions, compile, compile_module};
 
@@ -74,6 +75,9 @@ fn a_non_leading_bom_is_content() {
     );
 }
 
+/// Measured against the broken tree this one PASSES — a leading BOM is
+/// whitespace to the JS parser, so `compileModule` was unaffected. It is here as
+/// the contract for the `remove_bom` upstream also runs there, not as a repro.
 #[test]
 fn module_entry_point() {
     let src = "export let n = $state(1);\n";
