@@ -5,14 +5,13 @@
 
 use crate::ast::arena::ParseArena;
 use crate::ast::template::{
-    AttributeValue, AttributeValuePart, ClassDirective, ExpressionTag,
+    AttributeNode, AttributeValue, AttributeValuePart, ClassDirective, ExpressionTag,
     RegularElement as RegularElementNode, StyleDirective,
 };
 use crate::ast::typed_expr::JsNode;
 use crate::compiler::phases::phase2_analyze::for_each_js_child;
 use crate::compiler::phases::phase3_transform::client::types::*;
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
-#[cfg(test)]
 use crate::compiler::phases::phase3_transform::js_ast::nodes::JsLiteral;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::{
     JsExpr, JsObjectMember, JsPattern, JsStatement, JsTemplateLiteral,
@@ -21,33 +20,20 @@ use crate::compiler::phases::phase3_transform::shared::template::sanitize_templa
 
 use super::utils::build_expression;
 
-/// Check if a class attribute value needs to be wrapped in $.clsx().
-///
-/// Corresponds to the condition in Attribute.js for setting needs_clsx:
-/// - The value is a single Expression (not a Sequence or True)
-/// - The expression type is NOT Literal, TemplateLiteral, or BinaryExpression
-///
-/// This is needed for class={x} where x is a variable, array, or object,
-/// because Svelte's clsx function normalizes these to proper class strings.
-fn needs_clsx(attr_value: &AttributeValue) -> bool {
-    // Helper to check if an expression type needs clsx
-    let expr_needs_clsx = |expr_type: &str| -> bool {
-        // Needs clsx if NOT a simple literal, template literal, or binary expression
-        !matches!(
-            expr_type,
-            "Literal" | "TemplateLiteral" | "BinaryExpression"
-        )
-    };
-
-    match attr_value {
-        AttributeValue::Expression(expr_tag) => {
-            // Get expression type - only unquoted class={expr} needs clsx
-            // Quoted class="{expr}" (Sequence) does NOT need clsx per official compiler
-            let expr_type = expr_tag.expression.node_type().unwrap_or("");
-            expr_needs_clsx(expr_type)
-        }
-        // Sequence (quoted attributes), True, or other forms don't need clsx
-        _ => false,
+/// The cooked string of a built attribute value, when it is a plain string
+/// literal — upstream's `value.type === 'Literal' && typeof value.value === 'string'`.
+pub fn static_string_value<'e>(
+    expr: &'e JsExpr,
+    arena: &'e crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
+) -> Option<&'e str> {
+    let mut expr = expr;
+    while let JsExpr::Spanned(inner, _, _) = expr {
+        expr = arena.get_expr(*inner);
+    }
+    match expr {
+        JsExpr::Literal(JsLiteral::String(s)) => Some(s.as_str()),
+        JsExpr::Literal(JsLiteral::RawString { value, .. }) => Some(value.as_str()),
+        _ => None,
     }
 }
 
@@ -798,7 +784,7 @@ fn attr_has_await_expr(attr_value: &AttributeValue) -> bool {
 pub fn build_set_class(
     _element: &RegularElementNode,
     node_id: &str,
-    class_attribute: Option<&AttributeValue>,
+    class_attribute: Option<&AttributeNode>,
     class_directives: &[&ClassDirective],
     context: &mut ComponentContext,
     is_html: bool,
@@ -806,9 +792,11 @@ pub fn build_set_class(
     is_scoped: bool,
 ) {
     // Build the class value from the attribute
-    let (mut class_value, mut has_state) = if let Some(attr_value) = class_attribute {
-        // Check if we need to wrap in $.clsx() before building the value
-        let should_clsx = needs_clsx(attr_value);
+    let (mut class_value, mut has_state) = if let Some(attr) = class_attribute {
+        let attr_value = &attr.value;
+        // `needs_clsx` is decided in phase 2 off the *raw* attribute name, so a
+        // non-lowercase `CLASS` routes to `set_class` without the wrap.
+        let should_clsx = attr.metadata.needs_clsx;
 
         // In the official compiler, the memoize callback in build_set_class calls
         // `context.state.analysis.memoizer.add(value, metadata)` per-expression.

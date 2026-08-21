@@ -377,7 +377,7 @@ impl<'a> ComponentContext<'a> {
                 // should NOT be scoped because no CSS selector can match the empty class.
                 let is_scoped = elem.metadata.scoped && !css_hash.is_empty();
                 let class_attr_value = if let Attribute::Attribute(a) = &attributes[0] {
-                    Some(&a.value)
+                    Some(a)
                 } else {
                     None
                 };

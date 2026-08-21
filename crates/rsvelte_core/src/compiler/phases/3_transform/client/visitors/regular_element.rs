@@ -19,6 +19,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::attribute::{
 use crate::compiler::phases::phase3_transform::client::visitors::bind_directive::bind_directive_with_ignored;
 use crate::compiler::phases::phase3_transform::client::visitors::shared::element::{
     build_attribute_effect, build_attribute_value, build_set_class, build_set_style,
+    static_string_value,
 };
 use crate::compiler::phases::phase3_transform::client::visitors::shared::fragment::{
     TextOrExpr, has_dynamic_children, is_static_element, process_children,
@@ -37,6 +38,7 @@ use crate::compiler::phases::phase3_transform::utils::is_svelte_whitespace_only;
 use crate::compiler::phases::phase3_transform::utils::{
     clean_nodes, determine_namespace_for_children,
 };
+use crate::compiler::utils::cannot_be_set_statically;
 use std::borrow::Cow;
 // Note: can_delegate_event and is_capture_event are used in attribute.rs for event delegation
 use rustc_hash::FxHashMap;
@@ -242,18 +244,17 @@ pub fn visit_regular_element(
             Attribute::Attribute(attr) => {
                 // `is` attributes need to be part of the template, otherwise they break
                 // See: svelte/packages/svelte/src/compiler/phases/3-transform/client/visitors/RegularElement.js
-                if attr.name == "is"
-                    && context.state.metadata.namespace == "html"
-                    && is_text_attribute(attr)
-                    && let AttributeValue::Sequence(parts) = &attr.value
-                    && let Some(crate::ast::template::AttributeValuePart::Text(text)) =
-                        parts.first()
-                {
-                    context
-                        .state
-                        .template
-                        .set_prop("is".to_string(), Some(text.data.to_string()));
-                    continue;
+                if attr.name == "is" && context.state.metadata.namespace == "html" {
+                    let result =
+                        build_attribute_value(&attr.value, context, |expr, _metadata| expr);
+                    if let Some(text) = static_string_value(&result.value, &context.arena) {
+                        let text = text.to_string();
+                        context
+                            .state
+                            .template
+                            .set_prop("is".to_string(), Some(text));
+                        continue;
+                    }
                 }
 
                 // All attributes (including event attributes like onclick={...}) go into attributes
@@ -586,7 +587,7 @@ pub fn visit_regular_element(
                     build_set_class(
                         node,
                         &node_id_str,
-                        Some(&attr.value),
+                        Some(attr),
                         &class_directives,
                         context,
                         is_html,
@@ -614,8 +615,10 @@ pub fn visit_regular_element(
 
                 // Static text attributes can go in the template
                 let is_true_value = matches!(&attr.value, AttributeValue::True(true));
+                // Upstream tests the RAW attribute name here, so a
+                // non-lowercase `MUTED` stays a template attribute.
                 if !is_custom_element
-                    && !cannot_be_set_statically(&name)
+                    && !cannot_be_set_statically(&attr.name)
                     && (is_true_value || is_text_attribute(attr))
                 {
                     // `None` is upstream's boolean `true` for a valueless attribute,
@@ -672,7 +675,7 @@ pub fn visit_regular_element(
                     build_set_class(
                         node,
                         &node_id,
-                        Some(&attr.value),
+                        Some(attr),
                         &[], // No class directives
                         context,
                         is_html,
@@ -799,12 +802,10 @@ pub fn visit_regular_element(
             let is_html = context.state.metadata.namespace == "html" && node.name != "svg";
 
             // Get the class attribute value if it exists
-            let class_attr_value = class_attribute.map(|attr| &attr.value);
-
             build_set_class(
                 node,
                 &node_id,
-                class_attr_value,
+                class_attribute,
                 &class_directives,
                 context,
                 is_html,
@@ -1772,21 +1773,6 @@ fn get_attribute_name(node: &RegularElementNode, attr: &AttributeNode) -> String
     }
 }
 
-/// Check if an attribute cannot be set statically in the template.
-/// These attributes need special JavaScript handling at runtime.
-///
-/// Corresponds to NON_STATIC_PROPERTIES in:
-/// svelte/packages/svelte/src/utils.js
-fn cannot_be_set_statically(name: &str) -> bool {
-    // Only these attributes are unconditionally non-static
-    // Other attributes like value, checked, selected are handled conditionally
-    // based on the element type (see is_static_attribute)
-    matches!(
-        name,
-        "autofocus" | "muted" | "defaultValue" | "defaultChecked" | "inert"
-    )
-}
-
 /// Check if an element emits `load` and `error` events.
 /// Reference: svelte/src/utils.js - LOAD_ERROR_ELEMENTS
 fn is_load_error_element(name: &str) -> bool {
@@ -1880,13 +1866,6 @@ fn is_dom_property(name: &str) -> bool {
             | "allowFullscreen"
             | "disablePictureInPicture"
             | "disableRemotePlayback"
-            // Additional common DOM properties
-            | "currentTime"
-            | "playbackRate"
-            | "paused"
-            | "innerHTML"
-            | "innerText"
-            | "textContent"
     )
 }
 
@@ -2397,7 +2376,10 @@ mod tests {
     fn test_is_dom_property() {
         assert!(is_dom_property("value"));
         assert!(is_dom_property("checked"));
-        assert!(is_dom_property("innerHTML"));
+        // Upstream's DOM_PROPERTIES has no `innerHTML`: the update goes through
+        // `$.set_attribute`, which is observable on an SVG element (where the
+        // name is not lowercased first).
+        assert!(!is_dom_property("innerHTML"));
         assert!(!is_dom_property("class"));
         assert!(!is_dom_property("id"));
     }
