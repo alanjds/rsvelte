@@ -2431,6 +2431,20 @@ impl<'a> SelectorParser<'a> {
                 let trimmed_start = args_start + leading_skip;
                 let trimmed_end = self.offset + content_end - trailing_ws;
 
+                // Upstream reads a selector before it looks for the `)`, so an
+                // empty argument list reaches `read_identifier` at the `)`.
+                if trimmed.trim_ws().is_empty() {
+                    let pos = self.offset + content_end;
+                    record_first_error(
+                        &self.error,
+                        crate::error::ParseError::svelte(
+                            "css_expected_identifier",
+                            "Expected a valid CSS identifier",
+                            (pos, pos),
+                        ),
+                    );
+                }
+
                 // Parse the content as a selector list
                 Some(self.parse_args_selector_list(trimmed, trimmed_start, trimmed_end))
             }

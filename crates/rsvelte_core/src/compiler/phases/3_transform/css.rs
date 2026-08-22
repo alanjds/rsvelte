@@ -11,7 +11,7 @@ use super::{CssOutput, TransformError};
 use crate::compiler::CompileOptions;
 use crate::compiler::phases::phase2_analyze::ComponentAnalysis;
 use crate::compiler::phases::phase2_analyze::types::DomStructure;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 
 /// Context for CSS transformation containing analysis data and options
@@ -42,6 +42,11 @@ struct CssContext<'a> {
     /// Used to determine unused status of compound selectors containing &.
     /// Uses RefCell for interior mutability so we can push/pop while passing &CssContext.
     parent_preludes: std::cell::RefCell<Vec<&'a Value>>,
+    /// Whether each `:is()` / `:where()` argument branch, keyed by its start
+    /// offset, was found unreachable. Upstream decides this once — the warning
+    /// and the `/* (unused) … */` both read `metadata.used` — so both consumers
+    /// here read one recorded answer rather than each running its own check.
+    is_where_branch_unused: std::cell::RefCell<FxHashMap<u32, bool>>,
     /// Whether we're in dev mode (affects empty rule handling)
     dev: bool,
     /// Whether to minify the output (for injected CSS in SSR)
@@ -87,6 +92,7 @@ pub fn collect_css_unused_warnings(
         has_opaque_sibling_boundaries: analysis.css.has_opaque_elements,
         dom_structure: &analysis.css.dom_structure,
         parent_preludes: std::cell::RefCell::new(Vec::new()),
+        is_where_branch_unused: std::cell::RefCell::new(FxHashMap::default()),
         dev: false,
         minify: false,
     };
@@ -133,6 +139,19 @@ pub fn collect_css_unused_warnings(
     warnings
 }
 
+/// Record every `:is()` / `:where()` argument branch decision on `ctx` before
+/// the stylesheet is written, so the `/* (unused) … */` the transform emits and
+/// the warning the compiler raises come from one answer rather than two checks.
+fn record_is_where_branch_usage_in_nodes<'a>(
+    nodes: &'a [Value],
+    css_source: &str,
+    css_start: usize,
+    ctx: &CssContext<'a>,
+) {
+    let mut discarded = Vec::new();
+    collect_unused_warnings_from_nodes(nodes, css_source, css_start, ctx, &mut discarded, false);
+}
+
 /// Walk into :is() / :where() pseudo-classes in a complex selector and report
 /// individual unused alternatives.
 ///
@@ -161,22 +180,20 @@ fn substitute_is_branch(
     synth
 }
 
-fn collect_is_where_unused_warnings(
-    complex_selector: &Value,
-    css_source: &str,
-    css_start: usize,
-    ctx: &CssContext,
-    warnings: &mut Vec<CssUnusedWarning>,
-) {
-    let rel_selectors = match complex_selector.get("children").and_then(|c| c.as_array()) {
-        Some(rs) => rs,
-        None => return,
+/// Decide, and record on `ctx`, whether each `:is()` / `:where()` argument
+/// branch of `complex_selector` is unreachable.
+///
+/// This has to run BEFORE the enclosing selector is judged: upstream returns
+/// false from `relative_selector_might_apply_to_node` when no argument matched,
+/// so "every branch is unused" is what makes the whole selector unused.
+fn record_is_where_branch_usage(complex_selector: &Value, ctx: &CssContext) {
+    let Some(rel_selectors) = complex_selector.get("children").and_then(|c| c.as_array()) else {
+        return;
     };
 
     for (ri, rel) in rel_selectors.iter().enumerate() {
-        let selectors = match rel.get("selectors").and_then(|s| s.as_array()) {
-            Some(s) => s,
-            None => continue,
+        let Some(selectors) = rel.get("selectors").and_then(|s| s.as_array()) else {
+            continue;
         };
 
         for (si, sel) in selectors.iter().enumerate() {
@@ -190,16 +207,21 @@ fn collect_is_where_unused_warnings(
                 && let Some(children) = args.get("children").and_then(|c| c.as_array())
             {
                 for inner_complex in children {
-                    // Skip multi-part selectors (with combinators like `html *`).
-                    // These could reference elements outside the component and
-                    // the official compiler assumes they match (can't determine
-                    // unused for cross-component selectors).
+                    let Some(start) = inner_complex.get("start").and_then(|s| s.as_u64()) else {
+                        continue;
+                    };
+                    // Multi-part branches (with combinators like `html *`) can
+                    // reference elements outside the component, and upstream
+                    // assumes they match.
                     let inner_parts = inner_complex
                         .get("children")
                         .and_then(|c| c.as_array())
                         .map(|a| a.len())
                         .unwrap_or(0);
                     if inner_parts > 1 {
+                        ctx.is_where_branch_unused
+                            .borrow_mut()
+                            .insert(start as u32, false);
                         continue;
                     }
 
@@ -230,22 +252,61 @@ fn collect_is_where_unused_warnings(
                         None => is_complex_selector_unused(inner_complex, ctx),
                     };
 
-                    if unused {
-                        let start = inner_complex
-                            .get("start")
-                            .and_then(|s| s.as_u64())
-                            .unwrap_or(0) as u32;
-                        let end = inner_complex
-                            .get("end")
-                            .and_then(|e| e.as_u64())
-                            .unwrap_or(0) as u32;
-                        let text = get_complex_selector_text(inner_complex, css_source, css_start);
-                        warnings.push(CssUnusedWarning {
-                            selector_text: text,
-                            start,
-                            end,
-                        });
+                    ctx.is_where_branch_unused
+                        .borrow_mut()
+                        .insert(start as u32, unused);
+                }
+            }
+        }
+    }
+}
+
+/// Report every `:is()` / `:where()` argument branch [`record_is_where_branch_usage`]
+/// found unreachable. Only reached when the enclosing selector is itself used.
+fn collect_is_where_unused_warnings(
+    complex_selector: &Value,
+    css_source: &str,
+    css_start: usize,
+    ctx: &CssContext,
+    warnings: &mut Vec<CssUnusedWarning>,
+) {
+    let Some(rel_selectors) = complex_selector.get("children").and_then(|c| c.as_array()) else {
+        return;
+    };
+
+    for rel in rel_selectors {
+        let Some(selectors) = rel.get("selectors").and_then(|s| s.as_array()) else {
+            continue;
+        };
+
+        for sel in selectors {
+            let sel_type = sel.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let sel_name = sel.get("name").and_then(|n| n.as_str()).unwrap_or("");
+
+            if sel_type == "PseudoClassSelector"
+                && (sel_name == "is" || sel_name == "where")
+                && let Some(args) = sel.get("args")
+                && !args.is_null()
+                && let Some(children) = args.get("children").and_then(|c| c.as_array())
+            {
+                for inner_complex in children {
+                    let start = inner_complex
+                        .get("start")
+                        .and_then(|s| s.as_u64())
+                        .unwrap_or(0) as u32;
+                    if ctx.is_where_branch_unused.borrow().get(&start) != Some(&true) {
+                        continue;
                     }
+                    let end = inner_complex
+                        .get("end")
+                        .and_then(|e| e.as_u64())
+                        .unwrap_or(0) as u32;
+                    let text = get_complex_selector_text(inner_complex, css_source, css_start);
+                    warnings.push(CssUnusedWarning {
+                        selector_text: text,
+                        start,
+                        end,
+                    });
                 }
             }
         }
@@ -283,6 +344,7 @@ fn collect_unused_warnings_from_nodes<'a>(
                         // The NestingSelector (&) in the current selector refers to the
                         // parent rule, not the current rule.
                         for complex_selector in complex_selectors {
+                            record_is_where_branch_usage(complex_selector, ctx);
                             let is_unused = is_complex_selector_unused(complex_selector, ctx);
                             if is_unused {
                                 let start = complex_selector
@@ -446,6 +508,7 @@ fn render_stylesheet_internal(
         has_opaque_sibling_boundaries: analysis.css.has_opaque_elements,
         dom_structure: &analysis.css.dom_structure,
         parent_preludes: std::cell::RefCell::new(Vec::new()),
+        is_where_branch_unused: std::cell::RefCell::new(FxHashMap::default()),
         dev: options.dev,
         minify,
     };
@@ -492,6 +555,8 @@ fn render_stylesheet_internal(
 
         // Collect keyframe names for animation value replacement
         let keyframes = collect_keyframe_names(children);
+
+        record_is_where_branch_usage_in_nodes(children, css_content, css_start, &ctx);
 
         // Transform the CSS
         let mut writer = transform_css(children, &selector, hash, css_content, css_start, &ctx);
@@ -4054,7 +4119,8 @@ fn structural_simple_selector_is_evaluable(sel: &Value) -> bool {
                 _ => true,
             }
         }
-        Some("PseudoElementSelector") => true,
+        // Upstream `continue`s past both, so neither narrows the compound.
+        Some("PseudoElementSelector") | Some("Nth") | Some("Percentage") => true,
         _ => false,
     }
 }
@@ -4119,7 +4185,7 @@ fn structural_element_matches_compound(
                 }),
                 _ => true,
             },
-            Some("PseudoElementSelector") => true,
+            Some("PseudoElementSelector") | Some("Nth") | Some("Percentage") => true,
             _ => false,
         }
     })
@@ -5345,10 +5411,18 @@ fn test_attribute_value(
 }
 
 /// Check if a selector inside :is()/:not()/:has() is definitely unused.
-/// This is more conservative than is_complex_selector_unused - we only
-/// return true if the selector is a simple class/id selector that definitely
-/// doesn't exist in the template.
+///
+/// An `:is()` / `:where()` branch has one recorded answer
+/// ([`record_is_where_branch_usage`]) that the warning shares, so the comment
+/// this drives and the warning cannot disagree. The fallback below — reached by
+/// a `:has()` argument, and by anything the recording walk does not visit — only
+/// returns true for a simple class/id selector that definitely does not exist.
 fn is_is_inner_selector_unused(complex: &Value, ctx: &CssContext) -> bool {
+    if let Some(start) = complex.get("start").and_then(|s| s.as_u64())
+        && let Some(recorded) = ctx.is_where_branch_unused.borrow().get(&(start as u32))
+    {
+        return *recorded;
+    }
     // Get the relative selectors
     if let Some(rel_selectors) = complex.get("children").and_then(|c| c.as_array()) {
         // Only check single relative selectors (simple selectors)
