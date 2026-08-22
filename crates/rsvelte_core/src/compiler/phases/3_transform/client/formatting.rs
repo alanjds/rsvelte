@@ -300,11 +300,11 @@ fn reactive_statement_spans(source: &str) -> Vec<ReactiveSpan> {
         // A `$:` label only starts a reactive statement at the top level of the
         // script, and only where a statement can begin.
         if c == b'$'
-            && bytes.get(i + 1) == Some(&b':')
+            && let Some(label_end) = super::reactive_transforms::reactive_label_end(&source[i..])
             && scan.depth == 0
             && statement_can_begin(&scan, bytes, after_last_code, i)
         {
-            let end = reactive_statement_end(source, &mut scan, i + 2);
+            let end = reactive_statement_end(source, &mut scan, i + label_end);
             let end = extend_over_trailing_comment(source, end);
             spans.push((after_last_code, i, end));
             i = end;

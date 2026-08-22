@@ -13,6 +13,50 @@ use super::{
     transform_store_sub_calls, wrap_state_vars_in_expr,
 };
 
+/// Byte offset just past the `:` of a legacy reactive label at the start of
+/// `text`, or `None` when `text` does not open one.
+///
+/// Upstream matches a `LabeledStatement` whose label is `$`, so whatever
+/// JavaScript allows between the name and its colon — whitespace, including a
+/// line terminator, or a comment — is still part of that label.
+pub(super) fn reactive_label_end(text: &str) -> Option<usize> {
+    use crate::compiler::phases::phase1_parse::{is_js_whitespace, is_js_whitespace_byte};
+
+    let bytes = text.as_bytes();
+    if bytes.first() != Some(&b'$') {
+        return None;
+    }
+    let mut i = 1;
+    loop {
+        match *bytes.get(i)? {
+            b':' => return Some(i + 1),
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += memmem::find(&bytes[i + 2..], b"*/")? + 4;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                // A `//` comment ends at a line terminator, and the colon may
+                // sit on the line after it.
+                let rest = &text[i + 2..];
+                let end = rest.find(['\n', '\r', '\u{2028}', '\u{2029}'])?;
+                i += 2 + end;
+            }
+            b if b.is_ascii() => {
+                if !is_js_whitespace_byte(b) {
+                    return None;
+                }
+                i += 1;
+            }
+            _ => {
+                let c = text[i..].chars().next()?;
+                if !is_js_whitespace(c) {
+                    return None;
+                }
+                i += c.len_utf8();
+            }
+        }
+    }
+}
+
 /// Extract the reactive variables assigned by a raw `$:` statement.
 ///
 /// Dependency names come from Phase 2's typed traversal. Keeping only the
@@ -26,8 +70,8 @@ pub(super) fn extract_reactive_statement_assignments(
     let trimmed = statement.trim();
 
     // Extract the body after `$:`
-    let body = if let Some(stripped) = trimmed.strip_prefix("$:") {
-        stripped.trim()
+    let body = if let Some(end) = reactive_label_end(trimmed) {
+        trimmed[end..].trim()
     } else {
         return vec![];
     };
@@ -295,8 +339,8 @@ pub(super) fn transform_reactive_statement(
 
     // Extract the body after `$:`
     // Handle both `$: body` and `$:\n body` formats
-    let body = if let Some(stripped) = trimmed.strip_prefix("$:") {
-        stripped.trim()
+    let body = if let Some(end) = reactive_label_end(trimmed) {
+        trimmed[end..].trim()
     } else {
         return statement.to_string();
     };

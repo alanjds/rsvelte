@@ -6531,7 +6531,10 @@ fn transform_instance_script_for_visitors(
 
         // Handle $: reactive statements in legacy (non-runes) mode
         // Transform `$: c = a + b;` to `$.legacy_pre_effect(() => (...deps), () => { c(a() + b()); })`
-        if !analysis.runes && first_line_trimmed.starts_with("$:") {
+        // The whole statement, not its first line: the colon may sit on a later
+        // one, and Phase 2 counts the label from the AST either way — a `$:`
+        // missed here also desynchronizes `reactive_ordinal` from that count.
+        if !analysis.runes && reactive_label_end(statement.trim()).is_some() {
             let _reactive_start = super::profile::timer_start();
             let _reactive_guard = super::profile::ReactiveStmtGuard(_reactive_start);
             // AST-derived ordered dependency names for THIS top-level `$:` statement

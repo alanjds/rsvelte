@@ -67,6 +67,9 @@ use crate::ast::Root;
 use crate::error::ParseResult;
 
 pub use parser::{MAX_NESTING_DEPTH, Parser};
+// Phase 3 asks the same whitespace question the parser does; re-exported so
+// there is one port of it rather than a second transcription.
+pub(crate) use parser::{is_js_whitespace, is_js_whitespace_byte};
 
 /// Parse options.
 #[derive(Debug, Clone, Copy, Default)]
