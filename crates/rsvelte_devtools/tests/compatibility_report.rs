@@ -48,7 +48,7 @@ fn min_fixtures(category: &str) -> usize {
         "runtime-browser" => 32,
         "hydration" => 79,
         "server-side-rendering" => 99,
-        "sourcemaps" => 29,
+        "sourcemaps" => 34,
         "print" => 43,
         "preprocess" => 19,
         // Out-of-scope categories are reported as fully skipped.
@@ -1031,14 +1031,22 @@ fn run_runtime_category_tests(category: &str) -> CategoryResult {
         // Most categories name their entry point `main.svelte`; the
         // `sourcemaps` samples use `input.svelte`. Hardcoding `main.svelte`
         // used to drop all 29 sourcemap samples silently (`Sourcemaps 0/0`).
-        let sample_root = svelte_path()
-            .join("packages/svelte/tests")
-            .join(category)
-            .join("samples")
-            .join(&name);
-        let input_path = ["main.svelte", "input.svelte"]
+        // `sourcemaps` fixtures come from two roots: the upstream samples and
+        // `compatibility/sourcemap-css-samples`, which exists because no
+        // upstream sample has a nested CSS rule (see `sourcemaps_gate.rs`).
+        let sample_roots = [
+            svelte_path()
+                .join("packages/svelte/tests")
+                .join(category)
+                .join("samples")
+                .join(&name),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../compatibility/sourcemap-css-samples")
+                .join(&name),
+        ];
+        let input_path = sample_roots
             .iter()
-            .map(|entry| sample_root.join(entry))
+            .flat_map(|root| ["main.svelte", "input.svelte"].iter().map(|e| root.join(e)))
             .find(|path| path.exists());
         let input_path = if let Some(path) = input_path {
             path

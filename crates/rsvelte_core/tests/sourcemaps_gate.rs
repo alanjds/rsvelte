@@ -196,8 +196,14 @@ const ANCHORS: &[(&str, Target, &[Anchor])] = &[
 /// success. An upstream rename, an uninitialised submodule, or a failed fixture
 /// generation would silently do the same here, so every input to the gate
 /// carries a lower bound. Raise these only alongside the measurement.
-const EXPECTED_SAMPLES: usize = 29;
+const EXPECTED_SAMPLES: usize = 34;
 const EXPECTED_ANCHOR_COUNT: usize = 23;
+/// Samples whose CSS output the `css` arm actually compared. Adding the arm was
+/// half the work: of the upstream samples carrying a `<style>` block, none has
+/// a nested rule, so an arm run over upstream alone would be permanently green
+/// on the shape it was added for. The floor is what keeps the local
+/// `compatibility/sourcemap-css-samples` population wired to the comparison.
+const EXPECTED_CSS_UNITS: usize = 18;
 /// `<sample>/<target>` pairs whose generated code is byte-identical to the
 /// official compiler's — the population `map-parity` can observe at all. A drop
 /// means byte-parity regressed and the map check silently shrank with it.
@@ -610,25 +616,36 @@ fn anchor_id(sample: &str, target: Target, index: usize, entry: &Anchor) -> Stri
 // Fixture loading
 // ============================================================================
 
+/// The two directories `scripts/fixtures/generate-fixtures.mjs` compiles into
+/// `fixtures/<sha>/sourcemaps/`. The local one exists because no upstream
+/// sample has a nested CSS rule, so the CSS arm below would be green on every
+/// input it could reach.
+fn sample_roots() -> Vec<PathBuf> {
+    vec![
+        svelte_path().join("packages/svelte/tests/sourcemaps/samples"),
+        compatibility_dir().join("sourcemap-css-samples"),
+    ]
+}
+
 fn sample_names() -> Vec<String> {
-    let dir = svelte_path().join("packages/svelte/tests/sourcemaps/samples");
-    let mut names: Vec<String> = fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().to_str().map(str::to_string))
-        .collect();
+    let mut names: Vec<String> = Vec::new();
+    for dir in sample_roots() {
+        names.extend(
+            fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string)),
+        );
+    }
     names.sort();
     names
 }
 
 fn load_input(sample: &str) -> Option<String> {
-    let path = svelte_path()
-        .join("packages/svelte/tests/sourcemaps/samples")
-        .join(sample)
-        .join("input.svelte");
-    fs::read_to_string(path)
-        .ok()
+    sample_roots()
+        .into_iter()
+        .find_map(|root| fs::read_to_string(root.join(sample).join("input.svelte")).ok())
         .map(|s| s.replace("\r\n", "\n"))
 }
 
@@ -687,14 +704,12 @@ fn fixture_dev(sample: &str) -> bool {
 }
 
 /// The official compiler's output for the same input and options, as recorded
-/// by `scripts/fixtures/generate-fixtures.mjs`. `None` for `Target::Css` — the
-/// fixture generator does not emit CSS output for this category, so CSS anchors
-/// are checked against the official `_config.js` expectation alone.
+/// by `scripts/fixtures/generate-fixtures.mjs`.
 fn official(sample: &str, target: Target) -> Option<Compiled> {
     let (code_file, map_file) = match target {
         Target::Client => ("client.js", "client.js.map"),
         Target::Server => ("server.js", "server.js.map"),
-        Target::Css => return None,
+        Target::Css => ("css.css", "css.css.map"),
     };
     let code = load_fixture_output("sourcemaps", sample, code_file)?;
     let map = load_fixture_output("sourcemaps", sample, map_file);
@@ -727,6 +742,9 @@ struct Report {
     samples_measured: usize,
     /// Anchors evaluated, across every sample and target.
     anchors_measured: usize,
+    /// Samples whose CSS output was compared. Zero would mean the CSS arm ran
+    /// on nothing, which is what it was added to stop.
+    css_units_measured: usize,
     /// Diagnostics printed on failure.
     notes: Vec<String>,
 }
@@ -747,14 +765,22 @@ fn measure() -> Report {
         let _ = fixture_dev(&sample);
         report.samples_measured += 1;
 
-        for target in [Target::Client, Target::Server] {
+        for target in [Target::Client, Target::Server, Target::Css] {
             let key = format!("{sample}/{}", target.as_str());
             let Some(ours) = compile_sample(&input, &sample, target) else {
+                // A sample with no `<style>` has no CSS output on either side;
+                // that is an absent unit, not a failure.
+                if target == Target::Css && official(&sample, target).is_none() {
+                    continue;
+                }
                 report
                     .failures
                     .push(format!("compile\t{sample}\t{}", target.as_str()));
                 continue;
             };
+            if target == Target::Css {
+                report.css_units_measured += 1;
+            }
             let Some(map_json) = ours.map.as_deref() else {
                 report
                     .failures
@@ -1052,6 +1078,12 @@ fn sourcemap_gate() {
         "only {} anchors evaluated, expected at least {EXPECTED_ANCHOR_COUNT} — \
          were entries removed from ANCHORS?",
         report.anchors_measured
+    );
+    assert!(
+        report.css_units_measured >= EXPECTED_CSS_UNITS,
+        "only {} CSS units compared, expected at least {EXPECTED_CSS_UNITS} — \
+         the CSS arm is measuring less than it was",
+        report.css_units_measured
     );
     assert!(
         report.identical_code.len() >= EXPECTED_IDENTICAL_OUTPUTS,

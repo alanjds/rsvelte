@@ -96,6 +96,9 @@ const CATEGORIES = {
   sourcemaps: {
     mainFile: 'input.svelte',
     handler: generateSourcemapsFixture,
+    // No upstream sourcemaps sample has a nested CSS rule, so the gate's CSS
+    // arm can only discriminate against samples kept here.
+    extraSamplesDir: path.join(ROOT, 'compatibility/sourcemap-css-samples'),
   },
 };
 
@@ -747,6 +750,15 @@ async function generateSourcemapsFixture(sampleDir, outputDir, config) {
         JSON.stringify(clientResult.js.map, null, 2)
       );
     }
+    if (clientResult.css) {
+      fs.writeFileSync(path.join(outputDir, 'css.css'), clientResult.css.code);
+      if (clientResult.css.map) {
+        fs.writeFileSync(
+          path.join(outputDir, 'css.css.map'),
+          JSON.stringify(clientResult.css.map, null, 2)
+        );
+      }
+    }
   } catch {
     // Skip on error
   }
@@ -828,19 +840,28 @@ async function generateFixtures(options) {
 
     console.log(`\nProcessing ${categoryId}...`);
 
-    const samples = fs
-      .readdirSync(samplesDir)
-      .filter((name) => {
-        const fullPath = path.join(samplesDir, name);
-        return fs.statSync(fullPath).isDirectory() && !name.startsWith('.');
-      })
-      .filter((name) => !options.sample || name === options.sample)
-      .sort();
+    const roots = [samplesDir];
+    if (category.extraSamplesDir && fs.existsSync(category.extraSamplesDir)) {
+      roots.push(category.extraSamplesDir);
+    }
+
+    const samples = roots
+      .flatMap((root) =>
+        fs
+          .readdirSync(root)
+          .filter((name) => {
+            const fullPath = path.join(root, name);
+            return fs.statSync(fullPath).isDirectory() && !name.startsWith('.');
+          })
+          .map((name) => [root, name])
+      )
+      .filter(([, name]) => !options.sample || name === options.sample)
+      .sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
 
     const categoryStats = { total: 0, success: 0, failed: 0, errors: 0 };
 
-    for (const sampleName of samples) {
-      const sampleDir = path.join(samplesDir, sampleName);
+    for (const [sampleRoot, sampleName] of samples) {
+      const sampleDir = path.join(sampleRoot, sampleName);
       const outputDir = path.join(fixturesDir, categoryId, sampleName);
 
       const config = await loadConfig(sampleDir);

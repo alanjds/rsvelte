@@ -1693,6 +1693,21 @@ impl<'a> CssParser<'a> {
                 self.advance();
                 continue;
             }
+            // A quote inside a comment opens nothing — upstream reads comments
+            // as their own token, so `/* it's */` does not start a string that
+            // swallows the rest of the stylesheet.
+            if c == '/' && self.source[self.index..].starts_with("/*") {
+                self.advance();
+                self.advance();
+                while !self.is_eof() && !self.source[self.index..].starts_with("*/") {
+                    self.advance();
+                }
+                if !self.is_eof() {
+                    self.advance();
+                    self.advance();
+                }
+                continue;
+            }
             if c == '"' || c == '\'' {
                 in_string = Some(c);
                 self.advance();

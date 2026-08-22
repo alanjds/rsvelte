@@ -17,20 +17,25 @@ use common::{
 };
 use rsvelte_core::{CompileOptions, GenerateMode, compile, compiler::CssMode};
 
-/// Grow-only fixture floor, measured against the pinned Svelte submodule: all
-/// 29 sourcemap samples have comparable output. Never lower it.
-const MIN_SOURCEMAP_FIXTURES: usize = 29;
+/// Grow-only fixture floor, measured against the pinned Svelte submodule plus
+/// `compatibility/sourcemap-css-samples`: all 34 sourcemap samples have
+/// comparable output. Never lower it.
+const MIN_SOURCEMAP_FIXTURES: usize = 34;
 
-/// Load input from Svelte test suite. Normalizes CRLF→LF so byte offsets
-/// in the compiled output match LF-authored fixtures on Windows runners.
+/// Load input from the Svelte test suite, or from the local CSS samples that
+/// `scripts/fixtures/generate-fixtures.mjs` compiles into the same fixture
+/// directory. Normalizes CRLF→LF so byte offsets in the compiled output match
+/// LF-authored fixtures on Windows runners.
 fn load_input(sample_name: &str) -> Option<String> {
-    let input_path = svelte_path()
-        .join("packages/svelte/tests/sourcemaps/samples")
-        .join(sample_name)
-        .join("input.svelte");
+    let roots = [
+        svelte_path().join("packages/svelte/tests/sourcemaps/samples"),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../compatibility/sourcemap-css-samples"),
+    ];
 
-    fs::read_to_string(&input_path)
-        .ok()
+    roots
+        .into_iter()
+        .find_map(|root| fs::read_to_string(root.join(sample_name).join("input.svelte")).ok())
         .map(|s| s.replace("\r\n", "\n"))
 }
 
