@@ -524,35 +524,26 @@ pub(crate) fn analyze_prepared_component_with_retained(
     // it's safe to call here.
     analysis.instance_has_legacy_patterns = instance_has_legacy_patterns(ast);
 
-    // Legacy mode: declare a synthetic `$$props` binding in the instance scope so
-    // template/script references to it (`$$props.class`) are recorded in
-    // expression metadata. Mirrors upstream `2-analyze/index.js`:
-    // `instance.scope.declare(b.id('$$props'), 'rest_prop', 'synthetic')`, done in
-    // the non-runes branch before the AST walks. Without it, a legacy reactive
-    // expression reading `$$props.class` omits the
-    // `$.deep_read_state($$sanitized_props)` dependency in `build_expression`.
-    //
-    // (`$$restProps` is intentionally NOT declared here: it is already handled by
-    // the existing rest-props path, and binding it would re-route a plain
-    // `$$restProps.x` read through the `$$sanitized_props` rewrite.)
+    // Upstream declares both in the non-runes branch before the AST walks; without
+    // the binding a reference adds no dependency, so `CallExpression`'s
+    // `!is_pure || has_dependencies` never fires for a pure callee.
     if !analysis.runes {
         use crate::compiler::phases::phase2_analyze::scope::{
             Binding, BindingKind, DeclarationKind,
         };
         let instance_scope = analysis.root.instance_scope_index;
-        if analysis
-            .root
-            .get_binding("$$props", instance_scope)
-            .is_none()
-        {
+        for name in ["$$props", "$$restProps"] {
+            if analysis.root.get_binding(name, instance_scope).is_some() {
+                continue;
+            }
             let idx = analysis.root.push_binding(Binding::with_declaration_kind(
-                "$$props".to_string(),
+                name.to_string(),
                 BindingKind::RestProp,
                 DeclarationKind::Synthetic,
                 instance_scope,
             ));
             if let Some(scope) = analysis.root.all_scopes.get_mut(instance_scope) {
-                scope.declarations.insert("$$props".to_string(), idx);
+                scope.declarations.insert(name.to_string(), idx);
             }
         }
     }
