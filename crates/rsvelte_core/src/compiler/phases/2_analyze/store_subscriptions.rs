@@ -1149,10 +1149,20 @@ fn collect_dollar_identifiers_pass(
                     i += 1;
                 }
 
-                // Collect identifier characters
-                while i < len && is_identifier_char(chars[i]) {
-                    ident.push(chars[i]);
-                    i += 1;
+                // Collect identifier characters. A `\uXXXX` / `\u{…}` escape is
+                // part of the identifier and denotes the character it encodes,
+                // so an escaped rune name reads as the rune and not as the
+                // unknown global its unescaped prefix spells (#3236).
+                while i < len {
+                    if is_identifier_char(chars[i]) {
+                        ident.push(chars[i]);
+                        i += 1;
+                    } else if let Some((decoded, next)) = unicode_escape_at(chars, i) {
+                        ident.push(decoded);
+                        i = next;
+                    } else {
+                        break;
+                    }
                 }
 
                 // Only add if we have more than just $
@@ -1212,6 +1222,30 @@ fn collect_dollar_identifiers_pass(
 /// Check if a character is a valid JavaScript identifier character.
 fn is_identifier_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Decode a `\uXXXX` / `\u{…}` identifier escape at `i`, returning the
+/// character it denotes and the index just past it.
+fn unicode_escape_at(chars: &[char], i: usize) -> Option<(char, usize)> {
+    if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'u') {
+        return None;
+    }
+    let (digits_start, digits_end, next) = if chars.get(i + 2) == Some(&'{') {
+        let close = (i + 3..chars.len()).find(|&j| chars[j] == '}')?;
+        (i + 3, close, close + 1)
+    } else {
+        (i + 2, i + 6, i + 6)
+    };
+    if digits_end > chars.len() || digits_start >= digits_end {
+        return None;
+    }
+    let code: u32 = chars[digits_start..digits_end]
+        .iter()
+        .try_fold(0u32, |acc, c| {
+            c.to_digit(16)
+                .and_then(|d| acc.checked_mul(16)?.checked_add(d))
+        })?;
+    char::from_u32(code).map(|c| (c, next))
 }
 
 /// Whether `class` starts at `i` as a keyword rather than as a property key,

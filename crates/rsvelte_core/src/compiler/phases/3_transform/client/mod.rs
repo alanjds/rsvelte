@@ -93,7 +93,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use crate::compiler::phases::phase3_transform::shared::js_scan::{find_code, skip_opaque};
+use crate::compiler::phases::phase3_transform::shared::js_scan::skip_opaque;
 use compact_str::CompactString;
 use memchr::memmem;
 // rustc_hash is used by submodules via their own imports
@@ -267,6 +267,14 @@ pub fn transform_client_module(
             },
         ));
     }
+
+    // Every rewrite below compares source bytes, so a rune written with a
+    // unicode escape has to be spelled the way the parser reads it first.
+    let normalized = super::shared::rune_sites::normalize_rune_spellings(
+        source,
+        analysis.filename.ends_with(".ts") || analysis.filename.ends_with(".svelte.ts"),
+    );
+    let source = normalized.as_deref().unwrap_or(source);
 
     // Drop the comments upstream's synthesized accessors swallow before any
     // rewrite, so the scan still sees the source's own class bodies.
@@ -2159,6 +2167,13 @@ pub(crate) fn transform_client(
     // Transform class fields first (before rune transforms strip the rune names)
     // Then transform remaining rune calls ($state, $derived, etc.) in module-level script
     if let Some((non_imports, retained_comment_stripped)) = module_script_non_imports {
+        // Same reason as the `.svelte.(js|ts)` entry point: the rewrites below
+        // compare source bytes, so an escaped rune spelling is normalized first.
+        let non_imports = super::shared::rune_sites::normalize_rune_spellings(
+            &non_imports,
+            analysis.is_typescript,
+        )
+        .unwrap_or(non_imports);
         let class_transformed = transform_module_class_fields_client(&non_imports);
         let has_effect_rune =
             class_transformed.contains("$effect") || class_transformed.contains("$inspect");
@@ -4332,6 +4347,13 @@ fn transform_module_script_runes_with_target(
 ) -> String {
     let mut result = script.to_string();
 
+    // Every raw scan below decides where a rune BEGINS from bytes alone, so a
+    // member slot holding the same spelling matched too (#3235). `sites` answers
+    // "is this offset a rune reference" from the parser instead.
+    let mut sites = super::shared::rune_sites::RuneSites::new(
+        analysis.filename.ends_with(".ts") || analysis.filename.ends_with(".svelte.ts"),
+    );
+
     // Strip TypeScript generic parameters from $state<...>() and $derived<...>() calls.
     // These are type-only annotations that have no runtime meaning.
     // e.g., $state<ReturnType<typeof autoUpdate>>() → $state()
@@ -4369,7 +4391,7 @@ fn transform_module_script_runes_with_target(
     // In non-dev mode, remove $inspect.trace(...) statements from module scripts.
     // Mirrors the same logic in rune_transforms.rs for instance scripts.
     if !dev {
-        while let Some(pos) = memmem::find(result.as_bytes(), b"$inspect.trace(") {
+        while let Some(pos) = sites.find(&result, b"$inspect.trace(") {
             let trace_start = pos + b"$inspect.trace(".len();
             if let Some(content_end) = find_matching_paren(&result[trace_start..]) {
                 let mut end = trace_start + content_end + 1;
@@ -4394,7 +4416,7 @@ fn transform_module_script_runes_with_target(
     // return b.empty`. The component-instance path handles this in rune_transforms.rs;
     // module scripts use this dedicated loop.
     if !dev {
-        while let Some(pos) = memmem::find(result.as_bytes(), b"$inspect(") {
+        while let Some(pos) = sites.find(&result, b"$inspect(") {
             let inspect_start = pos + b"$inspect(".len();
             if let Some(content_end) = find_matching_paren(&result[inspect_start..]) {
                 let after_call = &result[inspect_start + content_end + 1..];
@@ -4575,10 +4597,11 @@ fn transform_module_script_runes_with_target(
             result = rewritten;
         }
     }
-    // `find_code`, not `memmem::find`: the AST batch above leaves a `$state(`
-    // that sits in a string / template / regex / comment untouched, and this
-    // fallback would otherwise rewrite that text as if it were a call (#2988).
-    while let Some(pos) = find_code(result.as_bytes(), b"$state(") {
+    // Not `memmem::find`: the AST batch above leaves a `$state(` that sits in a
+    // string / template / regex / comment untouched, and this fallback would
+    // otherwise rewrite that text as if it were a call (#2988) — or rewrite a
+    // member slot spelled like the rune (#3235).
+    while let Some(pos) = sites.find(&result, b"$state(") {
         // Make sure this is not $state.something
         if pos + 7 < result.len() && result.as_bytes()[pos + 6] != b'(' {
             break;
@@ -4703,11 +4726,11 @@ fn transform_module_script_runes_with_target(
     ) {
         result = rewritten;
     }
-    // `find_code`, not `memmem::find`: a `$derived(` inside a string / template
-    // / regex / comment is text. Matching it either rewrote the literal (#2988)
-    // or aborted the loop on its unbalanced parens, leaving the real rune call
+    // Not `memmem::find`: a `$derived(` inside a string / template / regex /
+    // comment is text. Matching it either rewrote the literal (#2988) or
+    // aborted the loop on its unbalanced parens, leaving the real rune call
     // unlowered and the module referencing a global `$derived` (#2987).
-    while let Some(pos) = find_code(result.as_bytes(), b"$derived(") {
+    while let Some(pos) = sites.find(&result, b"$derived(") {
         if result[..pos].ends_with('$') {
             // Already transformed to $.derived() - skip
             break;
@@ -5518,6 +5541,11 @@ fn transform_instance_script_for_visitors(
     if script.is_empty() {
         return String::new();
     }
+    // The byte probes that gate the rune passes below compare source spellings,
+    // so an escaped rune name has to read as the identifier the parser built.
+    let unescaped =
+        super::shared::rune_sites::normalize_rune_spellings(script, analysis.is_typescript);
+    let script = unescaped.as_deref().unwrap_or(script);
     let separated_script =
         separate_same_line_legacy_export_declarations(script, analysis.is_typescript);
     let script = separated_script.as_ref();

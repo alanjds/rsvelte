@@ -8,6 +8,7 @@ pub mod async_body;
 pub mod class_body;
 pub mod js_scan;
 pub mod offsets;
+pub mod rune_sites;
 pub mod template;
 
 pub use template::*;

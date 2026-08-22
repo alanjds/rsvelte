@@ -26,6 +26,7 @@ use super::js_ast::nodes::{JsImportDeclaration, JsImportSpecifier, JsStatement};
 use crate::ast::template::Root;
 use crate::compiler::CompileOptions;
 use crate::compiler::phases::phase2_analyze::ComponentAnalysis;
+use crate::compiler::phases::phase3_transform::shared::rune_sites::RuneSites;
 use memchr::memmem;
 use std::cell::RefCell;
 
@@ -94,9 +95,15 @@ pub fn transform_server_module(
         source: "svelte/internal/server".into(),
     }));
 
+    let is_ts = analysis.filename.ends_with(".ts") || analysis.filename.ends_with(".svelte.ts");
+    // Every rewrite below compares source bytes, so a rune written with a
+    // unicode escape has to be spelled the way the parser reads it first.
+    let normalized = super::shared::rune_sites::normalize_rune_spellings(source, is_ts);
+    let source = normalized.as_deref().unwrap_or(source);
+
     // For server modules, strip $effect and $effect.root blocks from the source
     // before applying transforms, since effects don't run on the server.
-    let source_without_effects = strip_effects_from_source(source);
+    let source_without_effects = strip_effects_from_source(source, is_ts);
 
     // Lower `$state` / `$derived` CLASS fields with the SERVER transform FIRST.
     // The client module transform (below) privatizes a public `$state` field
@@ -201,54 +208,6 @@ pub fn transform_server_module(
 /// one or two passes; the cap only guards against pathological nesting.
 const REWRITE_MAX_ITERS: usize = 16;
 
-/// Collect the byte offset of every occurrence of `needle` in `haystack` that
-/// lies in JS code — skipping string / template literals and `//` / `/*`
-/// comments — in a single left-to-right scan. The lexical-aware analogue of
-/// [`memmem::Finder::find_iter`].
-///
-/// Without this guard a rune-call-shaped substring inside a string or comment
-/// such as `const a = "$effect.root()"` would be matched and rewritten,
-/// corrupting the literal (issue #447, H-029).
-fn code_match_positions(haystack: &str, needle: &[u8]) -> Vec<usize> {
-    let bytes = haystack.as_bytes();
-    let n = bytes.len();
-    let mut out = Vec::new();
-    if needle.is_empty() {
-        return out;
-    }
-    let mut i = 0usize;
-    while i < n {
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => {
-                // Skip the whole string / template (incl. ${} interpolations).
-                i = skip_string_literal(bytes, i);
-                continue;
-            }
-            b'/' if i + 1 < n && bytes[i + 1] == b'/' => {
-                i += 2;
-                while i < n && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            b'/' if i + 1 < n && bytes[i + 1] == b'*' => {
-                i += 2;
-                while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(n);
-                continue;
-            }
-            _ => {}
-        }
-        if i + needle.len() <= n && &bytes[i..i + needle.len()] == needle {
-            out.push(i);
-        }
-        i += 1;
-    }
-    out
-}
-
 /// One collect-and-splice pass over `source` for a paren-call rewrite. For every
 /// match start in `positions` (ascending) not already inside a consumed span,
 /// [`build`] returns `(end, replacement)` — where `end` is the byte offset just
@@ -288,21 +247,22 @@ where
 
 /// Drive [`rewrite_calls_once`] to a fixed point. Positions are recomputed each
 /// pass so an outer call exposed by unwrapping an inner one (e.g.
-/// `$.proxy($.proxy(x))`) is picked up on the next iteration. `lexical` selects
-/// the string/comment-aware [`code_match_positions`] scanner (rune-level source)
-/// versus the raw [`memmem::Finder`] (already-transformed `$.` runtime calls).
-fn rewrite_calls<F>(source: &str, needle: &[u8], lexical: bool, build: F) -> String
+/// `$.proxy($.proxy(x))`) is picked up on the next iteration. `sites` selects
+/// the rune-aware scanner (rune-level source), which skips both opaque runs and
+/// the slots where a rune spelling is a name rather than a reference, versus the
+/// raw [`memmem::Finder`] (already-transformed `$.` runtime calls).
+fn rewrite_calls<F>(source: &str, needle: &[u8], sites: Option<&mut RuneSites>, build: F) -> String
 where
     F: Fn(&str, usize) -> Option<(usize, String)>,
 {
+    let mut sites = sites;
     let mut current = source.to_string();
     for _ in 0..REWRITE_MAX_ITERS {
-        let positions = if lexical {
-            code_match_positions(&current, needle)
-        } else {
-            memmem::Finder::new(needle)
+        let positions = match sites.as_deref_mut() {
+            Some(sites) => sites.positions(&current, needle),
+            None => memmem::Finder::new(needle)
                 .find_iter(current.as_bytes())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         };
         if positions.is_empty() {
             break;
@@ -316,8 +276,8 @@ where
 }
 
 /// Byte ranges of the `//` / `/* */` comments in `source[start..end]` that lie in
-/// JS code — the lexical counterpart of [`code_match_positions`], which skips the
-/// same string / template literals.
+/// JS code — the counterpart of the rune-aware scan, which skips the same
+/// string / template literals.
 fn comment_ranges_in(source: &str, start: usize, end: usize) -> Vec<(usize, usize)> {
     let bytes = source.as_bytes();
     let n = end.min(bytes.len());
@@ -395,10 +355,12 @@ fn kept_comments_of_removed_range(source: &str, start: usize, end: usize) -> Str
 /// - `$effect(() => { ... })` -> removed entirely (statement-level only)
 /// - `$effect.pre(() => { ... })` -> removed entirely (statement-level only)
 ///
-/// Matching is JS-lexical-aware via [`code_match_positions`], so effect-call-shaped
+/// Matching goes through [`RuneSites`], so effect-call-shaped
 /// text inside string literals or comments is left untouched (issue #447, H-029).
-fn strip_effects_from_source(source: &str) -> String {
+fn strip_effects_from_source(source: &str, is_ts: bool) -> String {
     use super::client::find_matching_paren;
+
+    let mut sites = RuneSites::new(is_ts);
 
     // Consume the trailing whitespace + optional `;` after a removed statement so
     // no stray fragment remains.
@@ -422,7 +384,7 @@ fn strip_effects_from_source(source: &str) -> String {
     // `$effect.root(...)` has two upstream lowerings:
     //   - statement position  → removed entirely (ExpressionStatement.js → b.empty)
     //   - expression position  → `() => {}` no-op cleanup fn (CallExpression.js)
-    let result = rewrite_calls(source, b"$effect.root(", true, |s, pos| {
+    let result = rewrite_calls(source, b"$effect.root(", Some(&mut sites), |s, pos| {
         let call_start = pos + 13; // after "$effect.root("
         let content_end = find_matching_paren(&s[call_start..])?;
         let expr_end = call_start + content_end + 1; // after closing paren
@@ -438,7 +400,7 @@ fn strip_effects_from_source(source: &str) -> String {
     });
 
     // Strip $effect.pre(() => { ... }) blocks
-    let result = rewrite_calls(&result, b"$effect.pre(", true, |s, pos| {
+    let result = rewrite_calls(&result, b"$effect.pre(", Some(&mut sites), |s, pos| {
         let call_start = pos + 12;
         let content_end = find_matching_paren(&s[call_start..])?;
         let expr_end = call_start + content_end + 1;
@@ -448,7 +410,7 @@ fn strip_effects_from_source(source: &str) -> String {
     // Strip $effect(() => { ... }) blocks ($effect.root/$effect.pre are already
     // handled; the `(` in the needle can never precede a `.`, so those forms
     // never match here).
-    rewrite_calls(&result, b"$effect(", true, |s, pos| {
+    rewrite_calls(&result, b"$effect(", Some(&mut sites), |s, pos| {
         let call_start = pos + 8; // after "$effect("
         let content_end = find_matching_paren(&s[call_start..])?;
         let expr_end = call_start + content_end + 1;
@@ -590,14 +552,14 @@ fn post_process_for_server(source: &str) -> String {
     let derived_private_fields = collect_derived_private_fields(&result);
 
     // Replace $.effect_root(...) with () => {} (no-op cleanup)
-    let mut result = rewrite_calls(&result, b"$.effect_root(", false, |s, pos| {
+    let mut result = rewrite_calls(&result, b"$.effect_root(", None, |s, pos| {
         let call_start = pos + 14;
         let content_end = find_matching_paren(&s[call_start..])?;
         Some((call_start + content_end + 1, "() => {}".to_string()))
     });
 
     // Remove $.user_effect(...) calls
-    result = rewrite_calls(&result, b"$.user_effect(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.user_effect(", None, |s, pos| {
         let call_start = pos + 14;
         let content_end = find_matching_paren(&s[call_start..])?;
         let expr_end = call_start + content_end + 1;
@@ -613,7 +575,7 @@ fn post_process_for_server(source: &str) -> String {
     });
 
     // Replace $.proxy(x) with just x (no proxying on server)
-    result = rewrite_calls(&result, b"$.proxy(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.proxy(", None, |s, pos| {
         let call_start = pos + 8;
         let content_end = find_matching_paren(&s[call_start..])?;
         let content = s[call_start..call_start + content_end].to_string();
@@ -624,7 +586,7 @@ fn post_process_for_server(source: &str) -> String {
     // - Simple identifiers naming a derived: $.get(x) -> x() (callable signal)
     // - Simple identifiers naming state:     $.get(x) -> x
     // - Member expressions (this.#x):        $.get(this.#x) -> this.#x() (callable in class)
-    result = rewrite_calls(&result, b"$.get(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.get(", None, |s, pos| {
         let call_start = pos + 6;
         let content_end = find_matching_paren(&s[call_start..])?;
         let content = s[call_start..call_start + content_end].trim().to_string();
@@ -653,7 +615,7 @@ fn post_process_for_server(source: &str) -> String {
     // Replace $.set(x, v[, flag]) for server modules:
     // - Simple identifiers: $.set(x, v) -> x = v
     // - Member expressions: $.set(this.#x, v) -> this.#x(v)
-    result = rewrite_calls(&result, b"$.set(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.set(", None, |s, pos| {
         let call_start = pos + 6;
         let content_end = find_matching_paren(&s[call_start..])?;
         let content = s[call_start..call_start + content_end].to_string();
@@ -703,7 +665,7 @@ fn post_process_for_server(source: &str) -> String {
     // A second argument (`$.update_pre(x, -1)`) is the decrement form (`--x`); any
     // other delta `d` maps to `x += d` (H-031 — previously the raw `x, -1` content
     // was prefixed with `++`, producing invalid `++x, -1`).
-    result = rewrite_calls(&result, b"$.update_pre(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.update_pre(", None, |s, pos| {
         let call_start = pos + 13;
         let content_end = find_matching_paren(&s[call_start..])?;
         let content = s[call_start..call_start + content_end].trim();
@@ -714,7 +676,7 @@ fn post_process_for_server(source: &str) -> String {
     });
 
     // Replace $.update(x) with x++ for server modules (and $.update(x, -1) with x--).
-    result = rewrite_calls(&result, b"$.update(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.update(", None, |s, pos| {
         let call_start = pos + 9;
         let content_end = find_matching_paren(&s[call_start..])?;
         let content = s[call_start..call_start + content_end].trim();
@@ -734,7 +696,7 @@ fn post_process_for_server(source: &str) -> String {
     // stays `false` even after the form is filled in.
 
     // Replace $.state(x) with just x (no signals on server)
-    result = rewrite_calls(&result, b"$.state(", false, |s, pos| {
+    result = rewrite_calls(&result, b"$.state(", None, |s, pos| {
         let call_start = pos + 8;
         let content_end = find_matching_paren(&s[call_start..])?;
         let content = s[call_start..call_start + content_end].to_string();

@@ -3443,8 +3443,14 @@ fn expression_check_features(
 /// them, its say entirely. `await` only earns one once `$` can be false: with
 /// rune detection off, the walk's sole surviving output is `has_await`, which an
 /// `await`-free source already settles.
+///
+/// A rune name written with a unicode escape for its `$` carries no `$` byte
+/// at all, so the `$` probe alone closes the gate on a real rune (#3236);
+/// `\u` is the only spelling of such an escape and is rarer than a bare `\`.
 fn feature_walk_can_find_anything(source: &str, needs_rune_detection: bool) -> bool {
-    (needs_rune_detection && memchr::memchr(b'$', source.as_bytes()).is_some())
+    (needs_rune_detection
+        && (memchr::memchr(b'$', source.as_bytes()).is_some()
+            || memchr::memmem::find(source.as_bytes(), br"\u").is_some()))
         || memchr::memmem::find(source.as_bytes(), b"await").is_some()
 }
 

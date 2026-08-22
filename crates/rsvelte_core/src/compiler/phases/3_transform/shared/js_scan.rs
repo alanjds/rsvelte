@@ -266,17 +266,29 @@ fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
 }
 
+/// Is a token beginning after `prev` — the last significant code byte — barred
+/// from being a fresh identifier? A member property (`o.$state`, `o?.$state`),
+/// a private name (`#$state`) or the tail of a longer identifier (`a$state`).
+pub(crate) fn blocked_by_previous_token(prev: Option<u8>) -> bool {
+    matches!(prev, Some(b'.' | b'#')) || matches!(prev, Some(c) if is_ident_byte(c))
+}
+
 /// The first occurrence of `needle` in `bytes` that is code — outside every
 /// string, template literal, regex literal and comment.
 ///
 /// `needle` must contain no byte that can open an opaque run (`'`, `"`,
 /// `` ` ``, `/`), so testing its first byte settles the whole match.
-pub(crate) fn find_code(bytes: &[u8], needle: &[u8]) -> Option<usize> {
+/// It must also BEGIN an identifier token: the rune lowerings hunt for
+/// `$state(` / `$derived(` / `$effect(` in raw text, and a name in a member
+/// slot is spelled the same as the rune while never being one — upstream
+/// resolves the callee through the scope, where `o.$derived` is a property and
+/// not a reference at all (#3235).
+pub(crate) fn find_code_ident(bytes: &[u8], needle: &[u8]) -> Option<usize> {
     debug_assert!(
         !needle
             .iter()
             .any(|b| matches!(b, b'\'' | b'"' | b'`' | b'/')),
-        "find_code needs a needle that cannot open an opaque run"
+        "find_code_ident needs a needle that cannot open an opaque run"
     );
     let mut candidates = memchr::memmem::find_iter(bytes, needle);
     let mut candidate = candidates.next()?;
@@ -294,7 +306,10 @@ pub(crate) fn find_code(bytes: &[u8], needle: &[u8]) -> Option<usize> {
             continue;
         }
         if i == candidate {
-            return Some(candidate);
+            if !blocked_by_previous_token(prev) {
+                return Some(candidate);
+            }
+            candidate = candidates.next()?;
         }
         if !bytes[i].is_ascii_whitespace() {
             prev = Some(bytes[i]);
@@ -307,7 +322,8 @@ pub(crate) fn find_code(bytes: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        KEYWORDS_BEFORE_REGEX, contains_identifier, find_code, skip_opaque, slash_starts_regex_at,
+        KEYWORDS_BEFORE_REGEX, contains_identifier, find_code_ident, skip_opaque,
+        slash_starts_regex_at,
     };
 
     /// Decide the LAST `/` in `src`, with `prev` tracked exactly as `code_bytes`
@@ -441,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn find_code_skips_every_opaque_carrier() {
+    fn find_code_ident_skips_every_opaque_carrier() {
         for carrier in [
             "// $derived(",
             "/* $derived( */",
@@ -450,7 +466,7 @@ mod tests {
             "const c = /$derived(x)/;",
         ] {
             let src = format!("{carrier}\nlet x = $derived(1);\n");
-            let at = find_code(src.as_bytes(), b"$derived(").expect("the real call");
+            let at = find_code_ident(src.as_bytes(), b"$derived(").expect("the real call");
             assert_eq!(
                 &src[at..at + 9],
                 "$derived(",
@@ -461,14 +477,14 @@ mod tests {
     }
 
     #[test]
-    fn find_code_reports_none_when_every_occurrence_is_text() {
-        assert!(find_code(b"const c = '$state(';\n", b"$state(").is_none());
+    fn find_code_ident_reports_none_when_every_occurrence_is_text() {
+        assert!(find_code_ident(b"const c = '$state(';\n", b"$state(").is_none());
     }
 
     #[test]
-    fn find_code_is_not_fooled_by_a_division_before_the_call() {
+    fn find_code_ident_is_not_fooled_by_a_division_before_the_call() {
         let src = "const r = a / b;\nlet x = $state(r);\n";
-        let at = find_code(src.as_bytes(), b"$state(").expect("the real call");
+        let at = find_code_ident(src.as_bytes(), b"$state(").expect("the real call");
         assert_eq!(&src[at..at + 7], "$state(");
     }
 }
