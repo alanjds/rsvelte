@@ -48,7 +48,6 @@ struct Chunk {
     position_only: bool,
     expression_anchor: bool,
     component_tail: bool,
-    component_tail_nested: bool,
 }
 
 /// The per-compile registry of comment regions.
@@ -93,7 +92,6 @@ impl ChunkRegistry {
             position_only: false,
             expression_anchor,
             component_tail: false,
-            component_tail_nested: false,
         });
         super::comment_stats::bump::REGISTERED_CHUNKS(1);
         super::comment_stats::bump::REGISTERED_COMMENTS(comments.len() as u64);
@@ -116,37 +114,17 @@ impl ChunkRegistry {
             position_only: true,
             expression_anchor: false,
             component_tail: false,
-            component_tail_nested: false,
         });
         Some(prov_base)
-    }
-
-    /// A position anchor whose node is a template expression, not a statement.
-    /// The layout keeps a chunk only when a statement reached it or it is
-    /// flagged here, so an expression anchor without the flag is dropped.
-    pub fn register_expression_position(&mut self, text: &str) -> Option<u32> {
-        let base = self.register_position(text)?;
-        self.chunks.last_mut()?.expression_anchor = true;
-        Some(base)
     }
 
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()
     }
 
-    /// `nested` when the component body is the `$$renderer.component(($$renderer)
-    /// => { … })` callback rather than the exported function itself, which is
-    /// where the replayed comments have to land.
-    pub fn register_component_tail(
-        &mut self,
-        text: &str,
-        comments: &[Comment],
-        nested: bool,
-    ) -> Option<u32> {
+    pub fn register_component_tail(&mut self, text: &str, comments: &[Comment]) -> Option<u32> {
         let base = self.register_inner(text, comments, true)?;
-        let chunk = self.chunks.last_mut()?;
-        chunk.component_tail = true;
-        chunk.component_tail_nested = nested;
+        self.chunks.last_mut()?.component_tail = true;
         Some(base)
     }
 }
@@ -412,17 +390,10 @@ pub fn print_with_comments<'a>(
         .code
     };
     for chunk in registry.chunks.iter().filter(|chunk| chunk.component_tail) {
-        // The last line closing the component body — `\t});` for the
-        // `$$renderer.component` callback, `}` for the exported function itself.
-        let (close, indent) = if chunk.component_tail_nested {
-            ("\n\t}", "\n\t\t")
-        } else {
-            ("\n}", "\n\t")
-        };
         for comment in &chunk.comments {
             let raw = &chunk.text[comment.span.start as usize..comment.span.end as usize];
-            if let Some(at) = code.rfind(close) {
-                code.insert_str(at, &format!("{indent}{raw}"));
+            if let Some(at) = code.rfind("\n}") {
+                code.insert_str(at, &format!("\n\t{raw}"));
             }
         }
     }
