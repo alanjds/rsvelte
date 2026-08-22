@@ -2238,8 +2238,8 @@ fn attr_expr_value<'a>(
         return super::shared::save_wrap_expr_text(state, &text);
     }
     let mut visited = state.visit_expr(expr);
-    if let Some(start) = expr.start() {
-        state.place_template_expression_comments(region, start, &mut visited);
+    if let (Some(start), Some(end)) = (expr.start(), expr.end()) {
+        state.place_template_expression_comments(region, (start, end), &mut visited);
     }
     visited
 }

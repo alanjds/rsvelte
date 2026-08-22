@@ -706,8 +706,12 @@ fn flush_sequence<'a>(sequence: &[SeqNode<'_>], state: &mut ServerTransformState
                         .any(|f| f.contains(src.trim()))
                 {
                     let mut visited = state.visit_expr(expr);
-                    if let Some(start) = expr.start() {
-                        state.place_template_expression_comments(*region, start, &mut visited);
+                    if let (Some(start), Some(end)) = (expr.start(), expr.end()) {
+                        state.place_template_expression_comments(
+                            *region,
+                            (start, end),
+                            &mut visited,
+                        );
                     }
                     let escaped = state.b.call("$.escape", vec![visited]);
                     exprs.push(escaped);
@@ -759,8 +763,8 @@ fn flush_sequence<'a>(sequence: &[SeqNode<'_>], state: &mut ServerTransformState
 
                 let mut visited = state.visit_expr(expr);
                 state.claim_deferred_reactive_comment(&mut visited);
-                if let Some(start) = expr.start() {
-                    state.place_template_expression_comments(*region, start, &mut visited);
+                if let (Some(start), Some(end)) = (expr.start(), expr.end()) {
+                    state.place_template_expression_comments(*region, (start, end), &mut visited);
                 }
                 let escaped = state.b.call("$.escape", vec![visited]);
                 exprs.push(escaped);

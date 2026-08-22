@@ -232,6 +232,10 @@ pub struct ServerTransformState<'a> {
     /// fold). Upstream keeps ONE esrap cursor over the file, so they flush at
     /// the next located node instead of disappearing with the expression.
     pub pending_template_comments: Option<PendingTemplateComments>,
+    /// Upstream's `component_block.loc = instance.loc` is what lets a template
+    /// comment reach the printer at all; without a `<script>` there is no `loc`
+    /// to copy and esrap's `reset_comment_index` discards the whole list.
+    pub has_instance_script: bool,
     /// Set when [`Self::reparse_program`] rejected text this compiler generated.
     /// The instance body cannot be reconstructed after that, so assembly aborts
     /// instead of shipping a component whose `<script>` silently did nothing.
@@ -342,6 +346,7 @@ impl<'a> ServerTransformState<'a> {
             comments: comments::ChunkRegistry::default(),
             pending_reactive_comments: Vec::new(),
             pending_template_comments: None,
+            has_instance_script: false,
             reparse_failure: std::cell::RefCell::new(None),
         }
     }
@@ -416,6 +421,9 @@ impl<'a> ServerTransformState<'a> {
     /// The transform dropped this template expression, so whatever it carried
     /// waits for the next located node the printer reaches.
     pub fn defer_template_expression_comments(&mut self, region: (u32, u32)) {
+        if !self.has_instance_script {
+            return;
+        }
         let Some(comments) = self.template_region_comments(region.0, region.1) else {
             return;
         };
@@ -437,9 +445,13 @@ impl<'a> ServerTransformState<'a> {
     pub fn place_template_expression_comments(
         &mut self,
         region: (u32, u32),
-        expr_start: u32,
+        expr_span: (u32, u32),
         expr: &mut OxcExpression<'a>,
     ) {
+        if !self.has_instance_script {
+            return;
+        }
+        let (expr_start, expr_end) = expr_span;
         let own = self.template_region_comments(region.0, region.1);
         let pending = self.pending_template_comments.take();
         if own.is_none() && pending.is_none() {
@@ -448,14 +460,21 @@ impl<'a> ServerTransformState<'a> {
         // The buffer is a verbatim source slice, so the line/column distances
         // esrap measures between a comment and its anchor are the source's.
         let start = pending.as_ref().map_or(region.0, |p| p.start);
-        let end = region.1.max(expr_start);
+        let end = region.1.max(expr_end);
         let (s, e) = (start as usize, end as usize);
         if e <= s || e > self.source.len() || expr_start < start {
             return;
         }
         let mut comments: Vec<Comment> = pending.map(|p| p.comments).unwrap_or_default();
         comments.extend(own.into_iter().flatten());
-        comments.retain(|comment| comment.span.start >= start && comment.span.end <= end);
+        // The whole expression is stamped at ONE address, so only a comment
+        // outside it lands where upstream puts it; an interior one would be
+        // pushed past the node it was written inside.
+        comments.retain(|comment| {
+            comment.span.start >= start
+                && comment.span.end <= end
+                && (comment.span.end <= expr_start || comment.span.start >= expr_end)
+        });
         if comments.is_empty() {
             return;
         }
@@ -477,10 +496,10 @@ impl<'a> ServerTransformState<'a> {
         tag: &crate::ast::template::ExpressionTag,
     ) -> OxcExpression<'a> {
         let mut visited = self.visit_expr(&tag.expression);
-        if let Some(start) = tag.expression.start() {
+        if let (Some(start), Some(end)) = (tag.expression.start(), tag.expression.end()) {
             self.place_template_expression_comments(
                 (tag.start + 1, tag.end - 1),
-                start,
+                (start, end),
                 &mut visited,
             );
         }
@@ -1236,6 +1255,7 @@ pub fn server_component_ast<'a>(
     allocator: &'a Allocator,
 ) -> Result<String, String> {
     let mut state = ServerTransformState::new(analysis, options, source, &ast.arena, allocator);
+    state.has_instance_script = ast.instance.is_some();
 
     // Precompute the SSR constant-folding inputs (`constant_vars` /
     // `use_async` / `top_level_blocker_map`) via the standalone

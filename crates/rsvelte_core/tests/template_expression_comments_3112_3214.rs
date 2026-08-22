@@ -97,6 +97,33 @@ fn a_folded_expression_with_no_successor_drops_its_comment() {
     assert!(!out.contains("/* c */"), "expected no comment:\n{out}");
 }
 
+/// Upstream copies the instance script's `loc` onto the component block to get
+/// comments printed at all, so a component with no `<script>` has none to copy
+/// and the whole list dies. A `<script module>` is not the one it copies.
+#[test]
+fn a_component_with_no_instance_script_drops_the_comment() {
+    for src in [
+        "<div title={/* c */ s}>x</div>\n",
+        "<p>{q /* c */}</p>\n",
+        "<script module>\n\tlet z = 1;\n</script>\n\n<p>{q /* c */}</p>\n",
+    ] {
+        let out = server(src);
+        assert!(!out.contains("/* c */"), "{src}\n{out}");
+    }
+}
+
+/// The expression is stamped at ONE address, so a comment written *inside* it
+/// cannot be placed where upstream puts it. It is dropped rather than pushed
+/// past the node it was written in — the pre-existing behaviour, recorded here
+/// as the boundary of the fix.
+#[test]
+fn an_interior_comment_is_still_dropped() {
+    let out = server(&format!("{SCRIPT}\n<p>{{f(n) /* c */ + 1}}</p>\n"));
+    assert!(out.contains("$.escape(f(n) + 1)"), "{out}");
+    let out = server(&format!("{SCRIPT}\n<p>{{f(/* c */ n)}}</p>\n"));
+    assert!(out.contains("$.escape(f(n))"), "{out}");
+}
+
 /// A statement that owns no comment still has to hold its position, or the
 /// location-less body of `const h = () => {}` kills the cursor before the
 /// template is printed.
