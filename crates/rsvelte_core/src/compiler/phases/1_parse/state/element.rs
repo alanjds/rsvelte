@@ -685,17 +685,8 @@ impl<'a> Parser<'a> {
                 // Extract the "this" attribute to get the expression
                 let expression = self.extract_this_attribute(&attributes);
 
-                // Filter out the "this" attribute from the list
-                let filtered_attrs: Vec<_> = attributes
-                    .into_iter()
-                    .filter(|attr| {
-                        if let crate::ast::Attribute::Attribute(node) = attr {
-                            node.name.as_str() != "this"
-                        } else {
-                            true
-                        }
-                    })
-                    .collect();
+                let mut filtered_attrs = attributes;
+                Self::remove_first_this_attribute(&mut filtered_attrs);
 
                 TemplateNode::SvelteComponent(Box::new(SvelteComponentElement {
                     start: start as u32,
@@ -739,43 +730,32 @@ impl<'a> Parser<'a> {
                 // Check if the "this" attribute is a string value (not an expression)
                 // and emit svelte_element_invalid_this warning if so.
                 // Corresponds to element.js L288-289: if (!is_expression_attribute(definition)) { w.svelte_element_invalid_this(definition); }
-                for attr in &attributes {
-                    if let crate::ast::Attribute::Attribute(node) = attr
-                        && node.name.as_str() == "this"
-                    {
-                        let is_expression_attribute = match &node.value {
-                            AttributeValue::Expression(_) => true,
-                            AttributeValue::Sequence(parts) => {
-                                parts.len() == 1
-                                    && matches!(&parts[0], AttributeValuePart::ExpressionTag(_))
-                            }
-                            _ => false,
-                        };
-                        if !is_expression_attribute {
-                            self.parse_warnings.push(crate::ast::template::ParseWarning {
-                                code: "svelte_element_invalid_this".to_string(),
-                                message: "`this` should be an `{expression}`. Using a string attribute value will cause an error in future versions of Svelte\nhttps://svelte.dev/e/svelte_element_invalid_this".to_string(),
-                                start: node.start,
-                                end: node.end,
-                            });
+                // Only the definition — the one `splice` removes — is checked; a
+                // second `this` is an ordinary attribute from here on.
+                if let Some(node) = definition {
+                    let is_expression_attribute = match &node.value {
+                        AttributeValue::Expression(_) => true,
+                        AttributeValue::Sequence(parts) => {
+                            parts.len() == 1
+                                && matches!(&parts[0], AttributeValuePart::ExpressionTag(_))
                         }
+                        _ => false,
+                    };
+                    if !is_expression_attribute {
+                        self.parse_warnings.push(crate::ast::template::ParseWarning {
+                            code: "svelte_element_invalid_this".to_string(),
+                            message: "`this` should be an `{expression}`. Using a string attribute value will cause an error in future versions of Svelte\nhttps://svelte.dev/e/svelte_element_invalid_this".to_string(),
+                            start: node.start,
+                            end: node.end,
+                        });
                     }
                 }
 
                 // Extract the "this" attribute to get the tag expression
                 let tag = self.extract_this_attribute(&attributes);
 
-                // Filter out the "this" attribute from the list
-                let filtered_attrs: Vec<_> = attributes
-                    .into_iter()
-                    .filter(|attr| {
-                        if let crate::ast::Attribute::Attribute(node) = attr {
-                            node.name.as_str() != "this"
-                        } else {
-                            true
-                        }
-                    })
-                    .collect();
+                let mut filtered_attrs = attributes;
+                Self::remove_first_this_attribute(&mut filtered_attrs);
 
                 TemplateNode::SvelteElement(Box::new(SvelteDynamicElement {
                     start: start as u32,
@@ -800,6 +780,17 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Some(node))
+    }
+
+    /// Drop the attribute `<svelte:element>` / `<svelte:component>` consumes as
+    /// its tag. Upstream `splice`s exactly one, so a second `this=` stays in the
+    /// list and is rendered as an ordinary attribute (or passed as a prop).
+    fn remove_first_this_attribute(attributes: &mut Vec<crate::ast::Attribute<'a>>) {
+        if let Some(index) = attributes.iter().position(|attr| {
+            matches!(attr, crate::ast::Attribute::Attribute(node) if node.name.as_str() == "this")
+        }) {
+            attributes.remove(index);
+        }
     }
 
     /// Extract the "this" attribute from a svelte:element to get the tag expression.
