@@ -162,8 +162,8 @@ pub(crate) fn find_class_header(source: &str) -> Option<ClassHeader> {
             && (i != prev_end || !js_scan::is_ident_byte(byte))
         {
             run_start = None;
-            let is_class_word = &bytes[start..prev_end] == b"class"
-                && !matches!(run_prev, Some(b'.') | Some(b'#'));
+            let is_class_word =
+                &bytes[start..prev_end] == b"class" && !matches!(run_prev, Some(b'.') | Some(b'#'));
             if keyword.is_none() && is_class_word {
                 keyword = Some(start);
                 seen_after_keyword = false;
@@ -617,7 +617,10 @@ mod tests {
     #[test]
     fn inline_heritage_class_body_is_not_the_class_body() {
         for (source, header) in [
-            ("class Sub extends class {} {}", "class Sub extends class {} {"),
+            (
+                "class Sub extends class {} {}",
+                "class Sub extends class {} {",
+            ),
             (
                 "class Sub extends class { a = 1; } { b = 2; }",
                 "class Sub extends class { a = 1; } {",
@@ -631,7 +634,10 @@ mod tests {
                 "class Sub extends class extends class {} {} {",
             ),
             // Already-parenthesised and call-wrapped heritage stay bracketed.
-            ("class Sub extends (class {}) {}", "class Sub extends (class {}) {"),
+            (
+                "class Sub extends (class {}) {}",
+                "class Sub extends (class {}) {",
+            ),
             (
                 "class Sub extends mixin(class {}) {}",
                 "class Sub extends mixin(class {}) {",
