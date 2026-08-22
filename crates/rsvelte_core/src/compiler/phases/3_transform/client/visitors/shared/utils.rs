@@ -5270,10 +5270,19 @@ fn identifier_has_reactive_state(
         // outer binding instead of the `{@const}`.
         let resolved = by_position.or_else(|| context.state.get_binding(name));
 
-        // Check if this is a Derived binding - if so, skip the early return
-        // and fall through to the detailed binding kind check below.
-        let is_derived = resolved.is_some_and(|b| matches!(b.kind, BindingKind::Derived));
-        if !is_derived {
+        // Whether a `$state` / `$derived` read is reactive is upstream's
+        // `scope.evaluate(node).is_known`, which never consults how the
+        // declaration was lowered; a transform is registered whenever
+        // `is_state_source` holds, and that is true for every `$state` under
+        // `customElement` (which forces `accessors`). Fall through to the
+        // binding-kind check for those kinds instead of reading the transform.
+        let evaluated_kind = resolved.is_some_and(|b| {
+            matches!(
+                b.kind,
+                BindingKind::Derived | BindingKind::State | BindingKind::RawState
+            )
+        });
+        if !evaluated_kind {
             // For Template bindings (@const), check if the initial value is known
             // instead of blindly using transform.is_reactive.
             // This matches the official Svelte compiler's scope.evaluate() behavior.
@@ -5377,24 +5386,18 @@ fn identifier_has_reactive_state(
             return true;
         }
 
-        // For State/RawState bindings in runes mode (immutable=true) with no initial
-        // value AT ALL (i.e., `$state()` called with no args):
-        // - is_state_source = false (not reassigned)
-        // - initial_node_type = None (no arg expression → compiles to `void 0`)
-        // - The binding effectively compiles to `undefined`, which is a known constant.
-        // → treat as non-reactive (is_known = true).
-        //
-        // IMPORTANT: Only apply when initial_node_type is None (no argument),
-        // NOT when initial_is_defined is false. The latter can be false for
-        // `$state(member.expr)` where the arg might evaluate to undefined at
-        // runtime, but the binding is still reactive via $.proxy() wrapping.
+        // A `$state()` called with no argument compiles to `void 0`, which
+        // upstream's `scope.evaluate` reports as a known value — so a read of it
+        // is not reactive state as long as the binding is never updated. Only
+        // `initial_node_type == None` (no argument at all) qualifies, NOT
+        // `initial_is_defined == false`, which is also false for
+        // `$state(member.expr)`.
         if matches!(binding.kind, BindingKind::State | BindingKind::RawState)
             && binding.initial_node_type.is_none()
+            && !binding.reassigned
+            && !binding.mutated
         {
-            use crate::compiler::phases::phase3_transform::client::utils::is_state_source;
-            if !is_state_source(binding, context.state.analysis) {
-                return false;
-            }
+            return false;
         }
 
         // For State, RawState, Derived, and Normal bindings:
@@ -6722,6 +6725,95 @@ fn is_initial_value_literal_or_known(initial: &Option<String>) -> bool {
     false
 }
 
+/// The entries of upstream `scope.js`'s `globals` table that carry a fold
+/// function, so a call over known arguments evaluates to a known value.
+/// `BigInt` and `Math.random` are deliberately absent: they only contribute a
+/// type marker, which is a symbol and so never `is_known`.
+const GLOBAL_PURE_FNS: &[&str] = &[
+    "Math.min",
+    "Math.max",
+    "Math.floor",
+    "Math.f16round",
+    "Math.round",
+    "Math.abs",
+    "Math.acos",
+    "Math.asin",
+    "Math.atan",
+    "Math.atan2",
+    "Math.ceil",
+    "Math.cos",
+    "Math.sin",
+    "Math.tan",
+    "Math.exp",
+    "Math.log",
+    "Math.pow",
+    "Math.sqrt",
+    "Math.clz32",
+    "Math.imul",
+    "Math.sign",
+    "Math.log10",
+    "Math.log2",
+    "Math.log1p",
+    "Math.expm1",
+    "Math.cosh",
+    "Math.sinh",
+    "Math.tanh",
+    "Math.acosh",
+    "Math.asinh",
+    "Math.atanh",
+    "Math.trunc",
+    "Math.fround",
+    "Math.cbrt",
+    "Number",
+    "Number.isInteger",
+    "Number.isFinite",
+    "Number.isNaN",
+    "Number.isSafeInteger",
+    "Number.parseFloat",
+    "Number.parseInt",
+    "String",
+    "String.fromCharCode",
+    "String.fromCodePoint",
+];
+
+/// Port of upstream `scope.js`'s `get_global_keypath`: the dotted name a
+/// non-computed member chain spells, or `None` when its root is not a free
+/// identifier.
+fn global_keypath_json(node: &serde_json::Value, context: &ComponentContext) -> Option<String> {
+    let mut n = node;
+    let mut joined = String::new();
+    while n.get("type").and_then(|t| t.as_str()) == Some("MemberExpression") {
+        if n.get("computed").and_then(|c| c.as_bool()) == Some(true) {
+            return None;
+        }
+        let property = n.get("property")?;
+        if property.get("type").and_then(|t| t.as_str()) != Some("Identifier") {
+            return None;
+        }
+        joined = format!(
+            ".{}{}",
+            property.get("name").and_then(|v| v.as_str())?,
+            joined
+        );
+        n = n.get("object")?;
+    }
+    if n.get("type").and_then(|t| t.as_str()) == Some("CallExpression")
+        && let Some(callee) = n.get("callee")
+        && callee.get("type").and_then(|t| t.as_str()) == Some("Identifier")
+    {
+        joined = format!("(){joined}");
+        n = callee;
+    }
+    if n.get("type").and_then(|t| t.as_str()) != Some("Identifier") {
+        return None;
+    }
+    let name = n.get("name").and_then(|v| v.as_str())?;
+    if context.state.get_binding(name).is_some() {
+        return None;
+    }
+    Some(format!("{name}{joined}"))
+}
+
 /// Check if a JSON expression is "known" (can be evaluated at compile time).
 ///
 /// This approximates the official Svelte compiler's `scope.evaluate().is_known` check.
@@ -6784,13 +6876,18 @@ fn is_expression_known_json(json_value: &serde_json::Value, context: &ComponentC
                         return false;
                     }
 
-                    // For State bindings, check if state source
+                    // A never-updated `$state` is worth its declaration's
+                    // argument; upstream's `scope.evaluate` follows
+                    // `binding.initial` and never consults how the declaration
+                    // was lowered, so `accessors` / `customElement` (which force
+                    // `is_state_source`) must not make the value unknown.
+                    // `reassigned` / `mutated` were already rejected above.
                     if matches!(binding.kind, BindingKind::State | BindingKind::RawState) {
-                        use crate::compiler::phases::phase3_transform::client::utils::is_state_source;
-                        if is_state_source(binding, context.state.analysis) {
-                            return false;
+                        // A bare `$state()` carries no argument, so it evaluates
+                        // to `undefined` — a known value.
+                        if binding.initial_node_type.is_none() && binding.initial.is_none() {
+                            return true;
                         }
-                        // Non-state-source with known initial → known
                         return is_initial_value_literal_or_known(&binding.initial);
                     }
 
@@ -6810,10 +6907,11 @@ fn is_expression_known_json(json_value: &serde_json::Value, context: &ComponentC
                         return false;
                     }
 
-                    // For Normal bindings: known if never updated with known initial
-                    // Functions are always "known" (they're defined)
+                    // A function-valued binding evaluates to upstream's `FUNCTION`
+                    // symbol, and a symbol value forces `is_known = false` — so a
+                    // `{@const c = fn}` reading it stays reactive state.
                     if binding.is_function() {
-                        return true;
+                        return false;
                     }
                     // A non-literal initializer lives in `init_expr_json`, and
                     // upstream's `scope.evaluate` recurses into the init node
@@ -6961,8 +7059,19 @@ fn is_expression_known_json(json_value: &serde_json::Value, context: &ComponentC
                 }
             }
             // Upstream's `globals` table makes a pure global call over known
-            // arguments known too (`Math.max(1, 2)`); the folder already knows
-            // which, so ask it rather than keeping a second list.
+            // arguments known too (`String('a')`, `Math.max(1, 2)`) — without
+            // being able to name the value, which is why this cannot be asked of
+            // the folder alone (it folds only the `Math.*` subset it can compute).
+            if let Some(callee) = obj.get("callee")
+                && let Some(keypath) = global_keypath_json(callee, context)
+                && GLOBAL_PURE_FNS.contains(&keypath.as_str())
+                && let Some(args) = obj.get("arguments").and_then(|a| a.as_array())
+                && args
+                    .iter()
+                    .all(|a| a.get("type").and_then(|t| t.as_str()) != Some("SpreadElement"))
+            {
+                return args.iter().all(|a| is_expression_known_json(a, context));
+            }
             get_literal_value_json(json_value, context).is_some()
         }
 
@@ -6970,9 +7079,7 @@ fn is_expression_known_json(json_value: &serde_json::Value, context: &ComponentC
         // upstream evaluates them to the `FUNCTION` symbol, and a symbol value
         // forces `is_known = false` (scope.js). So a `$derived(() => …)` (a
         // function-valued derived) stays reactive — its prop must be emitted as a
-        // getter, not inlined by value. A plain `const fn = () => {}` reference is
-        // handled separately by the `binding.is_function()` fast-path above and
-        // never reaches here.
+        // getter, not inlined by value.
         "ArrowFunctionExpression" | "FunctionExpression" => false,
 
         // Member expressions are generally not known, EXCEPT a non-computed
