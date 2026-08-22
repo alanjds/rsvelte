@@ -3203,6 +3203,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         }
 
         let length = total_measure + 2 * n.saturating_sub(1);
+        if std::env::var_os("CLIA_DEBUG").is_some() {
+            eprintln!("VARDECL n={n} total={total_measure} length={length}");
+        }
         let multiline = any_multiline || (n > 1 && length > 50);
 
         if multiline {

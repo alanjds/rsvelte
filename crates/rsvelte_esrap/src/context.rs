@@ -360,12 +360,15 @@ impl<const DIRECT: bool> Context<DIRECT> {
         }
     }
 
+    /// A separator space that is written now and may still be turned into a
+    /// newline by `insert_event`. esrap spells this `context.write(' ')`, a
+    /// string command, so it counts toward `measure` for as long as it stays a
+    /// space — `insert_direct` moves it into `layout_bytes` if it becomes one.
     pub(crate) fn retro_space_mark(&mut self) -> EventMark {
         let mark = self.event_mark();
         if DIRECT && self.pending == 0 {
             let start = mark.offset;
             self.buffer.text.push(' ');
-            self.layout_bytes += 1;
             self.buffer.layouts.push(LayoutSpan {
                 start,
                 raw_len: 1,
@@ -373,6 +376,7 @@ impl<const DIRECT: bool> Context<DIRECT> {
                 newline: false,
                 margin: false,
                 dirty: false,
+                counted: true,
             });
         } else {
             self.space();
@@ -523,6 +527,7 @@ impl<const DIRECT: bool> Context<DIRECT> {
             newline: true,
             margin: false,
             dirty: false,
+            counted: false,
         });
         self.pending = 0;
         true
@@ -550,10 +555,18 @@ impl<const DIRECT: bool> Context<DIRECT> {
                 newline: true,
                 margin: self.pending & PENDING_MARGIN != 0,
                 dirty: false,
+                counted: false,
             });
         } else if self.pending & (PENDING_SPACE | PENDING_OPTIMISTIC_SPACE) != 0 {
+            // esrap writes a sequence's padding with `write(' ')` (content) and
+            // the `if`/`else` gap with `space()` (a command); only the former
+            // counts toward `measure`.
+            let counted =
+                self.pending & PENDING_SPACE == 0 && self.pending & PENDING_OPTIMISTIC_SPACE != 0;
             self.buffer.text.push(' ');
-            self.layout_bytes += 1;
+            if !counted {
+                self.layout_bytes += 1;
+            }
             self.buffer.layouts.push(LayoutSpan {
                 start,
                 raw_len: 1,
@@ -561,6 +574,7 @@ impl<const DIRECT: bool> Context<DIRECT> {
                 newline: false,
                 margin: false,
                 dirty: false,
+                counted,
             });
         }
         self.pending = 0;
@@ -576,6 +590,12 @@ impl<const DIRECT: bool> Context<DIRECT> {
             EventKind::Newline => {
                 if let Some(index) = self.layout_at(offset) {
                     if !self.buffer.layouts[index].newline {
+                        // A separator space that becomes a newline stops being
+                        // content, so it moves back into `layout_bytes`.
+                        if self.buffer.layouts[index].counted {
+                            self.layout_bytes += self.buffer.layouts[index].raw_len as usize;
+                            self.buffer.layouts[index].counted = false;
+                        }
                         self.buffer.layouts[index].newline = true;
                         self.buffer.layouts[index].depth = self.indent_depth;
                         self.buffer.layouts[index].dirty = true;
@@ -633,6 +653,7 @@ impl<const DIRECT: bool> Context<DIRECT> {
                 newline,
                 margin: false,
                 dirty: true,
+                counted: false,
             },
         );
         self.direct_dirty = true;
@@ -763,6 +784,7 @@ mod tests {
                 newline: true,
                 margin: false,
                 dirty: false,
+                counted: false,
             }]
         );
     }

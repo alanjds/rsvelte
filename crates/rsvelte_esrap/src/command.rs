@@ -26,6 +26,9 @@ pub(crate) struct LayoutSpan {
     pub newline: bool,
     pub margin: bool,
     pub dirty: bool,
+    /// A separator space esrap writes with `write(' ')`, so it counts toward
+    /// `measure` while it is still a space (`retro_space_mark`).
+    pub counted: bool,
 }
 
 #[derive(Default)]
