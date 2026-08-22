@@ -3447,6 +3447,12 @@ impl<'a> ScopeBuilder<'a> {
         // Visit body
         self.visit_fragment(&block.body);
 
+        // The key expression belongs to the each block's own scope, so an update in
+        // it (`(v++)`) resolves to the item binding rather than to an outer name.
+        if let Some(ref key) = block.key {
+            self.process_template_expression(key);
+        }
+
         // Visit fallback if present
         if let Some(ref fallback) = block.fallback {
             self.visit_fragment(fallback);

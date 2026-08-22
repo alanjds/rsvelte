@@ -1389,6 +1389,7 @@ fn collect_legacy_reactive_statement_metadata(
         cycle_collect_assignments_and_deps(
             body_node,
             arena,
+            &mut Vec::new(),
             &mut assignments,
             &mut cycle_dependencies,
         );
@@ -1480,15 +1481,21 @@ fn cycle_extract_pattern_ids(node: &JsNode, arena: &ParseArena, out: &mut Vec<St
 /// block / if / for / sequence bodies (`$: { a = b + 1; }`) are recorded as
 /// assignments rather than dependencies — otherwise such statements collect an
 /// empty assignment set and get dropped from the cycle graph entirely.
+///
+/// `locals` carries the block-scoped names declared inside the statement, which
+/// upstream resolves through the `$:` scope's children rather than a walk.
 fn cycle_collect_assignments_and_deps(
     node: &JsNode,
     arena: &ParseArena,
+    locals: &mut Vec<String>,
     assignments: &mut Vec<String>,
     dependencies: &mut Vec<String>,
 ) {
     match node {
         JsNode::Identifier { name, .. } => {
-            if !dependencies.iter().any(|s| s == name.as_str()) {
+            if !locals.iter().any(|l| l == name.as_str())
+                && !dependencies.iter().any(|s| s == name.as_str())
+            {
                 dependencies.push(name.to_string());
             }
         }
@@ -1499,9 +1506,126 @@ fn cycle_collect_assignments_and_deps(
             cycle_collect_assignments_and_deps(
                 arena.get_js_node(*right),
                 arena,
+                locals,
                 assignments,
                 dependencies,
             );
+        }
+        JsNode::BlockStatement { body, .. } => {
+            let locals_mark = locals.len();
+            let stmts = arena.get_js_children(*body);
+            for s in stmts {
+                collect_block_local_decls(s, arena, locals);
+            }
+            for s in stmts {
+                cycle_collect_assignments_and_deps(s, arena, locals, assignments, dependencies);
+            }
+            locals.truncate(locals_mark);
+        }
+        JsNode::SwitchStatement {
+            discriminant,
+            cases,
+            ..
+        } => {
+            let locals_mark = locals.len();
+            let cases = arena.get_js_children(*cases);
+            for case in cases {
+                if let JsNode::SwitchCase { consequent, .. } = case {
+                    for s in arena.get_js_children(*consequent) {
+                        collect_block_local_decls(s, arena, locals);
+                    }
+                }
+            }
+            cycle_collect_assignments_and_deps(
+                arena.get_js_node(*discriminant),
+                arena,
+                locals,
+                assignments,
+                dependencies,
+            );
+            for case in cases {
+                cycle_collect_assignments_and_deps(case, arena, locals, assignments, dependencies);
+            }
+            locals.truncate(locals_mark);
+        }
+        JsNode::CatchClause { param, body, .. } => {
+            let locals_mark = locals.len();
+            if let Some(param) = param {
+                extract_param_names(arena.get_js_node(*param), arena, locals);
+            }
+            cycle_collect_assignments_and_deps(
+                arena.get_js_node(*body),
+                arena,
+                locals,
+                assignments,
+                dependencies,
+            );
+            locals.truncate(locals_mark);
+        }
+        JsNode::ForStatement {
+            init,
+            test,
+            update,
+            body,
+            ..
+        } => {
+            let locals_mark = locals.len();
+            if let Some(init) = init {
+                collect_block_local_decls(arena.get_js_node(*init), arena, locals);
+            }
+            for child in [init, test, update].into_iter().flatten() {
+                cycle_collect_assignments_and_deps(
+                    arena.get_js_node(*child),
+                    arena,
+                    locals,
+                    assignments,
+                    dependencies,
+                );
+            }
+            cycle_collect_assignments_and_deps(
+                arena.get_js_node(*body),
+                arena,
+                locals,
+                assignments,
+                dependencies,
+            );
+            locals.truncate(locals_mark);
+        }
+        JsNode::ForOfStatement {
+            left, right, body, ..
+        }
+        | JsNode::ForInStatement {
+            left, right, body, ..
+        } => {
+            let locals_mark = locals.len();
+            collect_block_local_decls(arena.get_js_node(*left), arena, locals);
+            for child in [right, body] {
+                cycle_collect_assignments_and_deps(
+                    arena.get_js_node(*child),
+                    arena,
+                    locals,
+                    assignments,
+                    dependencies,
+                );
+            }
+            locals.truncate(locals_mark);
+        }
+        // A declarator's `id` is a declaration, not a reference.
+        JsNode::VariableDeclaration { declarations, .. } => {
+            for d in arena.get_js_children(*declarations) {
+                if let JsNode::VariableDeclarator {
+                    init: Some(init), ..
+                } = d
+                {
+                    cycle_collect_assignments_and_deps(
+                        arena.get_js_node(*init),
+                        arena,
+                        locals,
+                        assignments,
+                        dependencies,
+                    );
+                }
+            }
         }
         // `x++` / `--x` assigns its argument.
         JsNode::UpdateExpression { argument, .. } => {
@@ -1520,6 +1644,7 @@ fn cycle_collect_assignments_and_deps(
             cycle_collect_assignments_and_deps(
                 arena.get_js_node(*object),
                 arena,
+                locals,
                 assignments,
                 dependencies,
             );
@@ -1527,6 +1652,7 @@ fn cycle_collect_assignments_and_deps(
                 cycle_collect_assignments_and_deps(
                     arena.get_js_node(*property),
                     arena,
+                    locals,
                     assignments,
                     dependencies,
                 );
@@ -1542,6 +1668,7 @@ fn cycle_collect_assignments_and_deps(
                 cycle_collect_assignments_and_deps(
                     arena.get_js_node(*key),
                     arena,
+                    locals,
                     assignments,
                     dependencies,
                 );
@@ -1549,6 +1676,7 @@ fn cycle_collect_assignments_and_deps(
             cycle_collect_assignments_and_deps(
                 arena.get_js_node(*value),
                 arena,
+                locals,
                 assignments,
                 dependencies,
             );
@@ -1561,7 +1689,7 @@ fn cycle_collect_assignments_and_deps(
             ..
         } => {
             for prop in arena.get_js_children(*properties) {
-                cycle_collect_assignments_and_deps(prop, arena, assignments, dependencies);
+                cycle_collect_assignments_and_deps(prop, arena, locals, assignments, dependencies);
             }
             if let Some(ta) = type_annotation {
                 for_each_blob_identifier(ta, &mut |name, _| {
@@ -1577,7 +1705,7 @@ fn cycle_collect_assignments_and_deps(
             ..
         } => {
             for elem in elements.iter().flatten() {
-                cycle_collect_assignments_and_deps(elem, arena, assignments, dependencies);
+                cycle_collect_assignments_and_deps(elem, arena, locals, assignments, dependencies);
             }
             if let Some(ta) = type_annotation {
                 for_each_blob_identifier(ta, &mut |name, _| {
@@ -1593,19 +1721,21 @@ fn cycle_collect_assignments_and_deps(
             cycle_collect_assignments_and_deps(
                 arena.get_js_node(*label),
                 arena,
+                locals,
                 assignments,
                 dependencies,
             );
             cycle_collect_assignments_and_deps(
                 arena.get_js_node(*body),
                 arena,
+                locals,
                 assignments,
                 dependencies,
             );
         }
         _ => {
             for_each_js_child(node, arena, &mut |child| {
-                cycle_collect_assignments_and_deps(child, arena, assignments, dependencies);
+                cycle_collect_assignments_and_deps(child, arena, locals, assignments, dependencies);
             });
         }
     }
@@ -2329,6 +2459,23 @@ fn collect_reactive_refs(
             if let Some(b) = body {
                 collect_reactive_refs(arena.get_js_node(*b), arena, path, locals, order, included);
             }
+            path.pop();
+            locals.truncate(locals_mark);
+        }
+        JsNode::CatchClause { param, body, .. } => {
+            let locals_mark = locals.len();
+            if let Some(param) = param {
+                extract_param_names(arena.get_js_node(*param), arena, locals);
+            }
+            path.push(reactive_path_entry(node, arena));
+            collect_reactive_refs(
+                arena.get_js_node(*body),
+                arena,
+                path,
+                locals,
+                order,
+                included,
+            );
             path.pop();
             locals.truncate(locals_mark);
         }

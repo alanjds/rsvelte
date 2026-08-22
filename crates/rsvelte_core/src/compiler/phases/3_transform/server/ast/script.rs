@@ -3580,24 +3580,152 @@ fn names_to_instance_binding_indices(names: &[String], state: &ServerTransformSt
     out
 }
 
+/// Add the names a statement declares in its own block scope — `var` / `let` /
+/// `const` declarators plus function and class declarations.
+fn collect_hoisted_decl_names(stmt: &Statement, out: &mut Vec<String>) {
+    match stmt {
+        Statement::VariableDeclaration(vd) => {
+            for d in vd.declarations.iter() {
+                collect_binding_pattern_idents(&d.id, out);
+            }
+        }
+        Statement::FunctionDeclaration(f) => {
+            if let Some(id) = &f.id {
+                out.push(id.name.to_string());
+            }
+        }
+        Statement::ClassDeclaration(c) => {
+            if let Some(id) = &c.id {
+                out.push(id.name.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Collect every identifier-reference name READ inside a statement (RHS of
 /// assignments, test/loop conditions, call args, nested block bodies, …). Used
 /// to compute reactive-statement dependencies. Static member `.property` names,
 /// object-literal keys, and binding declarations are NOT references.
+///
+/// Names the statement declares in a nested scope are dropped: the caller
+/// resolves what is left against the instance scope BY NAME, so a block-local
+/// `let e` or a `catch (e)` would otherwise be read as the component's `e`.
 fn collect_read_identifiers_in_statement(stmt: &Statement, out: &mut Vec<String>) {
     use oxc_ast_visit::Visit;
     struct IdentCollector<'o> {
         out: &'o mut Vec<String>,
+        locals: Vec<String>,
     }
-    impl<'a, 'o> oxc_ast_visit::Visit<'a> for IdentCollector<'o> {
-        fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
-            let name = it.name.to_string();
-            if !self.out.contains(&name) {
-                self.out.push(name);
+    impl<'o> IdentCollector<'o> {
+        fn hoist(&mut self, stmts: &[Statement<'_>]) {
+            for s in stmts {
+                collect_hoisted_decl_names(s, &mut self.locals);
+            }
+        }
+        fn declare_left(&mut self, left: &oxc_ast::ast::ForStatementLeft<'_>) {
+            if let oxc_ast::ast::ForStatementLeft::VariableDeclaration(vd) = left {
+                for d in vd.declarations.iter() {
+                    collect_binding_pattern_idents(&d.id, &mut self.locals);
+                }
+            }
+        }
+        fn declare_params(&mut self, params: &oxc_ast::ast::FormalParameters<'_>) {
+            for p in params.items.iter() {
+                collect_binding_pattern_idents(&p.pattern, &mut self.locals);
+            }
+            if let Some(rest) = &params.rest {
+                collect_binding_pattern_idents(&rest.rest.argument, &mut self.locals);
             }
         }
     }
-    let mut c = IdentCollector { out };
+    impl<'a, 'o> oxc_ast_visit::Visit<'a> for IdentCollector<'o> {
+        fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
+            let name = it.name.as_str();
+            if self.locals.iter().any(|l| l == name) {
+                return;
+            }
+            if !self.out.iter().any(|n| n == name) {
+                self.out.push(name.to_string());
+            }
+        }
+        fn visit_block_statement(&mut self, it: &oxc_ast::ast::BlockStatement<'a>) {
+            let mark = self.locals.len();
+            self.hoist(&it.body);
+            oxc_ast_visit::walk::walk_block_statement(self, it);
+            self.locals.truncate(mark);
+        }
+        fn visit_switch_statement(&mut self, it: &oxc_ast::ast::SwitchStatement<'a>) {
+            let mark = self.locals.len();
+            for case in it.cases.iter() {
+                self.hoist(&case.consequent);
+            }
+            oxc_ast_visit::walk::walk_switch_statement(self, it);
+            self.locals.truncate(mark);
+        }
+        fn visit_catch_clause(&mut self, it: &oxc_ast::ast::CatchClause<'a>) {
+            let mark = self.locals.len();
+            if let Some(param) = &it.param {
+                collect_binding_pattern_idents(&param.pattern, &mut self.locals);
+            }
+            oxc_ast_visit::walk::walk_catch_clause(self, it);
+            self.locals.truncate(mark);
+        }
+        fn visit_for_statement(&mut self, it: &oxc_ast::ast::ForStatement<'a>) {
+            let mark = self.locals.len();
+            if let Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(vd)) = &it.init {
+                for d in vd.declarations.iter() {
+                    collect_binding_pattern_idents(&d.id, &mut self.locals);
+                }
+            }
+            oxc_ast_visit::walk::walk_for_statement(self, it);
+            self.locals.truncate(mark);
+        }
+        fn visit_for_in_statement(&mut self, it: &oxc_ast::ast::ForInStatement<'a>) {
+            let mark = self.locals.len();
+            self.declare_left(&it.left);
+            oxc_ast_visit::walk::walk_for_in_statement(self, it);
+            self.locals.truncate(mark);
+        }
+        fn visit_for_of_statement(&mut self, it: &oxc_ast::ast::ForOfStatement<'a>) {
+            let mark = self.locals.len();
+            self.declare_left(&it.left);
+            oxc_ast_visit::walk::walk_for_of_statement(self, it);
+            self.locals.truncate(mark);
+        }
+        fn visit_function(
+            &mut self,
+            it: &oxc_ast::ast::Function<'a>,
+            flags: oxc_semantic::ScopeFlags,
+        ) {
+            let mark = self.locals.len();
+            if let Some(id) = &it.id {
+                self.locals.push(id.name.to_string());
+            }
+            self.declare_params(&it.params);
+            if let Some(body) = &it.body {
+                self.hoist(&body.statements);
+            }
+            oxc_ast_visit::walk::walk_function(self, it, flags);
+            self.locals.truncate(mark);
+        }
+        fn visit_arrow_function_expression(
+            &mut self,
+            it: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+        ) {
+            let mark = self.locals.len();
+            self.declare_params(&it.params);
+            if let oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) = &it.body {
+                self.hoist(&body.statements);
+            }
+            oxc_ast_visit::walk::walk_arrow_function_expression(self, it);
+            self.locals.truncate(mark);
+        }
+    }
+    let mut c = IdentCollector {
+        out,
+        locals: Vec::new(),
+    };
     c.visit_statement(stmt);
 }
 

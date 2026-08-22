@@ -171,9 +171,6 @@ pub fn visit<'a, 'b: 'a>(
     // Pop EachBlock context
     context.each_block_stack.pop();
 
-    // Restore scope
-    context.scope = old_scope;
-
     // Pop fragment owner type
     context.fragment_owner_stack.pop();
 
@@ -181,7 +178,10 @@ pub fn visit<'a, 'b: 'a>(
     context.is_direct_child_of_component = was_direct_child;
     context.is_direct_child_of_snippet = was_direct_snippet;
 
-    // Visit the key expression if present
+    // Visit the key expression if present.
+    // Upstream's `context.visit(node.key)` runs in the each block's own scope, so a
+    // write in the key (`(v = 1)`) resolves to the item binding and counts as a
+    // mutation of the collection.
     // IMPORTANT: Use a separate metadata for the key expression, NOT block.metadata.expression.
     // In the official Svelte compiler, the key is visited without the expression metadata context,
     // so its dependencies are NOT added to node.metadata.expression.dependencies.
@@ -192,6 +192,9 @@ pub fn visit<'a, 'b: 'a>(
         let mut key_metadata = crate::ast::template::ExpressionMetadata::default();
         walk_js_expression_node(&key_node, context, &mut key_metadata)?;
     }
+
+    // Restore scope
+    context.scope = old_scope;
 
     // Decrement block depth
     context.block_depth -= 1;
