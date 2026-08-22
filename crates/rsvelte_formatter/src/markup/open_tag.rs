@@ -122,6 +122,7 @@ struct OpenTagRenderer<'a> {
     attributes: &'a [Attribute<'a>],
     options: &'a FormatOptions,
     attr_depth: usize,
+    is_regular_element: bool,
     this_attr: Option<String>,
     comments: Vec<OpenTagComment>,
     order: Vec<(u32, OpenTagItem)>,
@@ -136,6 +137,7 @@ impl<'a> OpenTagRenderer<'a> {
         this_attr: Option<String>,
         options: &'a FormatOptions,
         attr_depth: usize,
+        is_regular_element: bool,
     ) -> Self {
         let comments = collect_open_tag_comments(source, element_start, open_tag_end, attributes);
         let mut order = Vec::with_capacity(attributes.len() + comments.len() + 1);
@@ -154,6 +156,7 @@ impl<'a> OpenTagRenderer<'a> {
             attributes,
             options,
             attr_depth,
+            is_regular_element,
             this_attr,
             comments,
             order,
@@ -175,6 +178,7 @@ impl<'a> OpenTagRenderer<'a> {
                     self.options,
                     self.attr_depth,
                     wrapped,
+                    self.is_regular_element,
                 ),
                 OpenTagItem::Comment(index) => Ok(self.comments[*index].text.clone()),
             })
@@ -298,6 +302,7 @@ fn open_tag_renderer<'a>(
     this_attr: Option<String>,
     options: &'a FormatOptions,
     attr_depth: usize,
+    is_regular_element: bool,
 ) -> OpenTagRenderer<'a> {
     OpenTagRenderer::new(
         source,
@@ -307,6 +312,7 @@ fn open_tag_renderer<'a>(
         this_attr,
         options,
         attr_depth,
+        is_regular_element,
     )
 }
 
@@ -318,6 +324,7 @@ fn initial_open_tag_render<'a>(
     this_attr: Option<String>,
     options: &'a FormatOptions,
     attr_depth: usize,
+    is_regular_element: bool,
 ) -> Result<(OpenTagRenderer<'a>, bool, Vec<String>), FormatError> {
     let renderer = open_tag_renderer(
         source,
@@ -327,6 +334,7 @@ fn initial_open_tag_render<'a>(
         this_attr,
         options,
         attr_depth,
+        is_regular_element,
     );
     let has_line_comment = renderer.has_line_comment();
     let rendered_attrs = renderer.render_items(false)?;
@@ -358,6 +366,9 @@ pub(super) fn push_open_tag(
     // hug case (source-empty inline) whose `>` dedents onto its own line. See
     // [`is_empty_nonhug_element`].
     empty_nonhug: bool,
+    // Whether this open tag belongs to a `RegularElement` — the only host on
+    // which prettier normalises whitespace inside a `class` attribute.
+    is_regular_element: bool,
     options: &FormatOptions,
     edits: &mut Vec<(u32, u32, String)>,
 ) -> Result<bool, FormatError> {
@@ -392,6 +403,7 @@ pub(super) fn push_open_tag(
         this_attr,
         options,
         attr_depth,
+        is_regular_element,
     )?;
 
     let leading_indent_width = open_tag_leading_indent(source, element_start, depth, options);

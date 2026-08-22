@@ -1,5 +1,7 @@
+use std::borrow::Cow;
+
 use rsvelte_core::ast::template::{
-    AttributeNode, AttributeValue, AttributeValuePart, ExpressionTag,
+    AttributeNode, AttributeValue, AttributeValuePart, ExpressionTag, Text,
 };
 
 use crate::error::FormatError;
@@ -402,6 +404,7 @@ pub(super) fn render_attribute_node(
     options: &FormatOptions,
     attr_depth: usize,
     narrow_value: bool,
+    is_regular_element: bool,
 ) -> Result<String, FormatError> {
     let tw = tab_width(options);
     match &node.value {
@@ -427,6 +430,18 @@ pub(super) fn render_attribute_node(
             render_single_expression_value(node, inner_src, options, attr_depth, narrow_value)
         }
         AttributeValue::Sequence(parts) => {
+            // prettier collapses runs of spaces/tabs inside a `class` value, but
+            // only on a `RegularElement` — `title`, a component, `<svelte:*>` and
+            // `<title>`/`<slot>` are printed verbatim.
+            let normalized;
+            let parts: &[AttributeValuePart] =
+                if is_regular_element && node.name.as_str() == "class" {
+                    normalized = normalize_class_value(parts);
+                    &normalized
+                } else {
+                    parts
+                };
+
             // Tailwind class sort: a fully static value (no `{expr}`) of a
             // configured class attribute is reordered before printing. Values
             // with interpolation are left to the normal path — their class list
@@ -455,6 +470,88 @@ pub(super) fn render_attribute_node(
             Ok(format!("{}=\"{}\"", node.name, body))
         }
     }
+}
+
+/// Port of prettier-plugin-svelte's `class`-attribute whitespace pass (its
+/// `Text` printer, guarded by `parent.name === 'class'` and a `RegularElement`
+/// grandparent). Two ordered replacements over the RAW text of every literal
+/// part:
+///
+/// 1. `/([^ \t\n])(([ \t]+$)|([ \t]+(\r?\n))|[ \t]+)/g` — a run of
+///    spaces/tabs after a non-whitespace character collapses to a single space,
+///    or vanishes when a newline follows, or is kept verbatim at end of string.
+/// 2. `/([^ \t\n])[ \t]+$/` — the surviving end-of-string run is dropped when
+///    the part is last in the value and collapsed to one space otherwise.
+///
+/// Leading whitespace has no preceding character to anchor either pattern, so it
+/// survives — which is why `class="  lead and trail  "` prints as
+/// `class="  lead and trail"`.
+fn normalize_class_value<'a>(parts: &[AttributeValuePart<'a>]) -> Vec<AttributeValuePart<'a>> {
+    let last = parts.len().saturating_sub(1);
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| match part {
+            AttributeValuePart::Text(text) => AttributeValuePart::Text(Text {
+                start: text.start,
+                end: text.end,
+                raw: Cow::Owned(normalize_class_text(&text.raw, i == last)),
+                data: Cow::Owned(normalize_class_text(&text.data, i == last)),
+            }),
+            AttributeValuePart::ExpressionTag(tag) => {
+                AttributeValuePart::ExpressionTag(tag.clone())
+            }
+        })
+        .collect()
+}
+
+/// The two replacement passes described on [`normalize_class_value`], applied to
+/// one string. Every character the passes branch on is ASCII, so this scans
+/// bytes and copies non-ASCII ones through untouched.
+fn normalize_class_text(raw: &str, is_last_part: bool) -> String {
+    let bytes = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        out.push(ch);
+        i += 1;
+        if ch == b' ' || ch == b'\t' || ch == b'\n' {
+            continue;
+        }
+        let run_start = i;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i == run_start {
+            continue;
+        }
+        if i == bytes.len() {
+            out.extend_from_slice(&bytes[run_start..i]);
+        } else if bytes[i] == b'\n' {
+            out.push(b'\n');
+            i += 1;
+        } else if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            out.extend_from_slice(b"\r\n");
+            i += 2;
+        } else {
+            out.push(b' ');
+        }
+    }
+    let mut end = out.len();
+    while end > 0 && (out[end - 1] == b' ' || out[end - 1] == b'\t') {
+        end -= 1;
+    }
+    if end < out.len()
+        && end > 0
+        && !matches!(out[end - 1], b' ' | b'\t' | b'\n')
+    {
+        out.truncate(end);
+        if !is_last_part {
+            out.push(b' ');
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| raw.to_string())
 }
 
 /// The raw text of a fully static attribute value (every part is literal text,

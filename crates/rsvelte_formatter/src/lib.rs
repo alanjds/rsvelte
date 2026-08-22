@@ -207,6 +207,14 @@ fn format_attempt(
     if let Some(opts) = &root.options {
         markup::collect_options_open_tag_edit(source, opts, options, &mut edits)?;
     }
+    // The markup pass's zero-length inserts are synthetic close tags for
+    // elements the parser closed implicitly (`<ul><li>a<li>b</ul>`). They sit at
+    // the exact offset the indent pass inserts a sibling separator at, and
+    // `apply_edits` splices coincident inserts last-pushed-first — so they have
+    // to be re-pushed after the indent pass to land BEFORE the separator
+    // (`a</li>\n  <li>b`, not `a\n  </li><li>b`). Every other markup edit
+    // replaces a real span and is unaffected by the move.
+    let markup_edits_end = edits.len();
     // Install `root.arena` as the serialize arena for the template walk: a
     // `{@const}`'s `VariableDeclaration` carries its declarators as arena
     // children (allocated into `root.arena` at parse time), so `push_const_tag`
@@ -217,6 +225,7 @@ fn format_attempt(
         expression::collect_template_edits(source, &root.fragment, 0, options, &mut edits)
     })?;
     indent::collect_indent_edits(source, &root.fragment, 0, options, &mut edits)?;
+    defer_synthetic_close_tags(&mut edits, markup_edits_end);
     if let Some(css) = &root.css {
         // Normalize the `<style …>` open tag (e.g. strip trailing space from
         // `<style >`) using the same routine that normalises `<script>` tags.
@@ -320,6 +329,11 @@ fn format_attempt(
     // zero-length-insert-before-range ordering). `applied` is already
     // overlap-resolved (for #1707's correct section remap), so apply_edits'
     // in-pass overlap check is a no-op here; it drains `applied`.
+    if std::env::var_os("OPTB_DUMP_EDITS").is_some() {
+        for e in applied.iter() {
+            eprintln!("EDIT {:?}", e);
+        }
+    }
     let mut out = apply_edits(source, &mut applied);
     // Return the drained buffer to the arena so its capacity is reused.
     arenas.edits = applied;
@@ -343,6 +357,30 @@ fn format_attempt(
     normalize_file_edges(&mut out);
 
     Ok(out)
+}
+
+/// Move the markup pass's zero-length inserts (synthetic close tags for
+/// implicitly-closed elements) to the tail of `edits`, preserving their relative
+/// order. See the call site for why the position matters.
+fn defer_synthetic_close_tags(edits: &mut Vec<(u32, u32, String)>, markup_edits_end: usize) {
+    if markup_edits_end == 0 {
+        return;
+    }
+    let mut deferred: Vec<(u32, u32, String)> = Vec::new();
+    let mut write = 0usize;
+    for read in 0..edits.len() {
+        if read < markup_edits_end && edits[read].0 == edits[read].1 {
+            deferred.push(std::mem::take(&mut edits[read]));
+        } else {
+            edits.swap(write, read);
+            write += 1;
+        }
+    }
+    if deferred.is_empty() {
+        return;
+    }
+    edits.truncate(write);
+    edits.append(&mut deferred);
 }
 
 /// Splice the collected edits into `source` in one forward pass, draining

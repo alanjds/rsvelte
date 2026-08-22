@@ -120,6 +120,13 @@ pub(super) fn push_close_tag(
                     element_end,
                     format!("\n{parent_indent}</{tag_name}>"),
                 ));
+            } else {
+                // The element ends flush against the next sibling's `<`
+                // (`<ul><li>a<li>b</ul>`), so there is no whitespace span to
+                // rewrite — insert the close tag instead. A zero-length insert
+                // is spliced before any range edit sharing its start, so the
+                // next sibling's open-tag rewrite still lands after it.
+                edits.push((element_end, element_end, format!("</{tag_name}>")));
             }
         }
         return;
