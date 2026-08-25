@@ -44,6 +44,7 @@ use crate::compiler::phases::phase3_transform::client::types::{
 use crate::compiler::phases::phase3_transform::client::visitors::expression_converter::convert_expression;
 use crate::compiler::phases::phase3_transform::client::visitors::fragment::fragment as visit_fragment_impl;
 // Note: get_value from declarations is available if needed for reactive index/item access
+use crate::compiler::phases::phase3_transform::client::source_anchor::CommentRegion;
 use crate::compiler::phases::phase3_transform::client::types::ExpressionMetadata;
 use crate::compiler::phases::phase3_transform::client::visitors::shared::utils::{
     add_svelte_meta, apply_transforms_to_expression, build_expression,
@@ -88,7 +89,13 @@ pub fn each_block(node: &EachBlock, context: &mut ComponentContext) {
     // Expression should be evaluated in the parent scope, not the scope
     // created by the each block itself
     // Build the collection expression
-    let collection = build_collection_expression(node, context);
+    let mut collection = build_collection_expression(node, context);
+    if let (Some(start), Some(end)) = (node.expression.start(), node.expression.end())
+        && let Some(region) =
+            CommentRegion::between(&context.state, node.start + 7, end, node.start + 7)
+    {
+        collection = region.anchor(&context.arena, collection, start, end);
+    }
 
     // Add comment placeholder for uncontrolled blocks
     if !is_controlled {

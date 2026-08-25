@@ -37,8 +37,19 @@ impl CommentRegion {
         tag: &ExpressionTag<'_>,
         from: u32,
     ) -> Option<Self> {
+        Self::between(state, tag.start + 1, tag.end.saturating_sub(1), from)
+    }
+
+    /// Comments in an arbitrary source region containing a template
+    /// expression. Block/directive visitors use this for regions whose opener
+    /// is longer than `{` (for example `{#each ` and `{@html `).
+    pub fn between(
+        state: &ComponentClientTransformState<'_>,
+        inner_start: u32,
+        inner_end: u32,
+        from: u32,
+    ) -> Option<Self> {
         let source: &str = &state.options.source;
-        let (inner_start, inner_end) = (tag.start + 1, tag.end.saturating_sub(1));
         if inner_end <= inner_start || inner_end as usize > source.len() || from > inner_start {
             return None;
         }

@@ -126,11 +126,18 @@ pub fn visit_each_block<'a>(node: &EachBlock<'a>, state: &mut ServerTransformSta
     // The collection argument to `$.ensure_array_like(...)`: an await-bearing
     // iterable is `$.save`-wrapped (`(await $.save(expr))()`); otherwise the
     // plain read-wrapped expression.
-    let collection = if has_await {
+    let mut collection = if has_await {
         save_wrap_expr_text(state, iterable_src.as_deref().unwrap_or(""))
     } else {
         state.visit_expr_claiming(&node.expression)
     };
+    if let (Some(start), Some(end)) = (node.expression.start(), node.expression.end()) {
+        state.place_template_expression_comments(
+            (node.start + 7, end),
+            (start, end),
+            &mut collection,
+        );
+    }
     let b = state.b;
 
     // statements[0] = const each_array = $.ensure_array_like(collection);
