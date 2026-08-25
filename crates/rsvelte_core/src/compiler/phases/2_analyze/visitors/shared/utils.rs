@@ -1229,6 +1229,10 @@ pub fn walk_js_expression_node(
         JsNode::Identifier {
             name, start, end, ..
         } => {
+            if name == "arguments" && context.arguments_function_depth == 0 {
+                return Err(super::super::super::errors::invalid_arguments_usage().at(*start, *end));
+            }
+
             // Handle legacy mode special variables
             if !context.analysis.runes {
                 if name == "$$props" {
@@ -1508,7 +1512,11 @@ pub fn walk_js_expression_node(
             body: Some(body),
             ..
         } => {
+            let provides_arguments = !matches!(expression, JsNode::ArrowFunctionExpression { .. });
             context.function_depth += 1;
+            if provides_arguments {
+                context.arguments_function_depth += 1;
+            }
 
             let decl_undo_mark = context.decl_undo_log.len();
 
@@ -1598,6 +1606,9 @@ pub fn walk_js_expression_node(
                 }
             }
             context.function_depth -= 1;
+            if provides_arguments {
+                context.arguments_function_depth -= 1;
+            }
         }
         JsNode::FunctionExpression { body: None, .. }
         | JsNode::FunctionDeclaration { body: None, .. } => {

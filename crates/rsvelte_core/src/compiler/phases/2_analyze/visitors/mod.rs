@@ -370,6 +370,10 @@ pub struct VisitorContext<'a> {
     pub parent_element: Option<String>,
     /// Current function depth.
     pub function_depth: usize,
+    /// Depth inside functions which provide their own `arguments` binding.
+    /// Arrow functions inherit `arguments` from an enclosing ordinary function,
+    /// so they increment `function_depth` but not this counter.
+    pub arguments_function_depth: usize,
     /// Depth inside $derived(...) expressions (but not $derived.by(...)) or @const
     pub derived_function_depth: usize,
     /// Whether we have a $props() rune.
@@ -604,6 +608,7 @@ impl<'a> VisitorContext<'a> {
             bind_has_await: false,
             parent_element: None,
             function_depth: 0,
+            arguments_function_depth: 0,
             derived_function_depth: 0,
             has_props_rune: false,
             component_slots: rustc_hash::FxHashSet::default(),

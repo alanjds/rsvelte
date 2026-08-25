@@ -11730,6 +11730,28 @@ fn is_plain_ascii_identifier(s: &str) -> bool {
     bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
 }
 
+struct RestrictedBindingIdentifier {
+    first: Option<(u32, String)>,
+}
+
+impl<'a> oxc_ast_visit::Visit<'a> for RestrictedBindingIdentifier {
+    fn visit_binding_identifier(&mut self, id: &oxc_ast::ast::BindingIdentifier<'a>) {
+        if self.first.is_none() && matches!(id.name.as_str(), "arguments" | "eval") {
+            self.first = Some((id.span.start, id.name.to_string()));
+        }
+    }
+}
+
+fn restricted_binding_identifier(
+    pattern: &oxc_ast::ast::BindingPattern<'_>,
+) -> Option<(u32, String)> {
+    use oxc_ast_visit::Visit;
+
+    let mut visitor = RestrictedBindingIdentifier { first: None };
+    visitor.visit_binding_pattern(pattern);
+    visitor.first
+}
+
 pub fn parse_binding_pattern<'a>(
     arena: &ParseArena,
     content: &str,
@@ -11799,6 +11821,15 @@ pub fn parse_binding_pattern<'a>(
             result.program.body.first()
             && let Some(decl) = var_decl.declarations.first()
         {
+            if let Some((wrapped_start, name)) = restricted_binding_identifier(&decl.id) {
+                let start = offset + wrapped_start as usize - 4;
+                return Err(crate::error::ParseError::svelte(
+                    "js_parse_error",
+                    format!("Assigning to {name} in strict mode"),
+                    (start, start),
+                ));
+            }
+
             if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id {
                 let start = offset + id.span.start as usize - 4;
                 let end = offset + id.span.end as usize - 4;

@@ -1402,7 +1402,18 @@ impl<'a> Parser<'a> {
                     self.advance();
                 }
             } else {
-                index = Some(CompactString::from(&self.source[idx_start..idx_end]));
+                let name = &self.source[idx_start..idx_end];
+                if super::super::utils::is_reserved(name) {
+                    return Err(crate::error::ParseError::svelte(
+                        "unexpected_reserved_word",
+                        format!(
+                            "'{}' is a reserved word in JavaScript and cannot be used here",
+                            name
+                        ),
+                        (idx_start, idx_start),
+                    ));
+                }
+                index = Some(CompactString::from(name));
                 self.index = idx_end;
             }
             self.skip_whitespace();
@@ -2333,39 +2344,10 @@ impl<'a> Parser<'a> {
                     // For destructuring like `{ x, y }: Point`, strip `: Point`.
                     let pattern_clean = strip_type_annotation(pattern_str);
 
-                    // Parse the pattern (LHS)
-                    // For destructuring patterns ({...} or [...]), use the dedicated
-                    // pattern parser which wraps in `let ... = null` to handle
-                    // default values (e.g., {x = 1, y}) that are not valid as
-                    // standalone expressions.
-                    let pattern_expr =
-                        if pattern_clean.starts_with('{') || pattern_clean.starts_with('[') {
-                            match super::super::read::expression::parse_destructuring_pattern(
-                                &self.arena,
-                                &pattern_clean,
-                                expr_start,
-                                self.expression_line_offsets(),
-                                self.ts,
-                            ) {
-                                Some(expr) => expr,
-                                // A pattern that does not parse in the component's
-                                // mode is upstream's `read_pattern` throwing, not a
-                                // reason to fall back to expression parsing.
-                                None => self.parse_js_expression_head_strict(
-                                    &pattern_clean,
-                                    expr_start,
-                                    false,
-                                )?,
-                            }
-                        } else {
-                            // A plain-identifier pattern goes through upstream's
-                            // `read_identifier`, not acorn, so its `loc` carries
-                            // `character`; only destructuring falls through.
-                            super::super::read::expression::with_read_identifier_loc(
-                                self.parse_js_expression_eager_strict(&pattern_clean, expr_start)?,
-                                self.expression_line_offsets(),
-                            )
-                        };
+                    // Parse the LHS through the same binding-pattern path as
+                    // each/await. Besides defaults and TypeScript annotations,
+                    // this preserves upstream's reserved-name diagnostics.
+                    let pattern_expr = self.parse_binding_pattern(&pattern_clean, expr_start)?;
 
                     // Calculate the offset for the init expression in the
                     // original source.  `trimmed` starts at `expr_start` in
