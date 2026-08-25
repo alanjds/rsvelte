@@ -1008,14 +1008,6 @@ fn js_whitespace(c: char) -> bool {
     ) || ('\u{2000}'..='\u{200a}').contains(&c)
 }
 
-/// The `globals` fold over arguments that are already concrete values. The
-/// client's constant folder asks the same question, and a second table there
-/// would be a second answer to it.
-pub(crate) fn eval_known_global_call(keypath: &str, args: &[EvalValue]) -> Option<EvalValue> {
-    let args: Vec<Evaluation> = args.iter().cloned().map(Evaluation::single).collect();
-    eval_global_call(keypath, &args)
-}
-
 fn is_global_keypath(keypath: &str) -> bool {
     matches!(
         keypath,
