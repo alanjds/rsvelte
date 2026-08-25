@@ -7483,10 +7483,10 @@ fn convert_parsed_program<'ast>(
                     .map(|label| (label.offset() as usize).min(content.len()))
                     .unwrap_or(0);
                 let label_end = label
-                    .map(|label| at.saturating_add(label.len()).min(content.len()))
+                    .map(|label| at.saturating_add(label.len() as usize).min(content.len()))
                     .unwrap_or(at);
                 let aligned = realign_missing_semicolon(content, at, &first_error.message);
-                if is_typescript || aligned.1.as_str() != first_error.message.as_str() {
+                if is_typescript || aligned.1.as_str() != first_error.message.as_ref() {
                     aligned
                 } else {
                     realign_plain_js_typescript_diagnostic(
