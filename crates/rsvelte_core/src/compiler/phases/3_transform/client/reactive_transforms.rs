@@ -4,6 +4,7 @@ use memchr::memmem;
 use std::borrow::Cow;
 
 use crate::compiler::phases::phase2_analyze::ComponentAnalysis;
+use crate::compiler::phases::phase3_transform::js_ast::to_oxc::SINGLE_ELEMENT_SEQUENCE_MARKER;
 
 use super::{
     extract_destructure_targets, extract_member_expression_base, find_assignment_position,
@@ -800,7 +801,7 @@ pub(super) fn transform_reactive_statement(
     // `3-transform/client/visitors/LabeledStatement.js`'s build_getter +
     // deep_read_state. A name that matches no `*_vars` list is a plain local /
     // non-reactive `normal` binding and is skipped (upstream `continue`).
-    let deps_expr = {
+    let (deps_expr, dep_count) = {
         let mut parts: Vec<String> = Vec::with_capacity(dep_names.len());
         for name in dep_names {
             if name == "$$props" || name == "$$restProps" {
@@ -826,7 +827,8 @@ pub(super) fn transform_reactive_statement(
                 parts.push(name.clone());
             }
         }
-        parts.join(", ")
+        let count = parts.len();
+        (parts.join(", "), count)
     };
 
     // Replace `break $;` with `return;` since the reactive block becomes a function callback.
@@ -850,6 +852,11 @@ pub(super) fn transform_reactive_statement(
     // 2. Single dep: () => (dep) - keeps consistent formatting with expected output
     let deps_thunk = if deps_expr.is_empty() {
         "() => {}".to_string()
+    } else if dep_count == 1 {
+        // Intermediate AST rewrites discard ordinary redundant parentheses.
+        // Keep upstream's one-element SequenceExpression identity in-band so
+        // the final raw-to-AST conversion can rebuild it.
+        format!("() => {}({})", SINGLE_ELEMENT_SEQUENCE_MARKER, deps_expr)
     } else {
         format!("() => ({})", deps_expr)
     };

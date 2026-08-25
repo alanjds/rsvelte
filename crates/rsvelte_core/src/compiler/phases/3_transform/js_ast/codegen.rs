@@ -5,9 +5,49 @@
 use super::arena::JsArena;
 use super::nodes::*;
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt::Write;
 use std::rc::Rc;
+
+/// Remove the internal callee from generated one-element sequence markers.
+/// The remaining `(expression)` is exactly what the text fallback must print;
+/// the direct-AST path rebuilds the corresponding `SequenceExpression`.
+fn restore_single_element_sequence_markers(code: &str) -> Cow<'_, str> {
+    let marker = super::to_oxc::SINGLE_ELEMENT_SEQUENCE_MARKER;
+    let bytes = code.as_bytes();
+    let mut positions = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        let Some(relative) =
+            super::super::shared::js_scan::find_code(&bytes[cursor..], marker.as_bytes())
+        else {
+            break;
+        };
+        let at = cursor + relative;
+        let end = at + marker.len();
+        let starts_identifier =
+            at > 0 && super::super::shared::js_scan::is_ident_byte(bytes[at.saturating_sub(1)]);
+        if !starts_identifier && bytes.get(end) == Some(&b'(') {
+            positions.push(at);
+        }
+        cursor = end;
+    }
+
+    if positions.is_empty() {
+        return Cow::Borrowed(code);
+    }
+
+    let mut restored = String::with_capacity(code.len() - positions.len() * marker.len());
+    let mut copied = 0;
+    for at in positions {
+        restored.push_str(&code[copied..at]);
+        copied = at + marker.len();
+    }
+    restored.push_str(&code[copied..]);
+    Cow::Owned(restored)
+}
 
 /// A raw source span recorded during codegen: (output_byte_offset, source_start, source_end).
 /// output_byte_offset is the position in the generated output string.
@@ -388,11 +428,13 @@ impl<'a> JsCodegen<'a> {
             JsStatement::Try(try_stmt) => self.emit_try_statement(try_stmt),
             JsStatement::Raw(code) => {
                 // Output raw JavaScript code verbatim
-                self.output.push_str(code);
+                self.output
+                    .push_str(&restore_single_element_sequence_markers(code));
                 self.needs_semicolon = false; // Raw code handles its own semicolons
             }
             JsStatement::RawEffect(code) => {
-                self.output.push_str(code);
+                self.output
+                    .push_str(&restore_single_element_sequence_markers(code));
                 self.needs_semicolon = false;
             }
             JsStatement::RawMapped {
@@ -432,6 +474,8 @@ impl<'a> JsCodegen<'a> {
     /// and match each token to its position in the original source, creating
     /// precise source map entries.
     fn emit_raw_mapped(&mut self, code: &str, source_offset: u32) {
+        let restored = restore_single_element_sequence_markers(code);
+        let code = restored.as_ref();
         if !self.track_mappings {
             self.output.push_str(code);
             return;
@@ -956,7 +1000,8 @@ impl<'a> JsCodegen<'a> {
             }
             JsExpr::Raw(code) => {
                 // Emit raw JavaScript code as-is
-                self.output.push_str(code);
+                self.output
+                    .push_str(&restore_single_element_sequence_markers(code));
             }
             JsExpr::Spanned(inner_id, start, end) => {
                 self.record_span_start(*start, *end);
@@ -3185,6 +3230,16 @@ pub fn generate_sourcemap_json_multi(
 mod tests {
     use super::*;
     use crate::compiler::phases::phase3_transform::js_ast::builders::*;
+
+    #[test]
+    fn text_fallback_restores_only_code_sequence_markers() {
+        let source =
+            "__rsvelte_seq1(a); '__rsvelte_seq1(b)'; /* __rsvelte_seq1(c) */ __rsvelte_seq1(d)";
+        assert_eq!(
+            restore_single_element_sequence_markers(source),
+            "(a); '__rsvelte_seq1(b)'; /* __rsvelte_seq1(c) */ (d)"
+        );
+    }
 
     #[test]
     fn sourcemap_can_externalize_single_source_content() {

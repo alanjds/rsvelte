@@ -34,7 +34,7 @@
 //!
 //! Re-parsing **fails loudly when the text does not parse** (`chunk-parse`) and
 //! **can differ silently when it does**: `restore_legacy_pre_effect_deps`
-//! and `restore_single_target_destructure_sequences` exist precisely
+//! and `restore_single_element_sequences` exist precisely
 //! because a round-trip that parses can still print differently from the text it
 //! came from.
 //!
@@ -364,14 +364,14 @@ fn erase_generated_effect_call_locs(
     }
 }
 
-/// Rebuilds any `SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER(expr)` call — however
+/// Rebuilds any `SINGLE_ELEMENT_SEQUENCE_MARKER(expr)` call — however
 /// deeply nested — into a one-element `SequenceExpression`. See the marker's doc
-/// comment and [`Cx::restore_single_target_destructure_sequences`].
-struct SingleTargetSequenceRebuilder<'a, 'x> {
+/// comment and [`Cx::restore_single_element_sequences`].
+struct SingleElementSequenceRebuilder<'a, 'x> {
     ab: &'x AstBuilder<'a>,
 }
 
-impl<'a, 'x> VisitMut<'a> for SingleTargetSequenceRebuilder<'a, 'x> {
+impl<'a, 'x> VisitMut<'a> for SingleElementSequenceRebuilder<'a, 'x> {
     fn visit_expression(&mut self, expr: &mut Expression<'a>) {
         oxc_ast_visit::walk_mut::walk_expression(self, expr);
 
@@ -383,7 +383,7 @@ impl<'a, 'x> VisitMut<'a> for SingleTargetSequenceRebuilder<'a, 'x> {
                     && matches!(
                         &call.callee,
                         Expression::Identifier(id)
-                            if id.name == SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER
+                            if id.name == SINGLE_ELEMENT_SEQUENCE_MARKER
                     )
         );
         if !is_marker_call {
@@ -473,10 +473,14 @@ impl Synth {
     }
 }
 
-/// Marker callee wrapping a single-target destructuring-assignment collapse
-/// (`({ a } = obj)` → `a = obj.a`) so the "this must reprint as a
-/// `SequenceExpression`" decision survives the raw-text reparse. Upstream's
-/// `visit_assignment_expression` (`shared/assignments.js`) always lowers a
+/// Marker callee wrapping generated expressions that must reprint as a
+/// one-element `SequenceExpression`, so that decision survives raw-text
+/// reparses. This is used for single-target destructuring-assignment collapses
+/// (`({ a } = obj)` → `a = obj.a`) and one-dependency legacy reactive
+/// thunks.
+///
+/// For destructuring, upstream's `visit_assignment_expression`
+/// (`shared/assignments.js`) always lowers a
 /// destructuring assignment through `b.sequence(assignments)` — an ESTree
 /// `SequenceExpression` *unconditionally*, even for a single assignment — and
 /// esrap's `SequenceExpression` printer always self-parenthesizes, `(expr)`,
@@ -486,11 +490,13 @@ impl Synth {
 /// treats as redundantly parenthesized (matching upstream's behavior for any
 /// plain, user-written `(x = 1)`, where the parens really are dropped) and
 /// removes — silently losing upstream's parens for the destructuring case.
-/// Wrapping the single assignment in a call to this marker keeps the
-/// "force sequence" decision attached to the generated text itself;
-/// [`Cx::restore_single_target_destructure_sequences`] finds the marker call
+/// The reactive-statement visitor similarly builds its dependency list with
+/// `b.sequence(deps)`, including when there is only one dependency. Wrapping
+/// either generated expression in a call to this marker keeps the "force
+/// sequence" decision attached to the generated text itself;
+/// [`Cx::restore_single_element_sequences`] finds the marker call
 /// after reparse and rebuilds the real single-element `SequenceExpression`.
-pub(crate) const SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER: &str = "__rsvelte_seq1";
+pub(crate) const SINGLE_ELEMENT_SEQUENCE_MARKER: &str = "__rsvelte_seq1";
 
 /// Conversion context: holds the oxc [`AstBuilder`] and the IR arena used to
 /// resolve [`ExprId`] handles.
@@ -1594,7 +1600,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
     fn parse_raw_expression(&self, code: &str) -> Option<Expression<'a>> {
         let wrapped = format!("({})", code.trim());
         let mut stmts = self.parse_chunk(&wrapped)?;
-        self.restore_single_target_destructure_sequences(&mut stmts);
+        self.restore_single_element_sequences(&mut stmts);
         // The synthetic parens are part of the chunk text, so the region already
         // covers them; no caller needs it for an expression.
         self.take_chunk_region(None, &[]);
@@ -1622,7 +1628,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
     ) -> Option<Vec<Statement<'a>>> {
         let mut stmts = self.parse_chunk(code.trim())?;
         self.restore_legacy_pre_effect_deps(&mut stmts);
-        self.restore_single_target_destructure_sequences(&mut stmts);
+        self.restore_single_element_sequences(&mut stmts);
         if unlocate_effect_calls {
             erase_generated_effect_call_locs(&mut stmts, effect_spans);
         }
@@ -1674,14 +1680,14 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         }
     }
 
-    /// See [`SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER`]. Unlike
+    /// See [`SINGLE_ELEMENT_SEQUENCE_MARKER`]. Unlike
     /// [`Cx::restore_legacy_pre_effect_deps`] (which only ever sits at the top
     /// of its own dedicated chunk), a destructuring-assignment collapse can be
     /// nested arbitrarily deep (inside a function body, a block, another
     /// expression, …), so this walks the whole chunk rather than just its
     /// top-level statements.
-    fn restore_single_target_destructure_sequences(&self, stmts: &mut [Statement<'a>]) {
-        let mut rebuilder = SingleTargetSequenceRebuilder { ab: &self.ab };
+    fn restore_single_element_sequences(&self, stmts: &mut [Statement<'a>]) {
+        let mut rebuilder = SingleElementSequenceRebuilder { ab: &self.ab };
         for stmt in stmts {
             rebuilder.visit_statement(stmt);
         }

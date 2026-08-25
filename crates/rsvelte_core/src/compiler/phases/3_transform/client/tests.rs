@@ -2929,3 +2929,25 @@ fn only_the_listed_global_constants_are_known_members() {
         );
     }
 }
+
+#[test]
+fn legacy_reactive_single_dependency_keeps_sequence_parens_through_assignment_rewrites() {
+    for source in [
+        "<script>\nlet q = 0;\n$: q += 1;\n</script>\n",
+        "<script>\nlet d = 0;\n$: { let x = 1; d += x; }\n</script>\n",
+    ] {
+        let code = crate::compiler::compile(source, Default::default())
+            .expect("compiles")
+            .js
+            .code;
+
+        assert!(
+            code.contains("$.legacy_pre_effect(() => ($.get("),
+            "the one dependency must remain a one-element sequence: {code}"
+        );
+        assert!(
+            !code.contains("__rsvelte_seq1"),
+            "the internal sequence marker must not reach output: {code}"
+        );
+    }
+}

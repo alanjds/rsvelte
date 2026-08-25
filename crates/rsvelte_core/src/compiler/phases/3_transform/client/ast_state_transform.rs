@@ -39,7 +39,7 @@ use super::rune_transforms::{process_derived_destructuring_pattern, wrap_state_v
 use super::{DERIVED_TMP_COUNTER, SCRIPT_ARRAY_COUNTER, STATE_TMP_COUNTER, VAR_STATE_VARS};
 use crate::compiler::phases::phase2_analyze::ComponentAnalysis;
 use crate::compiler::phases::phase2_analyze::types::ScriptProjection;
-use crate::compiler::phases::phase3_transform::js_ast::to_oxc::SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER;
+use crate::compiler::phases::phase3_transform::js_ast::to_oxc::SINGLE_ELEMENT_SEQUENCE_MARKER;
 use crate::compiler::phases::phase3_transform::shared::template::escape_js_string;
 
 thread_local! {
@@ -4278,10 +4278,10 @@ impl<'a, 's> StateVarCollector<'a, 's> {
                 // esrap always self-parenthesizes a `SequenceExpression`. The marker
                 // call keeps that "must be a sequence" decision alive across the
                 // eventual raw-text reparse. See
-                // `SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER`.
+                // `SINGLE_ELEMENT_SEQUENCE_MARKER`.
                 Some(format!(
                     "{}({})",
-                    SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER,
+                    SINGLE_ELEMENT_SEQUENCE_MARKER,
                     assignments.into_iter().next().unwrap()
                 ))
             } else {
@@ -4374,7 +4374,7 @@ impl<'a, 's> StateVarCollector<'a, 's> {
                 // the same "always a real SequenceExpression" rule applies here.
                 format!(
                     "{}({})",
-                    SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER,
+                    SINGLE_ELEMENT_SEQUENCE_MARKER,
                     assignments.into_iter().next().unwrap()
                 )
             } else {

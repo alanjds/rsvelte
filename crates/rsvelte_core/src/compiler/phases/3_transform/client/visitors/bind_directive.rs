@@ -22,7 +22,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::expression_conv
 use crate::compiler::phases::phase3_transform::js_ast::JsArena;
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::*;
-use crate::compiler::phases::phase3_transform::js_ast::to_oxc::SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER;
+use crate::compiler::phases::phase3_transform::js_ast::to_oxc::SINGLE_ELEMENT_SEQUENCE_MARKER;
 
 // Note: We implement bind_this directly here rather than using shared/utils
 // to avoid complex borrow checker issues with the context
@@ -2524,7 +2524,7 @@ fn build_invalidation_expr(
         let inner = if each_ctx.invalidation_exprs.len() == 1 {
             format!(
                 "{}({})",
-                SINGLE_TARGET_DESTRUCTURE_SEQUENCE_MARKER, each_ctx.invalidation_exprs[0]
+                SINGLE_ELEMENT_SEQUENCE_MARKER, each_ctx.invalidation_exprs[0]
             )
         } else {
             each_ctx.invalidation_exprs.join(", ")
