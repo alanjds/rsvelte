@@ -4621,13 +4621,10 @@ pub(crate) fn is_js_expr_defined(
 }
 
 /// Resolve a bare identifier to its binding and decide whether upstream's
-/// `scope.evaluate(<identifier>).is_defined` would hold. Shared by the
-/// original-expression path (`is_expression_defined_json`) and the
-/// transformed-value path (`is_js_expr_defined`): upstream's `scope.evaluate`
-/// resolves identifiers through the scope in BOTH cases, so a non-reactive
-/// binding that survives transformation as a bare identifier (e.g. a legacy
-/// `let iconAsc = "↑"` inside a `cond ? iconAsc : iconDesc`) must resolve the
-/// same way whether it appears at the top level or nested in a built expression.
+/// `scope.evaluate(<identifier>).is_defined` would hold for the transformed-value
+/// path (`is_js_expr_defined`). A non-reactive binding that survives lowering as
+/// a bare identifier (e.g. a legacy `let iconAsc = "↑"` inside a conditional)
+/// must still resolve through its initializer.
 fn identifier_is_defined(name: &str, context: &ComponentContext) -> bool {
     use crate::compiler::phases::phase2_analyze::scope::BindingKind;
 
@@ -4748,111 +4745,14 @@ fn identifier_is_defined(name: &str, context: &ComponentContext) -> bool {
 
 /// Check if an expression is guaranteed to be defined (non-null/undefined).
 ///
-/// This corresponds to Svelte's `state.scope.evaluate(value).is_defined` check.
-/// Returns true for expressions that are known to never be null/undefined, such as:
-/// - Each block indices (always numbers)
-/// - Numeric/boolean literals
-/// - Binary/unary expressions (always produce defined results)
-/// - Non-updated const bindings with defined initial values
+/// This is Svelte's `state.scope.evaluate(value).is_defined` check. Keep it on
+/// the shared evaluator: a second expression-kind table inevitably disagrees
+/// on the node types upstream leaves UNKNOWN.
 pub(crate) fn is_expression_defined(
     expr: &crate::ast::js::Expression,
     context: &ComponentContext,
 ) -> bool {
-    is_expression_defined_json(expr.as_json(), context)
-}
-
-/// Internal helper for checking if a JSON expression is defined.
-fn is_expression_defined_json(json_value: &serde_json::Value, context: &ComponentContext) -> bool {
-    let Some(obj) = json_value.as_object() else {
-        return false;
-    };
-    let Some(expr_type) = obj.get("type").and_then(|v| v.as_str()) else {
-        return false;
-    };
-
-    match expr_type {
-        "Identifier" => obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .is_some_and(|name| identifier_is_defined(name, context)),
-        "Literal" => {
-            // Literals are defined unless they're null/undefined
-            if let Some(value) = obj.get("value") {
-                return !value.is_null();
-            }
-            // If no value field but raw exists, it's likely a valid literal
-            obj.get("raw").is_some()
-        }
-        "BinaryExpression" => {
-            // Binary expressions always produce defined results (booleans, numbers, strings)
-            true
-        }
-        "UnaryExpression" => {
-            // Check the operator - most produce defined results
-            if let Some(op) = obj.get("operator").and_then(|v| v.as_str()) {
-                // void operator produces undefined
-                if op == "void" {
-                    return false;
-                }
-            }
-            true
-        }
-        "LogicalExpression" => {
-            // Logical expressions might return undefined if right side is undefined
-            // For safety, check both operands
-            if let (Some(left), Some(right)) = (obj.get("left"), obj.get("right")) {
-                return is_expression_defined_json(left, context)
-                    && is_expression_defined_json(right, context);
-            }
-            false
-        }
-        "ConditionalExpression" => {
-            // Ternary: check both consequent and alternate
-            if let (Some(consequent), Some(alternate)) =
-                (obj.get("consequent"), obj.get("alternate"))
-            {
-                return is_expression_defined_json(consequent, context)
-                    && is_expression_defined_json(alternate, context);
-            }
-            false
-        }
-        "TemplateLiteral" => {
-            // Template literals are always strings (defined)
-            true
-        }
-        "ArrayExpression" | "ObjectExpression" => {
-            // Array/object literals are always defined
-            true
-        }
-        "ArrowFunctionExpression" | "FunctionExpression" => {
-            // Functions are always defined
-            true
-        }
-        "CallExpression" => {
-            // A call to a known global (`Math.*` / `Number` / `String` /
-            // `BigInt`) returns a NUMBER/STRING — always defined — mirroring
-            // upstream `scope.evaluate`'s `globals` table.
-            obj.get("callee")
-                .and_then(json_keypath)
-                .as_deref()
-                .is_some_and(|keypath| {
-                    let has_spread = obj
-                        .get("arguments")
-                        .and_then(|args| args.as_array())
-                        .is_some_and(|args| {
-                            args.iter().any(|arg| {
-                                arg.get("type").and_then(|t| t.as_str()) == Some("SpreadElement")
-                            })
-                        });
-                    is_known_defined_global_call(keypath, has_spread)
-                })
-        }
-        "MemberExpression" => {
-            // Member access could be undefined; can't guarantee defined.
-            false
-        }
-        _ => false,
-    }
+    evaluate_estree(&ClientEvalScope { context }, expr.as_json(), 0).is_defined()
 }
 
 /// Dotted keypath of a static estree-JSON callee (`Math.round` → `"Math.round"`).
