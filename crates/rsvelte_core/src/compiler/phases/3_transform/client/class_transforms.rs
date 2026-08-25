@@ -8,7 +8,8 @@ use super::expression_needs_proxy;
 use crate::compiler::phases::phase1_parse::parser::is_js_whitespace;
 use crate::compiler::phases::phase1_parse::utils::find_matching_bracket;
 use crate::compiler::phases::phase3_transform::shared::class_body::{
-    find_class_header, split_class_members_onto_lines,
+    ends_with_assignment_eq, find_assignment_eq, find_class_header, has_rune_after_eq,
+    skip_ws_and_comments, split_class_members_onto_lines,
 };
 use crate::compiler::phases::phase3_transform::shared::js_scan::skip_opaque;
 
@@ -17,64 +18,6 @@ use crate::compiler::phases::phase3_transform::shared::js_scan::skip_opaque;
 /// skipping `)` inside strings / template literals / regex / comments (H-058).
 fn find_matching_paren_lexical(s: &str) -> Option<usize> {
     find_matching_bracket(s, 0, '(')
-}
-
-/// Byte offset of the first character after `from` that is neither JS whitespace
-/// nor a comment. `parse_state_field` reads the initializer with
-/// `is_whitespace`, so the gate that decides whether to call it has to be at
-/// least as permissive or the field is never seen.
-fn skip_ws_and_comments(s: &str, mut from: usize) -> usize {
-    loop {
-        let rest = &s[from..];
-        let ws = rest.len() - rest.trim_start_matches(is_js_whitespace).len();
-        from += ws;
-        let rest = &s[from..];
-        if let Some(inner) = rest.strip_prefix("/*") {
-            match memmem::find(inner.as_bytes(), b"*/") {
-                Some(end) => from += 2 + end + 2,
-                None => return s.len(),
-            }
-        } else {
-            return from;
-        }
-    }
-}
-
-/// Whether `line` holds `= <rune>(` or `= <rune><` with any run of JS whitespace
-/// and block comments between. Matching two literal spellings (`"= $state("`
-/// and `"=$state("`) missed a tab, a second space, a wrapped initializer and
-/// every non-ASCII JS space.
-fn has_rune_after_eq(line: &str, rune_type: &str) -> bool {
-    let bytes = line.as_bytes();
-    let mut from = 0;
-    while let Some(rel) = memmem::find(&bytes[from..], b"=") {
-        let eq = from + rel;
-        let init = skip_ws_and_comments(line, eq + 1);
-        if let Some(after) = line[init..].strip_prefix(rune_type)
-            && (after.starts_with('(') || after.starts_with('<'))
-        {
-            return true;
-        }
-        from = eq + 1;
-    }
-    false
-}
-
-/// Byte offset of the first `=` in `s` that is an assignment rather than part of
-/// `==`, `===`, `=>`, `!=`, `<=` or `>=`.
-fn find_assignment_eq(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut from = 0;
-    while let Some(rel) = memmem::find(&bytes[from..], b"=") {
-        let i = from + rel;
-        let prev = i.checked_sub(1).map(|p| bytes[p]);
-        let next = bytes.get(i + 1).copied();
-        if !matches!(prev, Some(b'=' | b'!' | b'<' | b'>')) && !matches!(next, Some(b'=' | b'>')) {
-            return Some(i);
-        }
-        from = i + 1;
-    }
-    None
 }
 
 /// The comment text a source wrote between `=` and the rune, normalised to end
@@ -87,18 +30,6 @@ fn separator_comment(between: &str) -> String {
     } else {
         format!("{} ", t)
     }
-}
-
-/// Whether `line` is the head of a field whose initializer starts on a later
-/// line, so the multi-line accumulator below has to be entered even though this
-/// line names no rune. `==`, `=>`, `!=`, `<=` and `>=` are not assignments.
-fn ends_with_assignment_eq(line: &str) -> bool {
-    let head = line.trim_end_matches(is_js_whitespace);
-    let head = match head.strip_suffix('=') {
-        Some(h) => h,
-        None => return false,
-    };
-    !matches!(head.as_bytes().last(), Some(b'=' | b'!' | b'<' | b'>'))
 }
 
 /// Given `s` positioned just after an opening `<` in a TypeScript generic type
