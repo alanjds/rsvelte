@@ -16,7 +16,7 @@ use crate::compiler::phases::phase3_transform::shared::js_scan::slash_starts_reg
 use crate::compiler::utils::is_js_ident_continue;
 
 /// Byte offset of the first character after `from` that is neither JavaScript
-/// whitespace nor a block comment.
+/// whitespace nor a line or block comment.
 pub(crate) fn skip_ws_and_comments(s: &str, mut from: usize) -> usize {
     loop {
         let rest = &s[from..];
@@ -28,6 +28,11 @@ pub(crate) fn skip_ws_and_comments(s: &str, mut from: usize) -> usize {
                 Some(end) => from += 2 + end + 2,
                 None => return s.len(),
             }
+        } else if rest.starts_with("//") {
+            match memchr::memchr(b'\n', rest.as_bytes()) {
+                Some(end) => from += end + 1,
+                None => return s.len(),
+            }
         } else {
             return from;
         }
@@ -35,7 +40,7 @@ pub(crate) fn skip_ws_and_comments(s: &str, mut from: usize) -> usize {
 }
 
 /// Whether `text` contains an assignment whose initializer starts with `rune`,
-/// allowing any JavaScript whitespace and block comments after `=`.
+/// allowing any JavaScript whitespace and comments after `=`.
 pub(crate) fn has_rune_after_eq(text: &str, rune: &str) -> bool {
     let Some(eq) = find_assignment_eq(text) else {
         return false;
@@ -63,13 +68,10 @@ pub(crate) fn find_assignment_eq(s: &str) -> Option<usize> {
     None
 }
 
-/// Whether a line is the head of a field whose initializer starts later.
-pub(crate) fn ends_with_assignment_eq(line: &str) -> bool {
-    let head = line.trim_end_matches(is_js_whitespace);
-    let Some(head) = head.strip_suffix('=') else {
-        return false;
-    };
-    !matches!(head.as_bytes().last(), Some(b'=' | b'!' | b'<' | b'>'))
+/// Whether an assignment has no initializer token yet because only JavaScript
+/// whitespace and comments follow its `=`.
+pub(crate) fn initializer_starts_later(text: &str) -> bool {
+    find_assignment_eq(text).is_some_and(|eq| skip_ws_and_comments(text, eq + 1) == text.len())
 }
 
 /// Skip a `'`/`"` string literal starting at `i`, returning the index just past
@@ -618,7 +620,7 @@ pub(crate) fn terminate_export_default_class(code: &str) -> Option<String> {
 mod tests {
     use super::{
         brace_opens_class_body, find_assignment_eq, find_class_header, has_rune_after_eq,
-        split_class_members_onto_lines,
+        initializer_starts_later, split_class_members_onto_lines,
     };
 
     #[test]
@@ -630,12 +632,21 @@ mod tests {
             "\t",
             "\n\t",
             " /* c */ ",
+            " // c\n\t",
             "\u{a0}",
             "\u{feff}",
         ] {
             let field = format!("d ={separator}$derived(1)");
             assert!(has_rune_after_eq(&field, "$derived"), "{field:?}");
         }
+    }
+
+    #[test]
+    fn deferred_initializer_accepts_comments_but_not_a_value() {
+        for text in ["d =", "d =\t", "d = /* c */", "d = // c"] {
+            assert!(initializer_starts_later(text), "{text:?}");
+        }
+        assert!(!initializer_starts_later("d = 1"));
     }
 
     #[test]

@@ -10,7 +10,8 @@ use super::transform_store::{
     transform_store_assignments, transform_store_destructure_assignments,
 };
 use crate::compiler::phases::phase3_transform::shared::class_body::{
-    find_assignment_eq, find_class_header, skip_ws_and_comments, split_class_members_onto_lines,
+    find_assignment_eq, find_class_header, initializer_starts_later, skip_ws_and_comments,
+    split_class_members_onto_lines,
 };
 use crate::compiler::utils::{is_escaped, is_escaped_char};
 use memchr::memmem;
@@ -5013,9 +5014,7 @@ pub(crate) fn transform_class_fields_server(script: &str) -> String {
             && !in_plain_field
             && !in_block
             && !in_block_comment
-            && find_assignment_eq(initial_trimmed).is_some_and(|eq| {
-                skip_ws_and_comments(initial_trimmed, eq + 1) == initial_trimmed.len()
-            })
+            && initializer_starts_later(initial_trimmed)
         {
             let mut candidate = initial_trimmed.to_string();
             let mut next_idx = line_idx;
