@@ -1,7 +1,8 @@
-//! Static expression evaluation for SSR template output.
+//! Shared static expression evaluation for analysis and template output.
 //!
 //! Port of the official compiler's `scope.evaluate` (`phases/scope.js`,
-//! `class Evaluation`). The server transform calls this for every template
+//! `class Evaluation`). Phase 2 uses it for Identifier `has_state`, and the
+//! server transform calls it for every template
 //! expression chunk (`build_template_chunk` in
 //! `3-transform/server/visitors/shared/utils.js`): when the evaluation is
 //! "known" (exactly one possible primitive value), the value is inlined into
@@ -1483,8 +1484,8 @@ impl<'a> EvalCtx<'a> {
 }
 
 /// The only two things the `scope.evaluate` recursion asks of its environment.
-/// Splitting them out lets the server generator and the client transform share
-/// ONE port of upstream's `Evaluation` walk with two identifier resolvers.
+/// Splitting them out lets Phase 2 and both transforms share ONE port of
+/// upstream's `Evaluation` walk with target-specific identifier resolvers.
 pub(crate) trait EvalScope {
     /// A target may evaluate the expression after target-specific lowering.
     /// Return that lowered result here; `None` keeps the shared upstream walk.

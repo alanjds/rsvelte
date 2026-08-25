@@ -44,6 +44,55 @@ fn equality_in_a_binding_initializer_folds_in_dev() {
     }
 }
 
+/// Phase 2 used to mark a derived read as state from its binding kind alone,
+/// omitting upstream's `!scope.evaluate(node).is_known` term (#3437). Pin the
+/// complete measured grid: two known derived declarations times six read
+/// shapes.
+#[test]
+fn known_derived_reads_are_not_reactive() {
+    let declarations = ["let v = $derived(1);", "let v = $derived.by(() => 1);"];
+    let references = [
+        "<b>{v}</b>",
+        "<b>{typeof v}</b>",
+        "<b>{void v}</b>",
+        "<b>{!v}</b>",
+        "<b>x{v}</b>",
+        "<b title={typeof v}></b>",
+    ];
+
+    for declaration in declarations {
+        for reference in references {
+            let out = client(&format!(
+                "<script>\n\t{declaration}\n</script>\n{reference}\n"
+            ));
+            assert!(
+                !out.contains("template_effect"),
+                "a known derived read must be written once for `{declaration}` / `{reference}`; got:\n{out}"
+            );
+        }
+    }
+}
+
+/// Evaluation recurses through unchanged rune bindings, while a block-bodied
+/// `$derived.by` deliberately stays unknown upstream.
+#[test]
+fn known_derived_reactivity_uses_the_value_not_the_rune_kind() {
+    let known = client(
+        "<script>\n\tlet base = $state(0);\n\tlet v = $derived(base + 1);\n</script>\n<b>{v}</b>\n",
+    );
+    assert!(
+        !known.contains("template_effect"),
+        "an unchanged known state can make a derived value known; got:\n{known}"
+    );
+
+    let unknown =
+        client("<script>\n\tlet v = $derived.by(() => { return 1; });\n</script>\n<b>{v}</b>\n");
+    assert!(
+        unknown.contains("template_effect"),
+        "a block-bodied derived.by is UNKNOWN upstream; got:\n{unknown}"
+    );
+}
+
 /// `void <anything>` is `undefined` — one value, so `is_known` holds whatever
 /// the operand is. The client's own recursion answered `is_known` for a unary
 /// by asking whether its ARGUMENT was known, so a `{@const}` over `void <prop>`

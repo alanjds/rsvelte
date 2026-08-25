@@ -11,7 +11,7 @@ use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 use crate::compiler::phases::phase3_transform::js_ast::builders::is_valid_identifier;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::*;
 // The `scope.evaluate` port lives with the server transform, but it is the one
-// shared model of a folded JS value; the client fold must agree with it.
+// shared model of a folded JS value used by Phase 2 and both transforms.
 use crate::compiler::phases::phase3_transform::server::evaluate::{
     EvalScope, EvalValue, Evaluation, evaluate_binding_initial, evaluate_estree, to_js_string,
 };
