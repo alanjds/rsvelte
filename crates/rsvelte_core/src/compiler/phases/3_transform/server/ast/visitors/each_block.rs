@@ -67,6 +67,7 @@ use crate::ast::template::EachBlock;
 use crate::compiler::phases::phase3_transform::builders::B;
 use crate::compiler::phases::phase3_transform::builders::{BinaryOperator, UpdateOperator};
 use crate::compiler::phases::phase3_transform::server::ast::ServerTransformState;
+use crate::compiler::phases::phase3_transform::shared::js_scan::find_code;
 use oxc_ast::ast::{BindingPattern, Statement, VariableDeclarationKind};
 
 use super::shared::{
@@ -190,6 +191,13 @@ pub fn visit_each_block<'a>(node: &EachBlock<'a>, state: &mut ServerTransformSta
         state.shadowed_names.push(each_shadow.clone());
         state.slot_let_shadows.push(each_shadow);
     }
+    // Upstream never visits `node.key` on the server, but esrap's global source
+    // cursor still carries a comment in that skipped region to the next located
+    // expression in the each body. Preserve that cursor effect rather than
+    // synthesizing a server-side key expression that upstream does not emit.
+    if let Some(region) = each_key_region(node, state.source) {
+        state.defer_template_expression_comments(region);
+    }
     // EachBlock body IS an `is_text_first` parent (upstream `clean_nodes`).
     let saved_scope = state.enter_template_scope(node.start);
     each_body.extend(build_fragment_body(&node.body.nodes, true, false, state));
@@ -292,6 +300,17 @@ pub fn visit_each_block<'a>(node: &EachBlock<'a>, state: &mut ServerTransformSta
             .template
             .push(TemplateEntry::Literal(BLOCK_CLOSE.to_string()));
     }
+}
+
+/// The source inside the keyed-each parentheses, including leading comments
+/// that the parsed key expression's span excludes.
+fn each_key_region(node: &EachBlock<'_>, source: &str) -> Option<(u32, u32)> {
+    let context_end = node.context.as_ref()?.end()?;
+    let key_start = node.key.as_ref()?.start()?;
+    let key_end = node.key.as_ref()?.end()?;
+    let between = source.get(context_end as usize..key_start as usize)?;
+    let open = find_code(between.as_bytes(), b"(")? as u32;
+    Some((context_end + open + 1, key_end))
 }
 
 /// `for (let index = 0, $$length = array.length; index < $$length; index++) body`.

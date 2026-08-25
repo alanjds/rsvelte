@@ -51,6 +51,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::shared::utils::
 };
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::*;
+use crate::compiler::phases::phase3_transform::shared::js_scan::find_code;
 use crate::compiler::phases::phase3_transform::shared::template::escape_js_string;
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
@@ -1999,8 +2000,17 @@ fn build_key_function(
             LocalScope, apply_transforms_to_expression_with_shadowed,
         };
         let local_scope = LocalScope::from_shadowed(shadowed_names.into_iter());
-        let key_expr =
+        let mut key_expr =
             apply_transforms_to_expression_with_shadowed(&key_expr, context, &local_scope);
+        if let (Some(start), Some(end), Some((region_start, region_end))) = (
+            key.start(),
+            key.end(),
+            each_key_region(node, &context.state.options.source),
+        ) && let Some(region) =
+            CommentRegion::between(&context.state, region_start, region_end, region_start)
+        {
+            key_expr = region.anchor(&context.arena, key_expr, start, end);
+        }
 
         if let Some(context_expr) = &node.context {
             // 写经 upstream #18521 `context.visit(node.context, key_state)`: the
@@ -2022,6 +2032,19 @@ fn build_key_function(
     }
 
     b::member_path(&context.arena, "$.index")
+}
+
+/// The source inside the keyed-each parentheses. `EachBlock::key` starts at
+/// the expression, after leading trivia, so recover the opening delimiter from
+/// the code-only suffix after the item pattern. This deliberately ignores a
+/// `(` written inside a comment.
+fn each_key_region(node: &EachBlock<'_>, source: &str) -> Option<(u32, u32)> {
+    let context_end = node.context.as_ref()?.end()?;
+    let key_start = node.key.as_ref()?.start()?;
+    let key_end = node.key.as_ref()?.end()?;
+    let between = source.get(context_end as usize..key_start as usize)?;
+    let open = find_code(between.as_bytes(), b"(")? as u32;
+    Some((context_end + open + 1, key_end))
 }
 
 /// Collect all identifier names bound by a pattern (Identifier / ObjectPattern / ArrayPattern).
