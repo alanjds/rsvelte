@@ -63,3 +63,53 @@ fn an_unknown_argument_is_still_wrapped() {
     );
     assert!(out.contains("$.log_if_contains_state"), "got:\n{out}");
 }
+
+#[test]
+fn a_function_parameter_shadows_a_known_instance_binding() {
+    let out = compile_client_dev(
+        r#"<script>
+	let a = $state(1);
+
+	function f(a) {
+		console.log(a);
+	}
+
+	f(2);
+</script>
+<b>{a}</b>
+"#,
+    );
+    assert!(
+        out.contains("console.log(...$.log_if_contains_state('log', a));"),
+        "got:\n{out}"
+    );
+}
+
+#[test]
+fn a_regex_const_is_known() {
+    let out = compile_client_dev(
+        r#"<script>
+	let a = $state(1);
+	const r = /\$inspect\(a\)/;
+	console.log(r);
+</script>
+<b>{a}</b>
+"#,
+    );
+    assert!(!out.contains("$.log_if_contains_state"), "got:\n{out}");
+}
+
+#[test]
+fn nested_console_calls_wrap_from_the_inside_out() {
+    let out = compile_client_dev(
+        r#"<script>
+	let { value } = $props();
+	console.log(console.error(value));
+</script>
+"#,
+    );
+    assert!(
+        out.contains("console.log(...$.log_if_contains_state('log', console.error(...$.log_if_contains_state('error', value))))"),
+        "got:\n{out}"
+    );
+}
