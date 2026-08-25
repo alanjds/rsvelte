@@ -76,6 +76,21 @@ pub fn visit_await_block<'a>(node: &AwaitBlock<'a>, state: &mut ServerTransformS
     } else {
         state.visit_expr_claiming(&node.expression)
     };
+    if let (Some(start), Some(end), Some(header_end)) = (
+        node.expression.start(),
+        node.expression.end(),
+        crate::compiler::phases::phase1_parse::utils::find_matching_bracket(
+            state.source,
+            node.start as usize + 1,
+            '{',
+        ),
+    ) {
+        state.place_template_expression_comments(
+            (node.start + 7, header_end as u32),
+            (start, end),
+            &mut expression,
+        );
+    }
     // `has_await` → async-IIFE-wrap so `$.await` receives a promise (the inner
     // await is not eagerly awaited).
     if has_await {

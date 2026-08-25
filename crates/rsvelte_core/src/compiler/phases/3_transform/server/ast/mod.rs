@@ -30,7 +30,9 @@ use crate::compiler::phases::phase3_transform::jsnode_to_oxc::jsnode_to_oxc_expr
 use crate::compiler::phases::phase3_transform::server::evaluate::EvalValue;
 use crate::compiler::phases::phase3_transform::shared::js_scan;
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{Comment, CommentKind, Expression as OxcExpression, Statement};
+use oxc_ast::ast::{
+    BindingPattern, Comment, CommentKind, Expression as OxcExpression, Statement,
+};
 use oxc_ast_visit::VisitMut;
 use oxc_span::{GetSpan, GetSpanMut, SPAN, Span};
 use visitors::shared::TemplateEntry;
@@ -525,6 +527,42 @@ impl<'a> ServerTransformState<'a> {
                     base + (expr_end - region_start),
                 );
             }
+        }
+    }
+
+    pub fn place_template_pattern_comments(
+        &mut self,
+        region: (u32, u32),
+        pattern_span: (u32, u32),
+        pattern: &mut BindingPattern<'a>,
+    ) {
+        let Some((start, end)) = self.live_template_region(region) else {
+            return;
+        };
+        let (pattern_start, pattern_end) = pattern_span;
+        let mut comments = self.template_region_comments(start, end);
+        comments.retain(|comment| {
+            comment.span.start >= start
+                && comment.span.end <= end
+                && (comment.span.end <= pattern_start || comment.span.start >= pattern_end)
+        });
+        if comments.is_empty()
+            || pattern_start < start
+            || pattern_end < pattern_start
+            || end as usize > self.source.len()
+        {
+            return;
+        }
+        let Some(text) = self.source.get(start as usize..end as usize) else {
+            return;
+        };
+        for comment in &mut comments {
+            comment.span = Span::new(comment.span.start - start, comment.span.end - start);
+            comment.attached_to = comment.span.end;
+        }
+        if let Some(base) = self.comments.register_expression(text, &comments) {
+            let mut place = comments::Place::At(base + (pattern_start - start));
+            place.visit_binding_pattern(pattern);
         }
     }
 

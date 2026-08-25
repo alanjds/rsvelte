@@ -17,7 +17,9 @@
 use super::types::ComponentClientTransformState;
 use crate::ast::template::ExpressionTag;
 use crate::compiler::phases::phase3_transform::js_ast::arena::JsArena;
-use crate::compiler::phases::phase3_transform::js_ast::nodes::{JsExpr, JsSourceAnchor};
+use crate::compiler::phases::phase3_transform::js_ast::nodes::{
+    JsExpr, JsPattern, JsSourceAnchor, JsSourcePatternAnchor,
+};
 use crate::compiler::phases::phase3_transform::shared::js_scan;
 use compact_str::CompactString;
 
@@ -112,6 +114,53 @@ impl CommentRegion {
         })
     }
 
+    /// Like [`Self::between`], but only asks OXC's lexer for comments. This is
+    /// used for block headers whose full spelling is not a JavaScript
+    /// expression (`promise /* c */ then value`, snippet parameter lists).
+    pub fn lexical_between(
+        state: &ComponentClientTransformState<'_>,
+        inner_start: u32,
+        inner_end: u32,
+        from: u32,
+    ) -> Option<Self> {
+        let source: &str = &state.options.source;
+        if inner_end <= inner_start || inner_end as usize > source.len() || from > inner_start {
+            return None;
+        }
+        let inner = source.get(inner_start as usize..inner_end as usize)?;
+        if !inner.contains("//") && !inner.contains("/*") {
+            return None;
+        }
+        let allocator = oxc_allocator::Allocator::default();
+        let ret = oxc_parser::Parser::new(
+            &allocator,
+            inner,
+            oxc_span::SourceType::mjs().with_typescript(true),
+        )
+        .parse();
+        if ret.program.comments.is_empty() {
+            return None;
+        }
+        let comments = ret
+            .program
+            .comments
+            .iter()
+            .map(|comment| {
+                (
+                    comment.span.start + inner_start,
+                    comment.span.end + inner_start,
+                    comment.is_line(),
+                )
+            })
+            .collect();
+        Some(Self {
+            start: from,
+            end: inner_end,
+            text: source.get(from as usize..inner_end as usize)?.into(),
+            comments,
+        })
+    }
+
     /// Wrap `expr` so it claims `[at, at_end)` inside this region.
     pub fn anchor(&self, arena: &JsArena, expr: JsExpr, at: u32, at_end: u32) -> JsExpr {
         if at < self.start || at_end > self.end {
@@ -144,6 +193,21 @@ impl CommentRegion {
             at,
             at_end,
             preserve_inner_spans: true,
+        }))
+    }
+
+    /// Wrap a generated binding pattern at its upstream source location.
+    pub fn anchor_pattern(&self, pattern: JsPattern, at: u32, at_end: u32) -> JsPattern {
+        if at < self.start || at_end > self.end {
+            return pattern;
+        }
+        JsPattern::SourceAnchored(Box::new(JsSourcePatternAnchor {
+            inner: Box::new(pattern),
+            region_start: self.start,
+            region: self.text.clone(),
+            comments: self.comments.clone(),
+            at,
+            at_end,
         }))
     }
 }

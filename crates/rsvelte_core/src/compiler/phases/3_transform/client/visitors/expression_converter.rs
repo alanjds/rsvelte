@@ -3636,6 +3636,7 @@ pub fn convert_param_pattern(value: &Value, context: &mut ComponentContext) -> O
 pub fn pattern_to_string(pattern: &JsPattern) -> String {
     match pattern {
         JsPattern::Identifier(name) | JsPattern::SpannedIdentifier { name, .. } => name.to_string(),
+        JsPattern::SourceAnchored(anchor) => pattern_to_string(&anchor.inner),
         JsPattern::Array(arr) => {
             let mut s = String::from("[");
             for (i, elem) in arr.elements.iter().enumerate() {

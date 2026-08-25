@@ -639,25 +639,32 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
     /// which is what upstream measures, its whole client output sharing one
     /// cursor over that file. `None` on the probe pass, or when the region
     /// carries nothing to place.
-    fn open_source_region(&self, anchor: &JsSourceAnchor) -> Option<Span> {
-        if anchor.at < anchor.region_start || anchor.at_end < anchor.at {
+    fn open_source_region_parts(
+        &self,
+        region_start: u32,
+        region: &str,
+        comments: &[(u32, u32, bool)],
+        at: u32,
+        at_end: u32,
+    ) -> Option<Span> {
+        if at < region_start || at_end < at {
             return None;
         }
-        let offset = anchor.at - anchor.region_start;
-        let offset_end = anchor.at_end - anchor.region_start;
-        if offset_end as usize > anchor.region.len() {
+        let offset = at - region_start;
+        let offset_end = at_end - region_start;
+        if offset_end as usize > region.len() {
             return None;
         }
-        if !anchor.comments.is_empty() {
+        if !comments.is_empty() {
             self.synth.borrow_mut().saw_comments = true;
         }
         let mut synth = self.synth.borrow_mut();
         if !synth.enabled {
             return None;
         }
-        if synth.open_source_region != Some(anchor.region_start) {
+        if synth.open_source_region != Some(region_start) {
             let base = synth.cursor();
-            synth.source.push_str(&anchor.region);
+            synth.source.push_str(region);
             synth.source.push('\n');
             let region_start = anchor.region_start;
             for &(source_start, source_end, line) in &anchor.comments {
@@ -686,6 +693,16 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             synth.open_source_base + offset,
             synth.open_source_base + offset_end,
         ))
+    }
+
+    fn open_source_region(&self, anchor: &JsSourceAnchor) -> Option<Span> {
+        self.open_source_region_parts(
+            anchor.region_start,
+            &anchor.region,
+            &anchor.comments,
+            anchor.at,
+            anchor.at_end,
+        )
     }
 
     /// Append a retained island's own source to the comment buffer, so the
@@ -1297,6 +1314,19 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     self.str(name),
                     &self.ab,
                 ))
+            }
+            JsPattern::SourceAnchored(anchor) => {
+                let mut pattern = self.binding_pattern(&anchor.inner)?;
+                if let Some(span) = self.open_source_region_parts(
+                    anchor.region_start,
+                    &anchor.region,
+                    &anchor.comments,
+                    anchor.at,
+                    anchor.at_end,
+                ) {
+                    *pattern.span_mut() = span;
+                }
+                Some(pattern)
             }
             JsPattern::Object(obj) => {
                 let mut props = ArenaVec::with_capacity_in(obj.properties.len(), &self.ab);

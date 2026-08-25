@@ -42,6 +42,7 @@
 
 use crate::ast::js::Expression;
 use crate::ast::template::{AwaitBlock, Fragment};
+use crate::compiler::phases::phase3_transform::client::source_anchor::CommentRegion;
 use crate::compiler::phases::phase3_transform::client::types::{
     ComponentContext, ExpressionMetadata,
 };
@@ -84,7 +85,23 @@ pub fn await_block(node: &AwaitBlock, context: &mut ComponentContext) {
     // Build expression with metadata
     let expr_metadata = ExpressionMetadata::from_template_metadata(&node.metadata.expression);
 
-    let built_expr = build_expression(context, &converted_expr, &expr_metadata);
+    let mut built_expr = build_expression(context, &converted_expr, &expr_metadata);
+    if let (Some(start), Some(end), Some(header_end)) = (
+        node.expression.start(),
+        node.expression.end(),
+        crate::compiler::phases::phase1_parse::utils::find_matching_bracket(
+            &context.state.options.source,
+            node.start as usize + 1,
+            '{',
+        ),
+    ) && let Some(region) = CommentRegion::lexical_between(
+        &context.state,
+        node.start + 7,
+        header_end as u32,
+        node.start + 7,
+    ) {
+        built_expr = region.anchor(&context.arena, built_expr, start, end);
+    }
 
     // Check for blockers before moving built_expr into thunk
     let blocker_exprs = context

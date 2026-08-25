@@ -1841,6 +1841,7 @@ impl<'a> JsCodegen<'a> {
                 self.output.push_str(name);
                 self.record_span_start(*end, *end);
             }
+            JsPattern::SourceAnchored(anchor) => self.emit_pattern(&anchor.inner),
             JsPattern::Array(arr) => {
                 self.output.push('[');
                 for (i, elem) in arr.elements.iter().enumerate() {
