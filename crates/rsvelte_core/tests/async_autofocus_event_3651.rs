@@ -68,8 +68,12 @@ fn awaited_values_are_resolved_before_the_runtime_calls() {
         "the event must receive the resolved memoized handler:\n{event_call}"
     );
 
+    // Upstream's arrow builder deliberately collapses `async () => await x()`
+    // to `() => x()` when `x()` contains no nested await. The async-values
+    // argument is still the third `template_effect` argument, and the runtime
+    // resolves the promises before passing `$0` to either callback.
     assert!(
-        output.matches("async () => await ").count() >= 2,
-        "both awaited expressions must live in async memoizer thunks:\n{output}"
+        output.contains("[() => autofocus()]") && output.contains("[() => handler()]"),
+        "both awaited expressions must live in async memoizer slots:\n{output}"
     );
 }
