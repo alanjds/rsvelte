@@ -437,7 +437,7 @@ Ids are `pattern/issues/<file>`, `pattern/matrix/<axis>/<file>` and
 | `3413-private-in-brand-check.svelte` | [#3413](https://github.com/baseballyama/rsvelte/issues/3413) | A private-name brand check prints `#x in object` with the private identifier intact. |
 | `3435-props-id-same-line.svelte` | [#3435](https://github.com/baseballyama/rsvelte/issues/3435) | A `$props()` declaration sharing a physical line with a following identifier declaration ends at its AST span. |
 | `3435-props-same-line.svelte` | [#3435](https://github.com/baseballyama/rsvelte/issues/3435) | A `$props()` declaration and another statement on one line do not get spliced into unparseable output. |
-| `3439-void-unknown-operand.svelte` | [#3439](https://github.com/baseballyama/rsvelte/issues/3439) | `void` of an unknown operand remains unknown through the shared evaluator rather than folding from its printed text. |
+| `3439-void-unknown-operand.svelte` | [#3439](https://github.com/baseballyama/rsvelte/issues/3439) | `void` has the single known value `undefined` even when its operand is unknown, while operand-dependent unary expressions remain reactive. |
 | `3455-style-seq-all-known.svelte` | [#3455](https://github.com/baseballyama/rsvelte/issues/3455) | A `style:` value sequence whose chunks are all known takes the non-reactive path. |
 | `3455-style-seq-important.svelte` | [#3455](https://github.com/baseballyama/rsvelte/issues/3455) | The `important` modifier does not hide reactivity in a multi-chunk `style:` directive. |
 | `3455-style-seq-known-first.svelte` | [#3455](https://github.com/baseballyama/rsvelte/issues/3455) | A known first chunk followed by a reactive chunk makes the complete style value reactive. |

@@ -1542,6 +1542,12 @@ impl<'a> EvalCtx<'a> {
 /// Splitting them out lets the server generator and the client transform share
 /// ONE port of upstream's `Evaluation` walk with two identifier resolvers.
 pub(crate) trait EvalScope {
+    /// A target may evaluate the expression after target-specific lowering.
+    /// Return that lowered result here; `None` keeps the shared upstream walk.
+    fn evaluate_override(&self, _node: &Value, _depth: u8) -> Option<Evaluation> {
+        None
+    }
+
     /// Upstream `scope.evaluate`'s `Identifier` case. `node` is the estree node
     /// (its `start` lets a resolver replay Phase 2's scope-correct lookup);
     /// `name` is its `name` field.
@@ -1580,6 +1586,9 @@ pub(crate) fn evaluate_estree<S: EvalScope + ?Sized>(
 ) -> Evaluation {
     if depth > MAX_DEPTH {
         return Evaluation::unknown();
+    }
+    if let Some(evaluation) = scope.evaluate_override(node, depth) {
+        return evaluation;
     }
     let Some(ty) = node_type(node) else {
         return Evaluation::unknown();
