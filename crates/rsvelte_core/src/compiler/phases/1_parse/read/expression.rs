@@ -7145,6 +7145,11 @@ fn acorn_only_violation(
         with_at: Option<u32>,
         export_declare_global_at: Option<u32>,
         check_ts_modifier: bool,
+        check_super: bool,
+        super_at: Option<u32>,
+        method_depth: u32,
+        check_await_identifier: bool,
+        await_identifier_at: Option<u32>,
         content: &'c str,
         ts_modifier_at: Option<u32>,
     }
@@ -7189,7 +7194,34 @@ fn acorn_only_violation(
                     || def.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition,
                 def.span,
             );
+            self.method_depth += 1;
             oxc_ast_visit::walk::walk_method_definition(self, def);
+            self.method_depth -= 1;
+        }
+        fn visit_object_property(&mut self, prop: &oxc_ast::ast::ObjectProperty<'a>) {
+            let is_method = prop.method || prop.kind != oxc_ast::ast::PropertyKind::Init;
+            self.method_depth += u32::from(is_method);
+            oxc_ast_visit::walk::walk_object_property(self, prop);
+            self.method_depth -= u32::from(is_method);
+        }
+        fn visit_super(&mut self, super_: &oxc_ast::ast::Super) {
+            if self.check_super
+                && self.method_depth == 0
+                && self.super_at.is_none_or(|seen| super_.span.start < seen)
+            {
+                self.super_at = Some(super_.span.start);
+            }
+        }
+        fn visit_identifier_reference(&mut self, ident: &oxc_ast::ast::IdentifierReference<'a>) {
+            if self.check_await_identifier
+                && ident.name == "await"
+                && self
+                    .await_identifier_at
+                    .is_none_or(|seen| ident.span.start < seen)
+            {
+                self.await_identifier_at = Some(ident.span.start);
+            }
+            oxc_ast_visit::walk::walk_identifier_reference(self, ident);
         }
         fn visit_property_definition(&mut self, def: &oxc_ast::ast::PropertyDefinition<'a>) {
             self.record_ts_modifier(
@@ -7213,19 +7245,32 @@ fn acorn_only_violation(
     let check_decorator = !is_typescript && content.contains('@');
     let check_with = content.contains("with");
     let check_ts_modifier = !is_typescript && content.contains("class");
+    let check_super = content.contains("super");
+    let check_await_identifier = content.contains("await");
     let mut finder = Scan {
         check_decorator,
         decorator_at: None,
         with_at: None,
         export_declare_global_at: None,
         check_ts_modifier,
+        check_super,
+        super_at: None,
+        method_depth: 0,
+        check_await_identifier,
+        await_identifier_at: None,
         content,
         ts_modifier_at: None,
     };
     // The TypeScript-only rule below needs a token that is cheap to rule out, so
     // a plain-JS script keeps the walk it had.
     let check_ts_acorn = is_typescript && content.contains("global");
-    if check_decorator || check_with || check_ts_modifier || check_ts_acorn {
+    if check_decorator
+        || check_with
+        || check_ts_modifier
+        || check_ts_acorn
+        || check_super
+        || check_await_identifier
+    {
         finder.visit_program(program);
     }
 
@@ -7250,6 +7295,15 @@ fn acorn_only_violation(
         finder
             .ts_modifier_at
             .map(|at| (at, "Unexpected token".to_string())),
+        finder
+            .super_at
+            .map(|at| (at, "'super' keyword outside a method".to_string())),
+        finder.await_identifier_at.map(|at| {
+            (
+                at,
+                "Cannot use keyword 'await' outside an async function".to_string(),
+            )
+        }),
     ]
     .into_iter()
     .flatten()
