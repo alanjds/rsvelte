@@ -1143,13 +1143,6 @@ impl<'a> Parser<'a> {
                 (at, at),
             ));
         }
-        // A complete leading expression leaves the brace demanded at the first
-        // token acorn did not consume.
-        if let Some(offset) = trailing_token_offset(rest, self.ts)
-            && check_js_parse_error_with_pos(&rest[..offset], self.ts).is_none()
-        {
-            return Err(ParseError::expected_token("}", from + offset));
-        }
         if let Some(self_close) = memchr::memmem::find(rest.as_bytes(), b"/>") {
             let before_self_close = rest[..self_close].trim_matches(is_js_whitespace);
             // With no expression before `/>`, upstream's expression reader
@@ -1180,6 +1173,17 @@ impl<'a> Parser<'a> {
                 "Unexpected token".to_string(),
                 (at, at),
             ));
+        }
+        // A complete leading expression leaves the brace demanded at the first
+        // token acorn did not consume. Check this after the close-tag form:
+        // when a broken mustache is followed by an enclosing `{/block}`, OXC's
+        // recovery can treat the block close as trailing input even though
+        // acorn is still lexing the preceding `</tag>` as an unterminated
+        // regexp and throws there.
+        if let Some(offset) = trailing_token_offset(rest, self.ts)
+            && check_js_parse_error_with_pos(&rest[..offset], self.ts).is_none()
+        {
+            return Err(ParseError::expected_token("}", from + offset));
         }
         // Otherwise acorn never got an expression out of the rest of the file,
         // so upstream reports the JS parser's own error rather than the brace.
