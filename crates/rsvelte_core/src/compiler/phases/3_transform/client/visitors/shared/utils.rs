@@ -1252,51 +1252,56 @@ pub fn apply_transforms_to_expression_with_shadowed(
                 // Also handle legacy mode each item mutation: append $.invalidate_inner_signals()
                 if let JsExpr::Identifier(name) = &base_object
                     && !local_scope.contains(name)
-                    && context.state.each_item_names.contains(name)
+                    && let Some(each_ctx) = context
+                        .state
+                        .each_binding_context
+                        .iter()
+                        .rev()
+                        .find(|ctx| {
+                            ctx.item_name == *name
+                                || ctx.destructured_update_paths.contains_key(name.as_str())
+                        })
+                        .cloned()
                 {
-                    context.state.each_item_assign_or_mutate.set(true);
+                    if each_ctx.context_is_identifier {
+                        each_ctx.binding_used.set(true);
+                    }
 
-                    // In legacy mode, wrap the mutation with $.invalidate_inner_signals()
                     // This mirrors the official compiler's `mutate` transform on each items:
                     //   mutate: (_, mutation) => {
                     //     uses_index = true;
                     //     return b.sequence([mutation, ...sequence]);
                     //   }
-                    if !context.state.analysis.runes
-                        && let Some(each_ctx) = context
-                            .state
-                            .each_binding_context
-                            .iter()
-                            .rev()
-                            .find(|ctx| ctx.item_name == *name)
-                            .cloned()
-                        && !each_ctx.invalidation_exprs.is_empty()
-                    {
-                        // Transform the full assignment (apply read transforms to both sides)
-                        let transformed_left = recurse!(context.arena.get_expr(assign.left));
-                        let transformed_right = recurse!(context.arena.get_expr(assign.right));
-                        let mutation = JsExpr::Assignment(JsAssignmentExpression {
-                            operator: assign.operator,
-                            left: context.arena.alloc_expr(transformed_left),
-                            right: context.arena.alloc_expr(transformed_right),
-                        });
+                    // `b.sequence` deliberately remains a SequenceExpression when this
+                    // vector has one element. esrap prints that node with parentheses,
+                    // unlike a bare assignment expression. This matters in runes mode
+                    // and keyed each blocks, where `sequence` is commonly empty.
+                    let transformed_left = recurse!(context.arena.get_expr(assign.left));
+                    let transformed_right = recurse!(context.arena.get_expr(assign.right));
+                    let mutation = JsExpr::Assignment(JsAssignmentExpression {
+                        operator: assign.operator,
+                        left: context.arena.alloc_expr(transformed_left),
+                        right: context.arena.alloc_expr(transformed_right),
+                    });
 
-                        let invalidation_exprs = each_ctx.invalidation_exprs.clone();
-                        let mut seq_exprs = vec![mutation];
-                        let invalidate_inner =
-                            build_invalidate_inner_signals(&invalidation_exprs, &context.arena);
+                    let mut seq_exprs = vec![mutation];
+                    if !each_ctx.is_runes && !each_ctx.invalidation_exprs.is_empty() {
+                        let invalidate_inner = build_invalidate_inner_signals(
+                            &each_ctx.invalidation_exprs,
+                            &context.arena,
+                        );
                         seq_exprs.push(invalidate_inner);
-
-                        if let Some(ref store_name) = each_ctx.store_to_invalidate {
-                            seq_exprs.push(b::call(
-                                &context.arena,
-                                b::member_path(&context.arena, "$.invalidate_store"),
-                                vec![b::id("$$stores"), b::string(store_name)],
-                            ));
-                        }
-
-                        return b::sequence(seq_exprs);
                     }
+
+                    if let Some(ref store_name) = each_ctx.store_to_invalidate {
+                        seq_exprs.push(b::call(
+                            &context.arena,
+                            b::member_path(&context.arena, "$.invalidate_store"),
+                            vec![b::id("$$stores"), b::string(store_name)],
+                        ));
+                    }
+
+                    return b::sequence(seq_exprs);
                 }
 
                 // If the left side's base chain already goes through a Call node,
@@ -1560,45 +1565,48 @@ pub fn apply_transforms_to_expression_with_shadowed(
                 // Also handle legacy mode each item mutation: append $.invalidate_inner_signals()
                 if let JsExpr::Identifier(name) = &base_object
                     && !local_scope.contains(name)
-                    && context.state.each_item_names.contains(name)
+                    && let Some(each_ctx) = context
+                        .state
+                        .each_binding_context
+                        .iter()
+                        .rev()
+                        .find(|ctx| {
+                            ctx.item_name == *name
+                                || ctx.destructured_update_paths.contains_key(name.as_str())
+                        })
+                        .cloned()
                 {
-                    context.state.each_item_assign_or_mutate.set(true);
-
-                    // In legacy mode, wrap the update with $.invalidate_inner_signals()
-                    if !context.state.analysis.runes
-                        && let Some(each_ctx) = context
-                            .state
-                            .each_binding_context
-                            .iter()
-                            .rev()
-                            .find(|ctx| ctx.item_name == *name)
-                            .cloned()
-                        && !each_ctx.invalidation_exprs.is_empty()
-                    {
-                        // Transform the update expression (apply read transforms)
-                        let transformed_arg = recurse!(context.arena.get_expr(update.argument));
-                        let mutation = JsExpr::Update(JsUpdateExpression {
-                            operator: update.operator,
-                            argument: context.arena.alloc_expr(transformed_arg),
-                            prefix: update.prefix,
-                        });
-
-                        let invalidation_exprs = each_ctx.invalidation_exprs.clone();
-                        let mut seq_exprs = vec![mutation];
-                        let invalidate_inner =
-                            build_invalidate_inner_signals(&invalidation_exprs, &context.arena);
-                        seq_exprs.push(invalidate_inner);
-
-                        if let Some(ref store_name) = each_ctx.store_to_invalidate {
-                            seq_exprs.push(b::call(
-                                &context.arena,
-                                b::member_path(&context.arena, "$.invalidate_store"),
-                                vec![b::id("$$stores"), b::string(store_name)],
-                            ));
-                        }
-
-                        return b::sequence(seq_exprs);
+                    if each_ctx.context_is_identifier {
+                        each_ctx.binding_used.set(true);
                     }
+
+                    // As with assignments above, preserve the one-element sequence
+                    // that upstream builds even when there is nothing to invalidate.
+                    let transformed_arg = recurse!(context.arena.get_expr(update.argument));
+                    let mutation = JsExpr::Update(JsUpdateExpression {
+                        operator: update.operator,
+                        argument: context.arena.alloc_expr(transformed_arg),
+                        prefix: update.prefix,
+                    });
+
+                    let mut seq_exprs = vec![mutation];
+                    if !each_ctx.is_runes && !each_ctx.invalidation_exprs.is_empty() {
+                        let invalidate_inner = build_invalidate_inner_signals(
+                            &each_ctx.invalidation_exprs,
+                            &context.arena,
+                        );
+                        seq_exprs.push(invalidate_inner);
+                    }
+
+                    if let Some(ref store_name) = each_ctx.store_to_invalidate {
+                        seq_exprs.push(b::call(
+                            &context.arena,
+                            b::member_path(&context.arena, "$.invalidate_store"),
+                            vec![b::id("$$stores"), b::string(store_name)],
+                        ));
+                    }
+
+                    return b::sequence(seq_exprs);
                 }
 
                 if let JsExpr::Identifier(name) = base_object
