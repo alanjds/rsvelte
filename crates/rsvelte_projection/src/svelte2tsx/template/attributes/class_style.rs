@@ -50,10 +50,14 @@ pub fn class_style_directive_seg(attr: &Attribute, source: &str) -> Option<Vec<S
             segs_push_lit(&mut out, "__sveltets_2_ensureType(String, Number, ");
             match &style.value {
                 AttributeValue::True(_) => {
-                    // Shorthand `style:color` → `…, color);` (implicit
-                    // reference to the `color` binding; synthesised from
-                    // the directive name, so no source range to pin).
-                    segs_push_lit(&mut out, &style.name);
+                    // Upstream reuses the source from after `style:` through the directive's
+                    // end. This deliberately includes a shorthand modifier: its pinned output
+                    // for `style:color|important` is the expression `color|important`.
+                    segs_push_src(
+                        &mut out,
+                        style.start as usize + "style:".len(),
+                        style.end as usize,
+                    );
                 }
                 AttributeValue::Expression(expr) => {
                     if let Some((s, e)) = get_expression_range(&expr.expression) {

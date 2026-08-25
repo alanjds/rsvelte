@@ -89,6 +89,28 @@ fn style_shorthand_directive_uses_ensure_type() {
 }
 
 #[test]
+fn style_shorthand_modifier_matches_the_upstream_source_slice() {
+    let out = to_tsx(
+        "<script lang=\"ts\">\n  let color = 'red';\n</script>\n\
+         <div style:color|important>hi</div>\n\
+         <div style:color|important={color}>hi</div>",
+    );
+
+    assert!(
+        out.matches("__sveltets_2_ensureType(String, Number, color|important);")
+            .count()
+            == 1,
+        "style shorthand modifier did not retain the upstream source slice:\n{out}"
+    );
+    assert!(
+        out.matches("__sveltets_2_ensureType(String, Number, color);")
+            .count()
+            == 1,
+        "valued style modifier must continue to use only its expression:\n{out}"
+    );
+}
+
+#[test]
 fn class_style_alongside_real_attributes() {
     // A real attribute stays in props; the directive does not.
     let out = to_tsx(
