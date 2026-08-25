@@ -1235,7 +1235,7 @@ pub fn apply_transforms_to_expression_with_shadowed(
                         .and_then(|transform| transform.read)
                         .map_or_else(
                             || JsExpr::Identifier(name.clone()),
-                            |read| read(&context.arena, b::id(name)),
+                            |read| read(&context.arena, b::id(name.as_str())),
                         );
                     (b::raw(path.as_str()), current_value)
                 } else {
@@ -1243,7 +1243,7 @@ pub fn apply_transforms_to_expression_with_shadowed(
                     // path writes directly through $$item and needs no index argument.
                     mark_each_item_assigned_or_mutated(&context.state, name);
                     if context.state.analysis.runes {
-                        (b::id(name), b::id(name))
+                        (b::id(name.as_str()), b::id(name.as_str()))
                     } else {
                         (
                             build_reassigned_item_read(&each_ctx, &context.arena),
