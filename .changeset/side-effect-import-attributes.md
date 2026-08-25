@@ -1,5 +1,5 @@
 ---
-"@rsvelte/core": patch
+"@rsvelte/compiler": patch
 ---
 
 Preserve import attributes on side-effect imports.
