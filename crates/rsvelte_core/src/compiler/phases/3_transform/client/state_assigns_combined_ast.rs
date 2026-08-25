@@ -42,7 +42,7 @@
 
 use std::cell::RefCell;
 
-use oxc_allocator::Allocator;
+use oxc_allocator::{Allocator, ArenaVec, ReplaceWith};
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::ParseOptions;
@@ -442,9 +442,62 @@ fn transform_state_assigns_in_place(
                 changed: false,
             };
             oxc_ast_visit::VisitMut::visit_program(&mut rewriter, program);
+            if rewriter.changed {
+                restore_legacy_pre_effect_deps(program, allocator);
+            }
             rewriter.changed
         },
     )
+}
+
+/// Preserve the builder-made single-element dependency sequence when this pass
+/// reprints a generated legacy reactive statement.
+///
+/// The reactive transform emits `() => (dep)` because upstream builds the body
+/// as a `SequenceExpression`. Parsing that generated text produces a
+/// `ParenthesizedExpression`, which esrap correctly prints without redundant
+/// parentheses. Rebuild only the known generated thunk; ordinary source
+/// parentheses must keep following the parser/printer rules.
+fn restore_legacy_pre_effect_deps<'a>(program: &mut Program<'a>, allocator: &'a Allocator) {
+    let ab = oxc_ast::builder::AstBuilder::new(allocator);
+    for stmt in program.body.iter_mut() {
+        let Statement::ExpressionStatement(es) = stmt else {
+            continue;
+        };
+        let Expression::CallExpression(call) = &mut es.expression else {
+            continue;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            continue;
+        };
+        if !matches!(&member.object, Expression::Identifier(id) if id.name == "$")
+            || member.property.name != "legacy_pre_effect"
+        {
+            continue;
+        }
+        let Some(Argument::ArrowFunctionExpression(arrow)) = call.arguments.first_mut() else {
+            continue;
+        };
+        let Some(body) = arrow.get_expression_mut() else {
+            continue;
+        };
+        if !matches!(&*body, Expression::ParenthesizedExpression(paren)
+            if !matches!(paren.expression, Expression::SequenceExpression(_)))
+        {
+            continue;
+        }
+        body.replace_with(|expression| {
+            let Expression::ParenthesizedExpression(paren) = expression else {
+                unreachable!()
+            };
+            let span = paren.span;
+            Expression::SequenceExpression(SequenceExpression::boxed(
+                span,
+                ArenaVec::from_value_in(paren.unbox().expression, &ab),
+                &ab,
+            ))
+        });
+    }
 }
 
 #[derive(Clone, Copy)]
