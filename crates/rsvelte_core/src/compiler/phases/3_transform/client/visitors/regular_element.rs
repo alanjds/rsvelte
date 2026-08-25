@@ -34,7 +34,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::transition_dire
 use crate::compiler::phases::phase3_transform::client::visitors::use_directive::use_directive;
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::{
-    JsExpr, JsLiteral, JsPattern, JsStatement,
+    JsExpr, JsLiteral, JsPattern, JsStatement, JsUnaryOp,
 };
 use crate::compiler::phases::phase3_transform::utils::is_svelte_whitespace_only;
 use crate::compiler::phases::phase3_transform::utils::{
@@ -2286,6 +2286,14 @@ fn is_value_known_defined(
         JsExpr::Object(_) => false,
         // Template literals are always strings (defined)
         JsExpr::TemplateLiteral(_) => true,
+        // Upstream evaluates every binary operator to a number, string, or
+        // boolean sentinel when its operands are not statically known. None
+        // of those results is nullish.
+        JsExpr::Binary(_) => true,
+        // Every unary operator except `void` produces a non-nullish value.
+        JsExpr::Unary(unary) => !matches!(unary.operator, JsUnaryOp::Void),
+        // Function values are represented by upstream's FUNCTION sentinel.
+        JsExpr::Arrow(_) | JsExpr::Function(_) => true,
         // Upstream unions the branch values, so a branch it cannot evaluate
         // makes the whole thing unknown. Requiring both is the conservative
         // reading of that: it never claims defined where upstream would not.
