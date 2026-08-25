@@ -6410,7 +6410,18 @@ impl EvalScope for ClientEvalScope<'_, '_> {
             })
             .or_else(|| self.context.state.get_binding(name));
         match binding {
-            Some(b) => evaluate_binding_initial(self, b, depth),
+            // `build_expression` converts the template expression, but an
+            // initializer reached through scope resolution is still its source
+            // AST. In particular, dev equality lowering does not apply inside
+            // that initializer (#3570).
+            Some(b) => evaluate_binding_initial(
+                &ClientEvalScope {
+                    context: self.context,
+                    converted: false,
+                },
+                b,
+                depth,
+            ),
             None if name == "undefined" => Evaluation::single(EvalValue::Undefined),
             None => Evaluation::unknown(),
         }

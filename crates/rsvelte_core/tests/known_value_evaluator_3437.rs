@@ -6,12 +6,16 @@
 use rsvelte_core::{CompileOptions, GenerateMode, compile, compiler::CssMode};
 
 fn client(src: &str) -> String {
+    client_with_dev(src, false)
+}
+
+fn client_with_dev(src: &str, dev: bool) -> String {
     compile(
         src,
         CompileOptions {
             filename: Some("Test.svelte".to_string()),
             generate: GenerateMode::Client,
-            dev: false,
+            dev,
             css: CssMode::External,
             ..Default::default()
         },
@@ -19,6 +23,25 @@ fn client(src: &str) -> String {
     .expect("must compile")
     .js
     .code
+}
+
+/// Dev converts equality expressions in the template itself to runtime helper
+/// calls. A binding initializer reached through `scope.evaluate`, however, is
+/// still source AST and must fold just as it does in prod (#3570).
+#[test]
+fn equality_in_a_binding_initializer_folds_in_dev() {
+    for operator in ["===", "!==", "==", "!="] {
+        let out = client_with_dev(
+            &format!(
+                "<script>\n\tconst v = 'a' {operator} 'a' ? 1 : 2;\n</script>\n<b>{{v}}</b>\n"
+            ),
+            true,
+        );
+        assert!(
+            out.contains("b.textContent = '") && !out.contains("template_effect"),
+            "an equality initializer must fold in dev for `{operator}`; got:\n{out}"
+        );
+    }
 }
 
 /// `void <anything>` is `undefined` — one value, so `is_known` holds whatever
