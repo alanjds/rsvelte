@@ -368,13 +368,22 @@ picked.
 ### 11. Does this expression contain a call? — [S]
 
 Filed as **#3569**; recorded here so the inventory is complete rather than restated.
-`ast/template.rs:1342` `set_has_call` has seven writers, and phase 3 re-derives the same bit at
+`ast/template.rs` `set_has_call` has three reachable phase-2 writers, and phase 3 re-derives the same bit at
 least three more times — `shared/element.rs:518` `json_contains_call`, `shared/element.rs:452`
 `walk_metadata_flags` (which additionally sets `has_call` for a `SpreadElement`, unlike the other
 two), and `shared/utils.rs:5944` `expression_has_call`.
 
 Upstream computes it once in phase 2 into `node.metadata.expression.has_call`; phase 3 only reads
-it. Whether the copies disagree on a reachable input: `未測定` — see #3569.
+it. Whether the reachable copies disagree on an input: `未測定` — see #3569.
+
+Three phase-2 writes listed when #3569 was opened were structurally unreachable and were removed:
+the `SpreadElement` and `TaggedTemplateExpression` arms in the typed script walker, and the typed
+`CallExpression` visitor. `VisitorContext.expression` starts as `None`; the only site that installs
+`Some` is the `{#if}` visitor, and it walks its condition through `walk_js_expression_node`, not the
+typed script walker. This is a static reachability result, not an ablation result: deleting those
+three writes cannot change output while that single producer and consumer remain disjoint. The
+remaining phase-2 writers are the reachable call, object-spread and top-level-spread arms in the
+template-expression walker.
 
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 
