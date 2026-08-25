@@ -284,3 +284,24 @@ uncoded panic instead of a diagnostic.
   compiler at all, so no published source carries the shape.
 - **Output-parseability gate**: rsvelte's output is valid JavaScript either way — the divergence is
   whether the input is accepted, which that gate does not ask.
+
+---
+
+## Awaited `autofocus` and event attributes (client)
+
+**Pinned by** `crates/rsvelte_core/tests/async_autofocus_event_3651.rs`.
+**Reported upstream** in
+`upstream_issues/3651-svelte-async-autofocus-and-event-output-is-unparseable.md`.
+
+With `experimental.async: true`, official Svelte 5.56.10 emits
+`$.autofocus(input, await p)` and puts `(await p)?.apply(...)` inside a plain
+event-handler function. Both are syntax errors because neither containing function
+is async. rsvelte routes only the awaited cases through a local `Memoizer`, so the
+await remains inside an async value thunk and the runtime call receives `$0`, the
+resolved result. Synchronous output is unchanged.
+
+The ordinary parity gates cannot observe the correction: both compilers previously
+agreed, while the matrix treats unparseable official output as an oracle rejection and
+aborts rather than producing a keyed divergence. Gate-coverage 5r records that blind
+spot. Remove this entry and converge on upstream when its two visitors adopt an async
+memoization path.
