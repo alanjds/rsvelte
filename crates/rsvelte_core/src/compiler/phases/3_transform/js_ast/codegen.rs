@@ -959,9 +959,15 @@ impl<'a> JsCodegen<'a> {
                 self.output.push_str(code);
             }
             JsExpr::Spanned(inner_id, start, end) => {
-                self.record_span_start(*start, *end);
+                let is_comment_argument_marker =
+                    *start >= rsvelte_esrap::COMMENT_ARGUMENT_CALLEE_BASE;
+                if !is_comment_argument_marker {
+                    self.record_span_start(*start, *end);
+                }
                 self.emit_expression(self.arena.get_expr(*inner_id));
-                self.record_span_start(*end, *end);
+                if !is_comment_argument_marker {
+                    self.record_span_start(*end, *end);
+                }
             }
             // The comment coordinates only reach the oxc printer; the text
             // fallback has no comment channel to place them in.

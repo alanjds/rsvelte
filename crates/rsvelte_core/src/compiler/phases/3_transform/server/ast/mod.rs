@@ -476,9 +476,9 @@ impl<'a> ServerTransformState<'a> {
         region: (u32, u32),
         expr_span: (u32, u32),
         expr: &mut OxcExpression<'a>,
-    ) {
+    ) -> bool {
         let Some((start, end)) = self.live_template_region(region) else {
-            return;
+            return false;
         };
         let (expr_start, expr_end) = expr_span;
         let own = self.template_region_comments(start, end);
@@ -487,22 +487,22 @@ impl<'a> ServerTransformState<'a> {
             _ => None,
         };
         if own.is_empty() && carried.is_none() {
-            return;
+            return false;
         }
         let region_start = carried.as_ref().map_or(start, |pending| pending.start);
         let region_end = end.max(expr_end);
         if expr_start < region_start || region_end as usize > self.source.len() {
-            return;
+            return false;
         }
         let mut comments = carried.map(|pending| pending.comments).unwrap_or_default();
         comments.extend(own);
         comments
             .retain(|comment| comment.span.start >= region_start && comment.span.end <= region_end);
         if comments.is_empty() {
-            return;
+            return false;
         }
         let Some(text) = self.source.get(region_start as usize..region_end as usize) else {
-            return;
+            return false;
         };
         for comment in &mut comments {
             comment.span = Span::new(
@@ -527,7 +527,9 @@ impl<'a> ServerTransformState<'a> {
                     base + (expr_end - region_start),
                 );
             }
+            return true;
         }
+        false
     }
 
     pub fn place_template_pattern_comments(

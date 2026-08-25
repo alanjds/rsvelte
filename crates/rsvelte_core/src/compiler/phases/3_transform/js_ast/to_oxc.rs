@@ -1599,13 +1599,16 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 )))
             }
             JsExpr::Class(class) => self.class(class),
-            // `Spanned` wraps a real inner expression with the original-source
-            // byte span (start, end). Convert the inner expression and stamp its
-            // span so esrap's `print_with_map` maps it back to the user source.
+            // `Spanned` normally wraps a real inner expression with the
+            // original-source byte span (start, end). The reserved callee
+            // range is printer metadata, not a source position, so it must not
+            // raise the boundary below which source spans live.
             JsExpr::Spanned(inner, start, end) => {
                 let mut e = self.expr_id(*inner)?;
                 *e.span_mut() = Span::new(*start, *end);
-                self.note_span(*end);
+                if *start < rsvelte_esrap::COMMENT_ARGUMENT_CALLEE_BASE {
+                    self.note_span(*end);
+                }
                 Some(e)
             }
             // `Raw` carries opaque JS expression text. Parse it into a real oxc

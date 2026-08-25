@@ -86,7 +86,7 @@ pub fn await_block(node: &AwaitBlock, context: &mut ComponentContext) {
     let expr_metadata = ExpressionMetadata::from_template_metadata(&node.metadata.expression);
 
     let mut built_expr = build_expression(context, &converted_expr, &expr_metadata);
-    if let (Some(start), Some(end), Some(header_end)) = (
+    let has_header_comments = if let (Some(start), Some(end), Some(header_end)) = (
         node.expression.start(),
         node.expression.end(),
         crate::compiler::phases::phase1_parse::utils::find_matching_bracket(
@@ -101,7 +101,10 @@ pub fn await_block(node: &AwaitBlock, context: &mut ComponentContext) {
         node.start + 7,
     ) {
         built_expr = region.anchor(&context.arena, built_expr, start, end);
-    }
+        true
+    } else {
+        false
+    };
 
     // Check for blockers before moving built_expr into thunk
     let blocker_exprs = context
@@ -150,11 +153,15 @@ pub fn await_block(node: &AwaitBlock, context: &mut ComponentContext) {
     if let Some(catch_fn) = catch_block {
         await_args.push(catch_fn);
     }
-    let await_call = b::call(
-        &context.arena,
-        b::member_path(&context.arena, "$.await"),
-        await_args,
-    );
+    let mut await_callee = b::member_path(&context.arena, "$.await");
+    if has_header_comments {
+        await_callee = JsExpr::Spanned(
+            context.arena.alloc_expr(await_callee),
+            rsvelte_esrap::COMMENT_ARGUMENT_CALLEE_BASE + 1,
+            rsvelte_esrap::COMMENT_ARGUMENT_CALLEE_BASE + 1,
+        );
+    }
+    let await_call = b::call(&context.arena, await_callee, await_args);
 
     // Add svelte metadata
     let stmt = if context.state.dev {
