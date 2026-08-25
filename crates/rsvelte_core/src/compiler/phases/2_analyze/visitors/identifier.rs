@@ -265,17 +265,33 @@ fn visit_identifier_inner(
     // The official compiler has `node !== binding.node` check to skip warnings for the
     // declaration identifier itself. We approximate this by checking if the identifier
     // is inside a VariableDeclarator's `id` pattern (which is the declaration site).
-    let is_declaration_node = context.js_path.iter().any(|ancestor| {
-        if ancestor.get_type_str() == Some("VariableDeclarator") {
-            // Check if the current node's position falls within the `id` pattern range
-            let id_start = ancestor.get_child_field_start("id", context.parse_arena);
-            let id_end = ancestor.get_child_field_end("id", context.parse_arena);
-            if let (Some(id_s), Some(id_e)) = (id_start, id_end) {
-                return start >= id_s && start < id_e;
+    // A computed key inside the pattern is evaluated rather than bound. Keep
+    // identifiers in that key out of the broad `VariableDeclarator.id` guard;
+    // the property's value remains a declaration slot.
+    let is_computed_pattern_key = context.js_path.iter().any(|ancestor| {
+        ancestor.get_type_str() == Some("Property")
+            && ancestor.get_field_bool("computed").unwrap_or(false)
+            && match (
+                ancestor.get_child_field_start("key", context.parse_arena),
+                ancestor.get_child_field_end("key", context.parse_arena),
+            ) {
+                (Some(key_start), Some(key_end)) => start >= key_start && start < key_end,
+                _ => false,
             }
-        }
-        false
     });
+
+    let is_declaration_node = !is_computed_pattern_key
+        && context.js_path.iter().any(|ancestor| {
+            if ancestor.get_type_str() == Some("VariableDeclarator") {
+                // Check if the current node's position falls within the `id` pattern range
+                let id_start = ancestor.get_child_field_start("id", context.parse_arena);
+                let id_end = ancestor.get_child_field_end("id", context.parse_arena);
+                if let (Some(id_s), Some(id_e)) = (id_start, id_end) {
+                    return start >= id_s && start < id_e;
+                }
+            }
+            false
+        });
 
     if context.analysis.runes && !is_declaration_node {
         let binding = &context.analysis.root.bindings[binding_idx];
