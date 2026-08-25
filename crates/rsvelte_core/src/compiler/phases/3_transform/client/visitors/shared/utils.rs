@@ -1264,7 +1264,7 @@ pub fn apply_transforms_to_expression_with_shadowed(
                         .cloned()
                 {
                     if each_ctx.context_is_identifier {
-                        each_ctx.binding_used.set(true);
+                        context.state.each_item_assign_or_mutate.set(true);
                     }
 
                     // This mirrors the official compiler's `mutate` transform on each items:
@@ -1446,6 +1446,14 @@ pub fn apply_transforms_to_expression_with_shadowed(
         }
 
         JsExpr::Sequence(seq) => {
+            // JavaScript source cannot contain a one-element SequenceExpression;
+            // this shape is only produced by builders such as the each-item
+            // mutate transform. Its child has already been transformed, so
+            // descending again would wrap the same mutation repeatedly.
+            if seq.expressions.len() == 1 {
+                return JsExpr::Sequence(seq.clone());
+            }
+
             let transformed_exprs: Vec<JsExpr> =
                 seq.expressions.iter().map(|e| recurse!(e)).collect();
 
@@ -1577,7 +1585,7 @@ pub fn apply_transforms_to_expression_with_shadowed(
                         .cloned()
                 {
                     if each_ctx.context_is_identifier {
-                        each_ctx.binding_used.set(true);
+                        context.state.each_item_assign_or_mutate.set(true);
                     }
 
                     // As with assignments above, preserve the one-element sequence

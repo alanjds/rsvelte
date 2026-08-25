@@ -52,7 +52,7 @@ fn runes_each_item_assignments_updates_and_bindings_keep_parentheses() {
 }
 
 #[test]
-fn keyed_each_item_mutation_keeps_the_bare_item_sequence() {
+fn keyed_each_item_mutation_keeps_the_sequence() {
     let output = client(
         r#"<script>
 	let rows = $state([{ id: 1, picked: [] }]);
@@ -65,7 +65,7 @@ fn keyed_each_item_mutation_keeps_the_bare_item_sequence() {
     );
 
     assert!(
-        output.contains("() => (row.picked = 1)"),
+        output.contains("() => ($.get(row).picked = 1)"),
         "the keyed each mutation must remain a one-element sequence:\n{output}"
     );
 }
@@ -103,8 +103,8 @@ fn indexed_collection_access_is_not_mistaken_for_an_each_item_mutation() {
     );
 
     assert!(
-        output.contains("() => $.get(rows)[i].picked = 1"),
+        output.contains("() => rows[i].picked = 1"),
         "the indexed collection negative control changed:\n{output}"
     );
-    assert!(!output.contains("() => ($.get(rows)[i].picked = 1)"));
+    assert!(!output.contains("() => (rows[i].picked = 1)"));
 }
