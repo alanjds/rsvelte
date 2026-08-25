@@ -284,3 +284,20 @@ uncoded panic instead of a diagnostic.
   compiler at all, so no published source carries the shape.
 - **Output-parseability gate**: rsvelte's output is valid JavaScript either way — the divergence is
   whether the input is accepted, which that gate does not ask.
+
+---
+
+## CSS custom-property block values
+
+**Pinned by** `crates/rsvelte_core/tests/css_custom_property_block_3052.rs`.
+**Reported upstream** in `upstream_issues/3052-svelte-css-custom-property-brace-block.md`.
+
+CSS custom properties accept the `<declaration-value>` grammar, including balanced `{}` and `[]`
+blocks. The official compiler instead parses their values with the ordinary declaration-value
+scanner and raises `css_expected_identifier` at the first `{`. Browsers and general CSS parsers
+accept the value.
+
+rsvelte preserves balanced custom-property blocks and the declarations following them. It does
+not extend that grammar to ordinary properties, which keep the existing rejection. This is an
+intentional error-presence divergence: rejecting valid CSS changes the component's available
+styles, so it is not a byte-only parity choice.
