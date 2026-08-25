@@ -2058,6 +2058,10 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         if node.specifiers.as_ref().is_none_or(|v| v.is_empty()) {
             ctx.write("import ");
             ctx.write(Self::string_literal(&node.source));
+            // Upstream esrap returns before printing this clause. Import
+            // attributes affect module loading, so dropping them is not a
+            // byte-only formatting difference (#3635).
+            Self::import_attributes(node.with_clause.as_deref(), ctx);
             ctx.write_ascii(b';');
             return;
         }
@@ -5513,6 +5517,14 @@ mod tests {
             "unsupported node: {missing:?} for {src:?}"
         );
         out
+    }
+
+    #[test]
+    fn side_effect_import_keeps_attributes() {
+        assert_eq!(
+            print_ok("import './data.json' with { type: 'json' }"),
+            "import './data.json' with { type: 'json' };"
+        );
     }
 
     fn print_with_comments_ok(src: &str) -> String {
