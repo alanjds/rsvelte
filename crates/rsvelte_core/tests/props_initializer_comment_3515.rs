@@ -44,14 +44,17 @@ fn line_comment_after_props_assignment_breaks_the_prop_call() {
 }
 
 #[test]
-fn comments_after_plain_and_rest_patterns_flush_after_the_declaration() {
+fn a_plain_pattern_comment_flushes_at_the_next_generated_node() {
     let plain = client(
         "let { a } = /* plain */ $props();",
         "<button onclick={() => a++}>{a}</button>",
         false,
     );
-    assert_contains(&plain, "let a = $.prop($$props, 'a', 7);\n\t/* plain */");
+    assert_contains(&plain, "var /* plain */\n\tbutton = root();");
+}
 
+#[test]
+fn a_rest_pattern_comment_flushes_after_the_declaration() {
     let rest = client(
         "let { a, ...rest } = // rest\n\t\t$props();",
         "{a}{rest.x}",
@@ -71,5 +74,5 @@ fn multiple_and_multiline_comments_keep_source_order_inside_the_prop_call() {
     assert_contains(&multiple, "1 /* one */ /* two */);");
 
     let multiline = client("let { a = 1 } = /* one\n+two */ $props();", "{a}", false);
-    assert_contains(&multiline, "1 /* one\n+two */);");
+    assert_contains(&multiline, "1 /* one\n\t\t+two */\n\t);");
 }
