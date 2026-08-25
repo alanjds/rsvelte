@@ -75,7 +75,10 @@ impl EvalScope for AnalysisEvalScope<'_> {
 /// Upstream's complete Identifier `has_state` condition. In particular, a
 /// rune binding kind alone does not make a read reactive: an unchanged
 /// `$derived(1)` has one known value and is written once (#3437).
-pub(super) fn binding_reference_has_state(binding_index: usize, context: &VisitorContext) -> bool {
+pub(in crate::compiler::phases::phase2_analyze::visitors) fn binding_reference_has_state(
+    binding_index: usize,
+    context: &VisitorContext,
+) -> bool {
     let binding = &context.analysis.root.bindings[binding_index];
     binding.kind != BindingKind::Static
         && (matches!(
