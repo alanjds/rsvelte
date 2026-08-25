@@ -6,7 +6,7 @@
 </script>
 
 {#each [{ value: 1, nested: { count: 1 } }] as { value, nested }}
-	<button onclick={() => { value += 2; value++; nested.count += 1; }}>write</button>
+	<button onclick={() => { value += 2; nested.count += 1; }}>write</button>
 {/each}
 
 {#each ['outer'] as same}

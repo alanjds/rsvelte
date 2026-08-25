@@ -1542,7 +1542,7 @@ pub fn apply_transforms_to_expression_with_shadowed(
                 {
                     let update_target = destructured_path.as_deref().map_or_else(
                         || build_reassigned_item_read(&each_ctx, &context.arena),
-                        |path| b::raw(path),
+                        b::raw,
                     );
                     let update_expr = b::update(
                         &context.arena,
