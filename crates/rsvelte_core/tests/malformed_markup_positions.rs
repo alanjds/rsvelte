@@ -64,6 +64,12 @@ const POINT_ERRORS: &[(&str, &str, u32)] = &[
     // A mustache with no `}` anywhere demands one where the expression stopped.
     ("{@html z\n", "expected_token", 8),
     ("{@render f()\n", "expected_token", 12),
+    // A close tag after a broken expression is lexed as `< /regexp` by acorn.
+    // OXC points at the slash; upstream points one byte later, where that
+    // unterminated regexp stopped. An enclosing block close must not be
+    // mistaken for this mustache's missing brace either.
+    ("<b>{v</b>", "js_parse_error", 7),
+    ("{#if flag}{@const c = 1<b>x</b>{/if}", "js_parse_error", 29),
 ];
 
 #[test]
