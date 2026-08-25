@@ -2767,6 +2767,56 @@ fn globals_fold_client_code(source: &str) -> String {
     .code
 }
 
+fn dev_fold_client_code(source: &str) -> String {
+    crate::compiler::compile(
+        source,
+        crate::compiler::CompileOptions {
+            generate: crate::compiler::GenerateMode::Client,
+            filename: Some("dev-fold.svelte".to_string()),
+            dev: true,
+            ..Default::default()
+        },
+    )
+    .expect("compiles")
+    .js
+    .code
+}
+
+#[test]
+fn dev_equality_in_declaration_initializers_still_folds_template_reads() {
+    for (operator, expected, helper) in [
+        ("===", "2", "$.strict_equals"),
+        ("!==", "1", "$.strict_equals"),
+        ("==", "1", "$.equals"),
+        ("!=", "2", "$.equals"),
+    ] {
+        let declaration = dev_fold_client_code(&format!(
+            "<script>\n\tconst v = '1' {operator} 1 ? 1 : 2;\n</script>\n<b>{{v}}</b>\n"
+        ));
+        assert!(
+            declaration.contains(&format!(".textContent = '{expected}';")),
+            "a declaration initializer using `{operator}` must fold: {declaration}"
+        );
+        assert!(
+            !declaration.contains("$.template_effect"),
+            "a folded declaration read must stay non-reactive: {declaration}"
+        );
+
+        // Control: a template equality is evaluated after the dev visitor has
+        // converted it to a runtime helper call, so it must not be folded as if
+        // it were the original BinaryExpression.
+        let inline = dev_fold_client_code(&format!("<b>{{'1' {operator} 1 ? 1 : 2}}</b>\n"));
+        assert!(
+            inline.contains(helper),
+            "an inline `{operator}` must retain dev instrumentation: {inline}"
+        );
+        assert!(
+            !inline.contains(".textContent = "),
+            "an inline dev equality must not take the static text fast path: {inline}"
+        );
+    }
+}
+
 /// Upstream's `globals` table folds a call to a known-pure global over known
 /// arguments, so an element whose only child is such a value keeps the
 /// `textContent` fast path. Every row was read off svelte 5.56.9.

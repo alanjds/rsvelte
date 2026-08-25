@@ -4467,11 +4467,17 @@ fn get_literal_value_complex(
         "BinaryExpression" => {
             let operator = obj.get("operator").and_then(|v| v.as_str())?;
 
-            // Upstream evaluates the *converted* expression, and in dev the
-            // `BinaryExpression` visitor has already turned an equality into a
-            // `$.strict_equals` / `$.equals` call — which never evaluates to a
-            // known value, so the chunk stays a call instead of folding.
-            if context.state.options.dev && matches!(operator, "===" | "!==" | "==" | "!=") {
+            // At the template-expression root upstream evaluates the
+            // *converted* expression, and in dev the `BinaryExpression` visitor
+            // has already turned an equality into a `$.strict_equals` /
+            // `$.equals` call. Once `scope.evaluate` follows an identifier into
+            // its binding initializer, however, it evaluates that original AST
+            // node. Keep the dev bail at depth zero only so declaration
+            // initializers retain their normal constant-folding semantics.
+            if context.state.options.dev
+                && INITIAL_EVAL_DEPTH.with(|d| d.get()) == 0
+                && matches!(operator, "===" | "!==" | "==" | "!=")
+            {
                 return None;
             }
 
