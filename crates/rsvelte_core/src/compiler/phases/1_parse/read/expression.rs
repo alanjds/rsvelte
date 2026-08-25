@@ -1981,6 +1981,27 @@ pub fn check_js_statement_parse_error(content: &str, ts: bool) -> Option<(String
     })
 }
 
+/// Whether `content` parses as a JavaScript/TypeScript variable declaration.
+///
+/// Upstream's declaration-tag reader distinguishes a successfully parsed
+/// `VariableDeclaration` from an `ExpressionStatement`; parse success alone is
+/// not enough to commit a `{let ...}`-shaped tag to the declaration path.
+pub fn is_js_variable_declaration(content: &str, ts: bool) -> bool {
+    with_oxc_allocator(|allocator| {
+        let source_type = if ts {
+            SourceType::ts()
+        } else {
+            SourceType::mjs()
+        };
+        let result = OxcParser::new(allocator, content, source_type).parse();
+        result.diagnostics.is_empty()
+            && matches!(
+                result.program.body.first(),
+                Some(oxc_ast::ast::Statement::VariableDeclaration(_))
+            )
+    })
+}
+
 /// [`trailing_token_offset`], confirmed by re-parsing the leading slice.
 ///
 /// The probe reports where OXC's first label sits, which is also where an error

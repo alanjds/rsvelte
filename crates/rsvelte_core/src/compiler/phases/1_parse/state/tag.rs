@@ -261,10 +261,11 @@ impl<'a> Parser<'a> {
         // Single declarator: split at the first top-level assignment `=`.
         let first_equals = find_top_level_assignment(body_text);
 
-        // The body must contain an assignment with an initializer — upstream
-        // emits `declaration_tag_invalid_type` in strict mode, and falls back
-        // to a placeholder VariableDeclaration with an empty-name identifier
-        // in loose mode so editor tooling sees a continuous AST shape.
+        // An initializer is optional for `let` but required for `const`.
+        // Upstream accepts a successfully parsed `VariableDeclaration` here,
+        // including `{let x}`, and rejects any other statement shape. Loose
+        // mode falls back to a placeholder declaration when parsing fails so
+        // editor tooling sees a continuous AST shape.
         let eq_idx = match first_equals {
             Some(i) => i,
             None => {
@@ -296,6 +297,14 @@ impl<'a> Parser<'a> {
                             msg,
                             (abs, abs),
                         ));
+                    }
+                    if super::super::read::expression::is_js_variable_declaration(
+                        stmt_text, self.ts,
+                    ) {
+                        let owned = vec![(0, body_text.to_string())];
+                        return Ok(Some(self.build_multi_declarator_tag(
+                            start, decl_start, body_start, body_end, kind, &owned,
+                        )));
                     }
                     return Err(crate::error::ParseError::svelte(
                         "declaration_tag_invalid_type",
