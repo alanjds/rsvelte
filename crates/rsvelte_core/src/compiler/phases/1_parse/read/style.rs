@@ -1991,7 +1991,11 @@ impl<'a> CssParser<'a> {
                 ']' if is_custom_property && bracket_depth > 0 => bracket_depth -= 1,
                 '{' if is_custom_property => brace_depth += 1,
                 '}' if is_custom_property && brace_depth > 0 => brace_depth -= 1,
-                '}' if brace_depth == 0 => break,
+                '}' if paren_depth == 0
+                    && (!is_custom_property || (bracket_depth == 0 && brace_depth == 0)) =>
+                {
+                    break;
+                }
                 ';' if paren_depth == 0
                     && (!is_custom_property || (bracket_depth == 0 && brace_depth == 0)) =>
                 {

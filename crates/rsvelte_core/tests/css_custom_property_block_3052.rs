@@ -74,3 +74,34 @@ fn an_ordinary_property_does_not_gain_the_custom_property_grammar() {
         Some("css_expected_identifier")
     );
 }
+
+#[test]
+fn scss_line_comment_parentheses_do_not_end_the_enclosing_rule_early() {
+    let source = r#"<p>x</p>
+<style lang="scss">
+  .pill {
+    // The container (opt-in via `container: pill / inline-size`) is optional.
+    --overlap: calc(var(--size) * -0.5);
+  }
+
+  @container pill (min-width: 0px) {
+    .pill {
+      --available: calc(
+        100cqi - var(--reserved-inline, 0px)
+      );
+    }
+  }
+</style>
+"#;
+
+    compile(
+        source,
+        CompileOptions {
+            filename: Some("AvatarPill.svelte".to_string()),
+            generate: GenerateMode::Client,
+            css: CssMode::External,
+            ..Default::default()
+        },
+    )
+    .expect("the SCSS carrier accepted by upstream must remain accepted");
+}
