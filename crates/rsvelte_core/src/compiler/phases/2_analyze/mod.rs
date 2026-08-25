@@ -1852,7 +1852,8 @@ fn promote_legacy_export_const_state_bindings(ast: &Root, analysis: &mut Compone
     let Some(instance) = &ast.instance else {
         return;
     };
-    let JsNode::Program { body, .. } = instance.content.as_node().as_ref() else {
+    let content = instance.content.as_node();
+    let JsNode::Program { body, .. } = content.as_ref() else {
         return;
     };
     let instance_scope = analysis.root.instance_scope_index;
