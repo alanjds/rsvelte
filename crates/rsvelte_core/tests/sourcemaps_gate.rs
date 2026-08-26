@@ -962,14 +962,17 @@ fn token_pass_owners_diagnostic() {
     const CHILD: &str = "RSVELTE_TOKEN_MAP_DIAGNOSTIC_CHILD";
     const PREFIX: &str = "TOKEN_MAP\t";
 
-    fn compile_diagnostic(input: &str, sample: &str) -> Compiled {
+    fn compile_diagnostic(input: &str, _sample: &str) -> Compiled {
         let result = compile(
             input,
             CompileOptions {
                 generate: GenerateMode::Client,
                 filename: Some("input.svelte".to_string()),
                 css: CssMode::External,
-                dev: fixture_dev(sample),
+                // Every fixture in the pinned oracle population records
+                // `dev: false`. Avoid the normal fixture-key lookup here: the
+                // temporary C ABI checkout only carries the pinned oracle tree.
+                dev: false,
                 ..Default::default()
             },
         )
