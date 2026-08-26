@@ -22,18 +22,20 @@
 //!
 //! All construction patterns are lifted verbatim from the proven
 //! `js_ast::to_oxc` converter (variant-complete against oxc 0.136), so the
-//! nodes produced print byte-identically through esrap. Container spans are the
-//! dummy [`oxc_span::SPAN`]: esrap formats structurally. Identifier references
-//! and literals retain their source spans so a caller rebuilding an expression
-//! can place the comment cursor on surviving tokens rather than on a generated
-//! wrapper.
+//! nodes produced print byte-identically through esrap. Most container spans
+//! are the dummy [`oxc_span::SPAN`]: esrap formats structurally. Identifier
+//! references and call expressions retain their source spans so a caller
+//! rebuilding an expression can place the comment cursor on surviving tokens
+//! rather than on a generated wrapper. Literals deliberately keep the dummy
+//! span to match upstream cursor placement: an interior comment remains pending
+//! until the enclosing argument boundary instead of moving before the literal.
 
 use crate::ast::arena::{IdRange, JsNodeId, ParseArena};
 use crate::ast::typed_expr::{JsNode, LiteralValue};
 use oxc_allocator::{Allocator, ArenaBox, ArenaVec, GetAllocator};
 use oxc_ast::ast::*;
 use oxc_ast::builder::AstBuilder;
-use oxc_span::{GetSpanMut, SPAN, Span};
+use oxc_span::{SPAN, Span};
 use oxc_syntax::number::NumberBase;
 use oxc_syntax::operator::{
     AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator, UpdateOperator,
@@ -842,10 +844,7 @@ impl<'a, 'arena> Cx<'a, 'arena> {
                 self.str(name),
                 &self.ab,
             )),
-            JsNode::Literal { start, end, .. } => self.literal(node).map(|mut expr| {
-                *expr.span_mut() = Span::new(*start, *end);
-                expr
-            }),
+            JsNode::Literal { .. } => self.literal(node),
             JsNode::ThisExpression { .. } => Some(Expression::ThisExpression(
                 ThisExpression::boxed(SPAN, &self.ab),
             )),
