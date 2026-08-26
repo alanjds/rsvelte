@@ -64,3 +64,22 @@ fn state_reference_does_not_invent_a_call() {
     let source = "<script>let attachment = $state();</script><div {@attach attachment}></div>";
     assert_eq!(attach_flags(source), (true, false));
 }
+
+#[test]
+fn call_initialized_binding_is_reactive_without_inventing_a_call_at_the_read() {
+    let source =
+        "<script>const attachment = make_attachment();</script><div {@attach attachment}></div>";
+    assert_eq!(attach_flags(source), (true, false));
+}
+
+#[test]
+fn legacy_props_member_is_reactive_without_a_scope_binding() {
+    let source = "<div {@attach $$props.attach}></div>";
+    assert_eq!(attach_flags(source), (true, false));
+}
+
+#[test]
+fn runes_prop_binding_is_reactive_without_inventing_a_call() {
+    let source = "<script>let { attach } = $props();</script><div {@attach attach}></div>";
+    assert_eq!(attach_flags(source), (true, false));
+}

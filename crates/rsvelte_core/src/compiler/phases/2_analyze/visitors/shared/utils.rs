@@ -1218,6 +1218,31 @@ fn get_rune_name_node(callee: &JsNode, context: &VisitorContext) -> Option<Strin
     }
 }
 
+/// Whether Phase 2 can prove that a binding read is compile-time known without
+/// running the full scope evaluator. Unknown is deliberately conservative: it
+/// keeps the expression reactive, which is the behavior upstream uses when
+/// `scope.evaluate(identifier).is_known` is false.
+fn binding_is_obviously_known(
+    binding: &crate::compiler::phases::phase2_analyze::scope::Binding,
+) -> bool {
+    if binding.reassigned || binding.mutated {
+        return false;
+    }
+
+    if !matches!(binding.kind, BindingKind::Normal | BindingKind::Template) {
+        return false;
+    }
+
+    match binding.initial_node_type.as_deref() {
+        Some("Literal") => true,
+        Some("Identifier") => binding.initial_identifier_name.as_deref() == Some("undefined"),
+        // Interpolated templates retain their AST in `init_expr_json`; a
+        // template with no cached expression is a static string.
+        Some("TemplateLiteral") => binding.init_expr_json.is_none(),
+        _ => false,
+    }
+}
+
 /// Visit a JavaScript expression (typed JsNode) and track identifier references.
 pub fn walk_js_expression_node(
     expression: &JsNode,
@@ -1319,10 +1344,20 @@ pub fn walk_js_expression_node(
                     metadata.references.insert(binding_idx);
                 }
 
-                if matches!(
-                    binding.kind,
-                    BindingKind::State | BindingKind::RawState | BindingKind::Derived
-                ) {
+                // Mirror the Identifier visitor's expression-metadata rule. A
+                // template expression reaches this typed walker directly, so
+                // limiting this to rune bindings loses props, stores,
+                // `{@const}` values, and ordinary variables whose initializer
+                // cannot be evaluated at compile time. Attach tags are one
+                // visible consumer: `const attachment = make_attachment()`
+                // must be re-read through a thunk rather than passed once.
+                let involves_state = binding.kind != BindingKind::Static
+                    && (matches!(
+                        binding.kind,
+                        BindingKind::Prop | BindingKind::BindableProp | BindingKind::RestProp
+                    ) || !binding.is_function());
+
+                if involves_state && !binding_is_obviously_known(binding) {
                     metadata.set_has_state(true);
                 }
 
@@ -1341,6 +1376,12 @@ pub fn walk_js_expression_node(
                         context,
                     )?;
                 }
+            }
+
+            // These generated legacy bindings are not present in the scope,
+            // but upstream still evaluates their reads as reactive state.
+            if matches!(name.as_str(), "$$props" | "$$restProps") {
+                metadata.set_has_state(true);
             }
         }
         JsNode::MemberExpression {
