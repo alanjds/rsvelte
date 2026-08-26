@@ -1982,8 +1982,7 @@ mod tests {
 
     use super::{
         generate_default_function_wrapper_mappings, generate_server_declaration_mappings,
-        generate_server_token_mappings, generate_server_wrapper_mappings,
-        generate_token_mappings,
+        generate_server_token_mappings, generate_server_wrapper_mappings, generate_token_mappings,
         generate_verbatim_import_mappings, typescript_declaration_annotation_end,
     };
 
