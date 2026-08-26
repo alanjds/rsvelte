@@ -977,10 +977,12 @@ fn token_pass_owners_diagnostic() {
                 .iter()
                 .enumerate()
                 .flat_map(|(line, segments)| {
-                    segments.iter().filter_map(move |segment| {
-                        (segment.len() >= 4)
-                            .then(|| [line as i64, segment[0], segment[1], segment[2], segment[3]])
-                    })
+                    segments
+                        .iter()
+                        .filter(|segment| segment.len() >= 4)
+                        .map(move |segment| {
+                            [line as i64, segment[0], segment[1], segment[2], segment[3]]
+                        })
                 })
                 .collect();
             println!(
