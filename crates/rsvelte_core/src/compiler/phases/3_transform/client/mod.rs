@@ -2217,8 +2217,7 @@ pub(crate) fn transform_client(
 
     // Extract and add imports from instance script
     // These are in state.hoisted after import * as $ (from analysis.instance_body.hoisted)
-    if analysis.instance_script_content.is_some() {
-        let instance_content = analysis.instance_script_content.as_ref().unwrap();
+    if let Some(instance_content) = &analysis.instance_script_content {
         for import in instance_script_imports {
             if let Some(statement) = hoisted_import_statement(
                 import,

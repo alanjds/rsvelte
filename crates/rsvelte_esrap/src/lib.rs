@@ -233,7 +233,7 @@ fn print_split_impl<const HAS_COMMENTS: bool>(
         let mut printer =
             printer::Printer::<HAS_COMMENTS, true>::with_comments(options, comments, line_starts)
                 .with_placement_source(comment_source)
-                .with_split_coordinates(map_line_starts, loc_base, loc_map, false);
+                .with_split_coordinates(map_line_starts, map_source, loc_base, loc_map, false);
         let mut ctx = context::Context::new_direct(&options.indent, program.source_text.len());
         printer.print_program(program, &mut ctx);
         let (buffer, returned, indent, dirty) = ctx.into_direct_parts();
@@ -247,7 +247,13 @@ fn print_split_impl<const HAS_COMMENTS: bool>(
     let mut printer =
         printer::Printer::<HAS_COMMENTS, false>::with_comments(options, comments, line_starts)
             .with_placement_source(comment_source)
-            .with_split_coordinates(map_line_starts, loc_base, loc_map, map_source.is_some());
+            .with_split_coordinates(
+                map_line_starts,
+                map_source,
+                loc_base,
+                loc_map,
+                map_source.is_some(),
+            );
     let mut ctx = context::Context::new();
     printer.print_program(program, &mut ctx);
     let capacity = ctx.measure();

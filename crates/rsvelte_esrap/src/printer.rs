@@ -116,6 +116,9 @@ pub struct Printer<'opt, const HAS_COMMENTS: bool = true, const DIRECT: bool = f
     /// resolved against. Same as `line_starts` unless the caller split the two
     /// coordinate spaces (see [`crate::print_split`]).
     map_line_starts: Option<Vec<u32>>,
+    /// The buffer source-map offsets index into. This differs from
+    /// `placement_source` for a reassembled program.
+    map_source: Option<&'opt str>,
     /// Spans below this offset are synthesized and carry no source location, so
     /// they take no part in comment placement — the Rust equivalent of esrap's
     /// `if (node.loc)` guards. `None` = every span is a real location.
@@ -697,6 +700,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             comment_source: None,
             placement_source: None,
             map_line_starts: None,
+            map_source: None,
             loc_base: None,
             loc_map: Vec::new(),
             map_nodes: true,
@@ -718,6 +722,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             borrowed_comments: None,
             comment_index: 0,
             map_line_starts: None,
+            map_source: None,
             line_starts,
             comment_source: None,
             placement_source: None,
@@ -751,12 +756,14 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     pub fn with_split_coordinates(
         mut self,
         map_line_starts: Vec<u32>,
+        map_source: Option<&'opt str>,
         loc_base: u32,
         loc_map: &[LocRange],
         emit_locations: bool,
     ) -> Self {
         self.emit_locations = emit_locations;
         self.map_line_starts = Some(map_line_starts);
+        self.map_source = map_source;
         self.loc_base = Some(loc_base);
         self.loc_map = loc_map.to_vec();
         self
@@ -826,39 +833,45 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     /// location" *for comments*, but it is still exactly the position a source
     /// map segment wants. Formatting decisions must keep using
     /// [`Self::offset_to_line_col`], which cannot compare across the two spaces.
-    fn map_position(&self, offset: u32) -> Option<(u32, u32)> {
+    fn mapped_offset(&self, offset: u32) -> Option<u32> {
         if offset == u32::MAX {
             return None;
         }
+        if self.loc_map.is_empty() {
+            Some(offset)
+        } else {
+            Some(
+                match self
+                    .loc_map
+                    .binary_search_by(|range| {
+                        if offset < range.start {
+                            std::cmp::Ordering::Greater
+                        } else if offset >= range.end {
+                            std::cmp::Ordering::Less
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
+                    })
+                    .ok()
+                    .map(|i| &self.loc_map[i])
+                {
+                    Some(range) => match range.source {
+                        Some(mapped) if range.linear => mapped + (offset - range.start),
+                        Some(mapped) => mapped,
+                        None => return None,
+                    },
+                    None => offset,
+                },
+            )
+        }
+    }
+
+    fn map_position(&self, offset: u32) -> Option<(u32, u32)> {
         let map_line_starts = self.map_line_starts.as_deref().unwrap_or(&self.line_starts);
         if map_line_starts.is_empty() {
             return None;
         }
-        let offset = if self.loc_map.is_empty() {
-            offset
-        } else {
-            match self
-                .loc_map
-                .binary_search_by(|range| {
-                    if offset < range.start {
-                        std::cmp::Ordering::Greater
-                    } else if offset >= range.end {
-                        std::cmp::Ordering::Less
-                    } else {
-                        std::cmp::Ordering::Equal
-                    }
-                })
-                .ok()
-                .map(|i| &self.loc_map[i])
-            {
-                Some(range) => match range.source {
-                    Some(mapped) if range.linear => mapped + (offset - range.start),
-                    Some(mapped) => mapped,
-                    None => return None,
-                },
-                None => offset,
-            }
-        };
+        let offset = self.mapped_offset(offset)?;
         let line = usize_to_u32(map_line_starts.partition_point(|&s| s <= offset));
         // `line` is 1-based; its start offset lives at index `line - 1`.
         let line_start = map_line_starts[(line - 1) as usize];
@@ -2075,6 +2088,12 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             }
         }
 
+        if self.emit_locations
+            && !self.loc_map.is_empty()
+            && let Some((line, column)) = self.map_position(node.span.start)
+        {
+            ctx.location(line, column);
+        }
         ctx.write("import ");
         if import_type {
             ctx.write("type ");
@@ -2090,6 +2109,20 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             ctx.write(ns.local.name.as_str());
         }
         if !named.is_empty() {
+            if self.emit_locations
+                && !self.loc_map.is_empty()
+                && let (Some(source), Some(start), Some(end)) = (
+                    self.map_source,
+                    self.mapped_offset(node.span.start),
+                    self.mapped_offset(named[0].span().start),
+                )
+                && let Some(relative) = source
+                    .get(start as usize..end as usize)
+                    .and_then(|prefix| prefix.rfind('{'))
+                && let Some((line, column)) = self.map_position(start + relative as u32)
+            {
+                ctx.location(line, column);
+            }
             ctx.write_ascii(b'{');
             self.sequence_slice(
                 &named,
