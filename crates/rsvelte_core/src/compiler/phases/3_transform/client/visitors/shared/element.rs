@@ -1347,8 +1347,6 @@ fn build_style_attribute_value_with_memoization(
 fn get_directive_expressions<'a>(
     directive: &StyleDirective<'a>,
 ) -> Vec<crate::ast::js::Expression<'a>> {
-    use crate::ast::js::Expression;
-
     match &directive.value {
         AttributeValue::Expression(expr_tag) => vec![expr_tag.expression.clone()],
         AttributeValue::True(_) => Vec::new(),
