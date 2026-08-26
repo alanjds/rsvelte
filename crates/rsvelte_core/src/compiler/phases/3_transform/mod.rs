@@ -229,6 +229,17 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         remaining_result_mappings.push(mapping);
                     }
                 }
+                // An exact identifier span is a stronger source carrier than the
+                // token matcher below. Keep those emitter mappings ahead of the
+                // heuristic fallback; otherwise an earlier same-named source token
+                // can claim the generated position (for example the template `foo`
+                // in `$.deep_read_state(foo())` instead of its `export let foo`).
+                let (precise_result_mappings, remaining_result_mappings) =
+                    partition_precise_identifier_mappings(
+                        &result.code,
+                        source,
+                        remaining_result_mappings,
+                    );
                 let template_element_mappings = if map_pass_disabled("template_element") {
                     Vec::new()
                 } else {
@@ -335,6 +346,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + inline_script_mappings.len()
                     + import_mappings.len()
                     + template_name_mappings.len()
+                    + precise_result_mappings.len()
                     + token_mappings.len()
                     + rune_mappings.len()
                     + remaining_result_mappings.len();
@@ -347,6 +359,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(inline_script_mappings);
                 mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
+                mappings.extend(precise_result_mappings);
                 mappings.extend(token_mappings);
                 mappings.extend(rune_mappings);
                 mappings.extend(remaining_result_mappings);
@@ -1112,6 +1125,113 @@ fn merge_preferred_mappings(
     }
     result.extend(preferred.into_iter().skip(preferred_index));
     result
+}
+
+/// Split out emitter mappings that bracket one exact identifier in both texts.
+///
+/// Generated-token matching is deliberately a fallback because it has no binding
+/// identity. A `Spanned` identifier does: esrap emits a mapping at both ends of
+/// the node, and equal generated/source slices prove that the pair is the exact
+/// carrier rather than a wider synthesized wrapper.
+fn partition_precise_identifier_mappings(
+    generated: &str,
+    source: &str,
+    mappings: Vec<js_ast::codegen::SourceMapping>,
+) -> (
+    Vec<js_ast::codegen::SourceMapping>,
+    Vec<js_ast::codegen::SourceMapping>,
+) {
+    fn identifier_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+    }
+
+    fn exact_identifier_slice<'a>(
+        text: &'a str,
+        starts: &[usize],
+        line: u32,
+        start: u32,
+        end: u32,
+    ) -> Option<&'a str> {
+        let line_start = *starts.get(line as usize)?;
+        let line_end = starts.get(line as usize + 1).copied().unwrap_or(text.len());
+        let line = text.get(line_start..line_end)?;
+        // Source-map columns are UTF-16. On an ASCII line they are byte offsets,
+        // which is enough for the identifier carriers this fallback replaces.
+        if !line.is_ascii() {
+            return None;
+        }
+        let start = start as usize;
+        let end = end as usize;
+        let bytes = line.as_bytes();
+        if start >= end
+            || end > bytes.len()
+            || !bytes[start..end].iter().copied().all(identifier_byte)
+            || bytes
+                .get(start.wrapping_sub(1))
+                .is_some_and(|byte| identifier_byte(*byte))
+            || bytes.get(end).is_some_and(|byte| identifier_byte(*byte))
+        {
+            return None;
+        }
+        line.get(start..end)
+    }
+
+    let generated_starts = js_ast::codegen::build_line_starts(generated);
+    let source_starts = js_ast::codegen::build_line_starts(source);
+    let mut precise = vec![false; mappings.len()];
+
+    for (start_index, start_mapping) in mappings.iter().enumerate() {
+        for (end_index, end_mapping) in mappings.iter().enumerate().skip(start_index + 1) {
+            if end_mapping.gen_line != start_mapping.gen_line {
+                break;
+            }
+            let generated_width = end_mapping.gen_col.saturating_sub(start_mapping.gen_col);
+            if generated_width == 0 {
+                continue;
+            }
+            if generated_width > 128 {
+                break;
+            }
+            if end_mapping.orig_line != start_mapping.orig_line
+                || end_mapping.orig_col.saturating_sub(start_mapping.orig_col) != generated_width
+            {
+                continue;
+            }
+
+            let Some(generated_identifier) = exact_identifier_slice(
+                generated,
+                &generated_starts,
+                start_mapping.gen_line,
+                start_mapping.gen_col,
+                end_mapping.gen_col,
+            ) else {
+                continue;
+            };
+            if exact_identifier_slice(
+                source,
+                &source_starts,
+                start_mapping.orig_line,
+                start_mapping.orig_col,
+                end_mapping.orig_col,
+            ) == Some(generated_identifier)
+            {
+                precise[start_index] = true;
+                precise[end_index] = true;
+                break;
+            }
+        }
+    }
+
+    let mut preferred = Vec::new();
+    let mut remaining = Vec::new();
+    for (mapping, is_precise) in mappings.into_iter().zip(precise) {
+        if is_precise {
+            preferred.push(mapping);
+        } else {
+            remaining.push(mapping);
+        }
+    }
+    (preferred, remaining)
 }
 
 /// The generated component function's braces map to the instance script tags.

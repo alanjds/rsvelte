@@ -2031,6 +2031,10 @@ the gate separates them. Deleting a pass on a 0 therefore needs a population tha
 the passes deleted in #3015 (`default_function_wrapper` 84 → 0, `effect_callback` 8 → 0,
 `legacy_prop_read` 16 → 0)
 carry a *movement*, which is the reading a 0 cannot give.
+The last row also exposed a second blind spot in that measurement: counting generated segment
+positions alone reported 0 after the span landed even while the token fallback won the same
+position with the wrong original `foo`. Its compile-level regression therefore pins both ends
+of each carrier, not merely the presence of a generated segment.
 
  There is no corpus-wide source-map gate to fall back on: `verify.mjs` compares generated
  code, and the svelte2tsx map gate (§ 12) covers a different artifact.
