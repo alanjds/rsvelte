@@ -1,7 +1,7 @@
 # Public `parse()` AST parity ratchet
 
 Gate: `scripts/compat-corpus/parse-ast-verify.mjs`.
-Ratchet: `parse-ast-known-failures.json`, currently **856 entries**.
+Ratchet: `parse-ast-known-failures.json`, currently **862 entries**.
 
 ## The question it asks
 
@@ -34,11 +34,11 @@ Acceptance divergences are the one exception: "official rejects this document an
 not" is a fact about the document, so those keys carry the entry id. A single shared key could not
 tell two such entries from one, which is the whole shrink the ratchet exists to observe.
 
-## Why the baseline is 856 and not 0
+## Why the baseline is 862 and not 0
 
 Because the API was never compared. The current full run measured **66,513 compared pairs** over
 33,685 corpus components — 9,338 modern-axis and 9,653 legacy-axis entries are byte-identical,
-and the remainder produce these 856 field-level keys.
+and the remainder produce these 862 field-level keys.
 
 The modern-axis identical count was **1,075** when this ratchet was first baselined. #3386
 (`Root.end`) accounted for the other 4,177 on its own: it diverged on 12,324 of 14,102 entries, so
@@ -56,7 +56,7 @@ parsed all 11 without complaint. The verdict named the loudest thing it could se
 one line of the harness. Serialization now sits outside the parse `try`, and a bigint goes through
 a replacer so its value stays comparable instead of being dropped.
 
-Partition of `parse-ast-known-failures.json` by cluster: `194 + 184 + 136 + 116 + 102 + 54 + 27 + 22 + 10 + 5 + 4 + 2`
+Partition of `parse-ast-known-failures.json` by cluster: `194 + 184 + 136 + 116 + 102 + 54 + 31 + 24 + 10 + 5 + 4 + 2`
 
 | cluster | keys | what it is |
 |---|---|---|
@@ -66,8 +66,8 @@ Partition of `parse-ast-known-failures.json` by cluster: `194 + 184 + 136 + 116 
 | `unclustered` | 116 | keys nobody has classified. The cluster exists so an unclassified key reads as unclassified instead of joining someone else's row. |
 | `estree-fields` | 102 | ESTree fields rsvelte's serializer omits or adds: `importKind`, `exportKind`, `attributes` on an import/export, `accessor`, `typeAnnotation`, `returnType`, `optional`, `readonly`, `declare`. The lint gates already found three of these from the other side. |
 | `child-count` | 54 | an array of children with a different length. |
-| `accepts-what-official-rejects` | 27 | 13 corpus entries × 2 axes, plus one loose source. See below. |
-| `css-shape` | 22 | the legacy CSS selector conversion (`Selector` vs `ComplexSelector`, `combinator` / `selectors` / `name`). |
+| `accepts-what-official-rejects` | 31 | 15 corpus entries × 2 axes, plus one loose source. See below. |
+| `css-shape` | 24 | the legacy CSS selector conversion (`Selector` vs `ComplexSelector`, `combinator` / `selectors` / `name`). |
 | `loc-presence` | 10 | a node that has a `loc` on one side and none on the other — kept apart from `span` because "no position at all" is a different defect from "wrong position". |
 | `directive-null-fields` | 5 | official keeps `expression: null` / `modifiers: []` on a directive; rsvelte omits the key, so it is absent through the JSON boundary a binding actually uses. |
 | `rejects-what-official-accepts` | 4 | 2 corpus entries × 2 axes. See below. |
@@ -75,7 +75,7 @@ Partition of `parse-ast-known-failures.json` by cluster: `194 + 184 + 136 + 116 
 
 ## The acceptance rows are the interesting ones
 
-**rsvelte's `parse()` accepts 13 collected documents official's `parse()` rejects** (13 ids ×
+**rsvelte's `parse()` accepts 15 collected documents official's `parse()` rejects** (15 ids ×
 2 axes), plus the loose `unclosed-attribute-quote` source. The original two are one cause:
 `css-invalid-combinator-selector-4` (`css_selector_invalid`) and
 `invalid-empty-css-declaration` (`css_empty_declaration`) are raised by upstream from `1-parse`
@@ -86,10 +86,12 @@ that accepts more than official does is a divergence, and listing it here is wha
 visible. An earlier draft of this file listed eleven more, and all eleven were the harness (see
 above).
 
-The custom-property block fix adds two real-world SCSS carriers to this set: gitlight's
-`ScrollbarContainer.svelte` and trakt-web's `SearchResultsGrid.svelte` both use Sass
-interpolation inside custom-property values. It also removes trakt-web's `DropdownItem.svelte`
-from the set now that its CSS tree agrees.
+The custom-property block fix adds four real-world SCSS carriers to this set: gitlight's
+`ScrollbarContainer.svelte`, plus trakt-web's `SearchResultsGrid.svelte`, `DropdownItem.svelte`,
+and `Switch.svelte`, use Sass interpolation inside custom-property values. These entries and
+the retained CSS child-count keys are measured against the corpus's pinned gitlinks; a local
+working tree with newer submodule checkouts produces a different set and must not be used to
+baseline this gate.
 
 **rsvelte throws where official accepts** on two collected components (`chatgpt-web`'s
 `Home.svelte` and immich's `VideoNativeViewer.svelte`), on both axes. In the loose suite,
