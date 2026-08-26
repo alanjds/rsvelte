@@ -2830,10 +2830,21 @@ pub(super) fn transform_props_destructuring(
         })
         .collect();
 
+    // The comments above have to survive in their output slots, but the text
+    // helper's existing shape matchers need to see the declaration as
+    // `= $props()`. Remove only the saved initializer separator from the copy
+    // that is parsed below; all placement decisions keep using offsets into
+    // `original_trimmed`.
+    let mut transform_input = original_trimmed.to_string();
+    if !initializer_comments.is_empty() {
+        transform_input.replace_range(assignment + 1..props_call, " ");
+    }
+
     // Canonicalise spacing in the `$props()` call (`= $props ()` → `= $props()`)
     // so the byte matchers below recognise whitespace variants. The AST detector
     // that gates this helper already confirmed it is a `$props()` rune call.
-    let line = crate::compiler::phases::phase3_transform::utils::canonicalize_props_call(line);
+    let line =
+        crate::compiler::phases::phase3_transform::utils::canonicalize_props_call(&transform_input);
     let trimmed = line.trim();
 
     // Determine the original declaration keyword (let or const) to preserve it
