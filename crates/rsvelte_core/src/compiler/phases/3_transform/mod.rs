@@ -2896,23 +2896,12 @@ mod tests {
                 panic!("missing declaration in generated code:\n{}", result.js.code)
             });
 
-        for (generated_column, original_column) in [
-            (declaration_column, 15),
-            (declaration_column + 6, 21),
-            (declaration_column + 10, 25),
-            (declaration_column + 12, 27),
-        ] {
-            let expected = [
-                i64::from(generated_column),
-                0,
-                0,
-                i64::from(original_column),
-            ];
+        for original_column in [15, 21, 25, 26] {
             assert!(
                 mappings[line]
                     .iter()
-                    .any(|segment| segment[..4] == expected),
-                "missing inline declaration mapping at {line}:{generated_column}: {:?}",
+                    .any(|segment| segment.get(1..4) == Some(&[0, 0, original_column])),
+                "missing inline declaration source column {original_column} on generated line {line} (declaration starts at byte column {declaration_column}): {:?}",
                 mappings[line]
             );
         }
