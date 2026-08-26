@@ -512,15 +512,16 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         self.ab.allocator().alloc_str(s)
     }
 
-    /// Resolve an out-of-band generated-identifier span and include it when
-    /// sizing the source-coordinate side of the split comment space.
+    /// Resolve an out-of-band generated-identifier span.
+    ///
+    /// This is an original-source coordinate, so it must not raise
+    /// [`Synth::max_span`]: `loc_base` separates synthesized/comment-space
+    /// coordinates from source coordinates, and moving that boundary to one
+    /// source offset would make later source offsets look comment-bearing.
     fn identifier_span(&self, name: &str) -> Span {
         self.arena
             .identifier_span(name)
-            .map_or(SPAN, |(start, end)| {
-                self.note_span(end);
-                Span::new(start, end)
-            })
+            .map_or(SPAN, |(start, end)| Span::new(start, end))
     }
 
     /// Resolve an `ExprId` handle and convert the pointed-to expression.
@@ -2819,6 +2820,30 @@ mod tests {
         };
         assert_eq!(statement.expression.span().start, 7);
         assert_eq!(statement.expression.span().end, 10);
+    }
+
+    #[test]
+    fn generated_identifier_source_span_does_not_raise_comment_boundary() {
+        let arena = JsArena::new();
+        arena.note_identifier_span("div", 1_000, 1_003);
+        let program = JsProgram::with_body(vec![
+            JsStatement::Raw("/* comment */ value;".into()),
+            b::stmt(&arena, b::id("div")),
+        ]);
+        let allocator = Allocator::default();
+        let converted =
+            program_to_oxc(&program, &arena, &allocator).expect("commented chunk is supported");
+
+        assert!(converted.comment_source.is_some());
+        assert!(converted.loc_base < 1_000);
+        let oxc_ast::ast::Statement::ExpressionStatement(statement) = &converted.program.body[1]
+        else {
+            panic!("expected expression statement");
+        };
+        assert_eq!(
+            statement.expression.span(),
+            oxc_span::Span::new(1_000, 1_003)
+        );
     }
 
     #[test]
