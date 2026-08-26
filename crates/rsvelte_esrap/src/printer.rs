@@ -153,9 +153,13 @@ pub struct LocRange {
 /// generated braces map to an enclosing source construct.
 #[derive(Debug, Clone, Copy)]
 pub struct BraceMapping {
+    /// Start of the wrapper body in comment-placement coordinates.
     pub body_start: u32,
+    /// End of the wrapper body in comment-placement coordinates.
     pub body_end: u32,
+    /// Source offset of the construct that owns the opening brace.
     pub source_start: u32,
+    /// Source offset immediately after the construct's closing brace.
     pub source_end: u32,
 }
 
