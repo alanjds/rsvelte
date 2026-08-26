@@ -7410,7 +7410,14 @@ fn realign_plain_js_typescript_diagnostic(
         ),
         "Expected function body" => {
             use crate::compiler::phases::phase3_transform::shared::js_scan::code_bytes;
-            let end = range.end;
+            // OXC sometimes labels this diagnostic with an empty span at the
+            // start of the function. Acorn instead stops at the first type
+            // annotation, so an empty label must still search the construct.
+            let end = if range.end > range.start {
+                range.end
+            } else {
+                content.len()
+            };
             let colon = code_bytes(content.as_bytes())
                 .find_map(|(i, b)| (i >= range.start && i < end && b == b':').then_some(i))
                 .unwrap_or(at);

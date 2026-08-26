@@ -103,20 +103,12 @@ fn a_plain_component_script_uses_the_same_diagnostic_after_its_offset() {
 }
 
 #[test]
-fn typescript_mode_still_accepts_the_grammar_that_plain_javascript_rejects() {
-    let module =
-        "interface I { a: number }\nclass C implements I { constructor(private a: number) {} }";
-    compile_module(
-        module,
-        ModuleCompileOptions {
-            filename: Some("Test.svelte.ts".to_string()),
-            generate: GenerateMode::Client,
-            ..Default::default()
-        },
-    )
-    .expect("the diagnostic realignment must be disabled for .svelte.ts modules");
-
-    let component = format!("<script lang=\"ts\">\n{module}\n</script>\n");
+fn component_typescript_mode_still_accepts_the_grammar_plain_javascript_rejects() {
+    // `compileModule` is deliberately absent: upstream always parses that API
+    // as JavaScript, regardless of a `.svelte.ts` filename, because callers
+    // strip TypeScript before invoking it.
+    let source = "let v = 1 as number;\nfunction f(): number { return v; }";
+    let component = format!("<script lang=\"ts\">\n{source}\n</script>\n");
     compile(
         &component,
         CompileOptions {
