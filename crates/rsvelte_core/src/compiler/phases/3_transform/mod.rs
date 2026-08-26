@@ -2775,7 +2775,7 @@ mod tests {
         generate_inline_script_mappings, generate_legacy_prop_read_mappings,
         generate_server_declaration_mappings, generate_server_token_mappings,
         generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
-        generate_token_mappings, generate_verbatim_import_mappings,
+        generate_token_mappings, generate_verbatim_import_mappings, js_ast::codegen,
         typescript_declaration_annotation_end,
     };
 
@@ -2989,21 +2989,29 @@ mod tests {
             crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
                 map["mappings"].as_str().unwrap(),
             );
-        for (line, column, original_line, original_column) in [
-            (16, 6, 5, 8),
-            (16, 12, 5, 19),
-            (20, 6, 5, 8),
-            (20, 12, 5, 19),
-            (26, 51, 4, 7),
-        ] {
+        let generated = result.js.code.as_str();
+        let starts = MappingLineStarts::new(generated, source);
+        let assert_mapping = |generated_offset, original_line, original_column| {
+            let (line, column) =
+                codegen::offset_to_line_col_utf16(generated, &starts.generated, generated_offset);
             assert!(
-                mappings[line]
-                    .iter()
-                    .any(|segment| { segment[..4] == [column, 0, original_line, original_column] }),
+                mappings[line].iter().any(|segment| {
+                    segment[..4] == [column as i64, 0, original_line, original_column]
+                }),
                 "missing merged component-bind mapping at {line}:{column}: {:?}",
                 mappings[line]
             );
+        };
+
+        for accessor in ["get potato", "set potato"] {
+            let generated_key = generated.find(accessor).unwrap() + 4;
+            assert_mapping(generated_key, 5, 8);
+            assert_mapping(generated_key + "potato".len(), 5, 19);
         }
+
+        let generated_template = generated.find("${potato() ??").unwrap() + 2;
+        assert_mapping(generated_template, 4, 1);
+        assert_mapping(generated_template + "potato".len(), 4, 7);
     }
 
     #[test]
