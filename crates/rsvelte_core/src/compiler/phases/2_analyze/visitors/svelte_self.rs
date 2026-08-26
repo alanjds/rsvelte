@@ -113,7 +113,7 @@ pub fn visit<'a, 'b: 'a>(
                 }
             }
             Attribute::SpreadAttribute(spread) => {
-                super::shared::attribute::walk_template_expression(&spread.expression, context)?;
+                super::spread_attribute::visit(spread, context)?;
             }
             Attribute::AttachTag(attach) => {
                 super::attach_tag::visit(attach, context)?;

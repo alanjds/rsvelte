@@ -1146,8 +1146,8 @@ fn process_spread_attribute(
     //   } else {
     //       props_and_spreads.push(expression);
     //   }
-    let has_state = super::utils::expression_has_reactive_state(&spread.expression, context);
-    let has_call = super::utils::expression_has_call(&spread.expression, context);
+    let has_state = spread.metadata.expression.has_state();
+    let has_call = spread.metadata.expression.has_call();
     let has_await = crate::compiler::phases::phase3_transform::js_ast::builders::js_expr_has_await(
         &context.arena,
         &expression,

@@ -900,11 +900,20 @@ impl serde::Serialize for AttributeValuePart<'_> {
 }
 
 /// A spread attribute: `{...props}`.
+#[derive(Debug, Clone, Default)]
+pub struct SpreadAttributeMetadata {
+    /// Expression metadata populated during Phase 2 analysis.
+    pub expression: ExpressionMetadata,
+}
+
+/// A spread attribute: `{...props}`.
 #[derive(Debug, Clone)]
 pub struct SpreadAttribute<'a> {
     pub start: u32,
     pub end: u32,
     pub expression: Expression<'a>,
+    /// Internal metadata, omitted from the public AST serialization.
+    pub metadata: SpreadAttributeMetadata,
 }
 
 impl serde::Serialize for SpreadAttribute<'_> {

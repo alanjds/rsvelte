@@ -10,7 +10,7 @@ use crate::compiler::phases::phase2_analyze::AnalysisError;
 
 /// Visit a spread attribute.
 pub fn visit(
-    attribute: &SpreadAttribute,
+    attribute: &mut SpreadAttribute,
     context: &mut VisitorContext,
 ) -> Result<(), AnalysisError> {
     // Spreads can contain class/style/id, so we can't safely prune CSS
@@ -29,17 +29,22 @@ pub fn visit(
         }
     }
 
-    // Walk the spread expression to trigger needs_context detection.
+    // Walk the spread expression to populate its Phase 2 metadata and trigger
+    // needs_context detection.
     // In the official Svelte compiler, SpreadAttribute.js uses `context.next()` which
-    // recursively visits the expression, calling CallExpression visitor which sets
-    // `needs_context = true` for calls to imported or prop functions.
+    // recursively visits the expression with `node.metadata.expression` installed.
     // Corresponds to SpreadAttribute.js: `context.next({ ...context.state, expression: node.metadata.expression })`
     // Mark the reactive expression context so the AwaitExpression visitor applies
     // the `suspend` gate (`experimental_async` / `legacy_await_invalid`), mirroring
     // upstream's `expression: node.metadata.expression`.
     let saved_in_expression_tag = context.in_expression_tag;
     context.in_expression_tag = true;
-    let result = super::script::walk_expression(&attribute.expression, context);
+    let node = attribute.expression.as_node();
+    let result = super::shared::utils::walk_js_expression_node(
+        &node,
+        context,
+        &mut attribute.metadata.expression,
+    );
     context.in_expression_tag = saved_in_expression_tag;
     result?;
 

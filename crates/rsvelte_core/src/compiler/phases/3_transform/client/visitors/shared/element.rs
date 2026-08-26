@@ -1498,9 +1498,8 @@ pub fn build_attribute_effect(
                     super::utils::apply_transforms_to_expression(&spread_expr, context);
 
                 // Check if the spread expression has function calls or reactive state
-                let has_call = super::utils::expression_has_call(&spread.expression, context);
-                let has_state =
-                    super::utils::expression_has_reactive_state(&spread.expression, context);
+                let has_call = spread.metadata.expression.has_call();
+                let has_state = spread.metadata.expression.has_state();
 
                 // Check if spread expression has await
                 let spread_has_await = super::utils::expression_has_await(&spread.expression);

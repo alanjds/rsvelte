@@ -446,7 +446,7 @@ pub fn visit<'a, 'b: 'a>(
             super::shared::element::collect_css_attribute_facts(&element.attributes, context);
     }
 
-    for attr in &element.attributes {
+    for attr in &mut element.attributes {
         if let Attribute::SpreadAttribute(spread) = attr {
             spread_attribute::visit(spread, context)?;
         }
