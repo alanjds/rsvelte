@@ -2255,12 +2255,11 @@ fn process_attach_tag(
     );
     let expression = convert_expression(&attach.expression, context);
 
-    // Check if expression has reactive state using the proper check.
-    // In the official Svelte compiler's phase 2 analysis (CallExpression.js lines 269-272),
-    // non-pure call expressions also set has_state=true. So we need to check both
-    // expression_has_reactive_state AND expression_has_call to match the official behavior.
-    let has_state = super::utils::expression_has_reactive_state(&attach.expression, context);
-    let has_call = super::utils::expression_has_call(&attach.expression, context);
+    // Phase 2's AttachTag visitor walks this expression with the same metadata
+    // object upstream passes to its visitor context. Consume that single source
+    // of truth instead of independently re-deriving the two flags in Phase 3.
+    let has_state = attach.metadata.expression.has_state();
+    let has_call = attach.metadata.expression.has_call();
 
     let final_expr = if has_state || has_call {
         // Apply transforms to the expression to convert state references to $.get() calls
