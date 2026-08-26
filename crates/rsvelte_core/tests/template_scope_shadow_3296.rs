@@ -100,7 +100,15 @@ fn nested_same_named_each_write_invalidates_only_the_owning_array() {
         .lines()
         .find(|line| line.contains("$.invalidate_inner_signals"))
         .expect("an each-item write must invalidate its collection");
-    assert_eq!(invalidation.matches("$$array").count(), 1, "{output}");
+    let invalidated_collection = invalidation
+        .split_once("$.invalidate_inner_signals")
+        .expect("the selected line contains the invalidation call")
+        .1;
+    assert_eq!(
+        invalidated_collection.matches("$$array").count(),
+        1,
+        "{output}"
+    );
 }
 
 #[test]
