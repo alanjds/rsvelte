@@ -214,6 +214,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 // emitter anchors are considered.
                 let mut runtime_mappings = Vec::new();
                 let mut template_name_mappings = Vec::new();
+                let mut component_bind_key_mappings = Vec::new();
                 let mut remaining_result_mappings = Vec::new();
                 for mapping in result.mappings {
                     if is_template_append_mapping(
@@ -225,6 +226,8 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     } else if is_template_element_name_mapping(source_line_starts, source, &mapping)
                     {
                         template_name_mappings.push(mapping);
+                    } else if is_component_bind_key_mapping(source_line_starts, source, &mapping) {
+                        component_bind_key_mappings.push(mapping);
                     } else {
                         remaining_result_mappings.push(mapping);
                     }
@@ -344,6 +347,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + inline_script_mappings.len()
                     + import_mappings.len()
                     + template_name_mappings.len()
+                    + component_bind_key_mappings.len()
                     + token_mappings.len()
                     + rune_mappings.len()
                     + remaining_result_mappings.len();
@@ -357,6 +361,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(inline_script_mappings);
                 mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
+                mappings.extend(component_bind_key_mappings);
                 mappings.extend(token_mappings);
                 mappings.extend(rune_mappings);
                 mappings.extend(remaining_result_mappings);
@@ -1098,6 +1103,74 @@ fn is_template_element_name_mapping(
     };
     let source_offset = line_start.saturating_add(mapping.orig_col as usize);
     source.as_bytes().get(source_offset.wrapping_sub(1)) == Some(&b'<')
+}
+
+/// Accessor keys created for component `bind:` directives carry the directive's
+/// source span. Keep those printer mappings ahead of the token-recovery pass:
+/// both can target the generated key, but only the AST span identifies the
+/// directive rather than an earlier interpolation with the same name.
+fn is_component_bind_key_mapping(
+    line_starts: &[usize],
+    source: &str,
+    mapping: &js_ast::codegen::SourceMapping,
+) -> bool {
+    let Some(source_offset) = source_offset_from_utf16_position(
+        line_starts,
+        source,
+        mapping.orig_line as usize,
+        mapping.orig_col as usize,
+    ) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let is_boundary_before = |offset: usize| {
+        offset == 0
+            || bytes
+                .get(offset - 1)
+                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'<')
+    };
+
+    if source[source_offset..].starts_with("bind:") && is_boundary_before(source_offset) {
+        return true;
+    }
+
+    let line_start = line_starts
+        .get(mapping.orig_line as usize)
+        .copied()
+        .unwrap_or(0);
+    let Some(relative_start) = source[line_start..source_offset].rfind("bind:") else {
+        return false;
+    };
+    let directive_start = line_start + relative_start;
+    is_boundary_before(directive_start)
+        && source[directive_start + "bind:".len()..source_offset]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'-' | b'|'))
+        && bytes
+            .get(source_offset)
+            .is_none_or(|byte| byte.is_ascii_whitespace() || matches!(byte, b'=' | b'/' | b'>'))
+}
+
+fn source_offset_from_utf16_position(
+    line_starts: &[usize],
+    source: &str,
+    line: usize,
+    column: usize,
+) -> Option<usize> {
+    let line_start = *line_starts.get(line)?;
+    let line_end = line_starts.get(line + 1).copied().unwrap_or(source.len());
+    let line_source = &source[line_start..line_end];
+    let mut utf16_column = 0;
+    for (byte_offset, character) in line_source.char_indices() {
+        if utf16_column == column {
+            return Some(line_start + byte_offset);
+        }
+        utf16_column += character.len_utf16();
+        if utf16_column > column {
+            return None;
+        }
+    }
+    (utf16_column == column).then_some(line_end)
 }
 
 fn merge_preferred_mappings(
@@ -2775,8 +2848,8 @@ mod tests {
         generate_inline_script_mappings, generate_legacy_prop_read_mappings,
         generate_server_declaration_mappings, generate_server_token_mappings,
         generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
-        generate_token_mappings, generate_verbatim_import_mappings, js_ast::codegen,
-        typescript_declaration_annotation_end,
+        generate_token_mappings, generate_verbatim_import_mappings, is_component_bind_key_mapping,
+        js_ast::codegen, typescript_declaration_annotation_end,
     };
 
     #[test]
@@ -3025,6 +3098,40 @@ mod tests {
             generate_component_bind_mappings_with_starts(generated, source, &starts).is_empty(),
             "accessor key mappings must come from JsPropertyKey spans"
         );
+    }
+
+    #[test]
+    fn component_bind_ast_mappings_are_preferred_at_both_span_boundaries() {
+        let source = "<Widget title=\"🎉\" bind:potato/>\n{potato}";
+        let starts = codegen::build_line_starts(source);
+        let bind_start = source.find("bind:potato").unwrap();
+        let bind_end = bind_start + "bind:potato".len();
+
+        for offset in [bind_start, bind_end] {
+            let (orig_line, orig_col) = codegen::offset_to_line_col_utf16(source, &starts, offset);
+            let mapping = codegen::SourceMapping {
+                gen_line: 0,
+                gen_col: 0,
+                source: 0,
+                orig_line: orig_line as u32,
+                orig_col: orig_col as u32,
+                name: None,
+            };
+            assert!(is_component_bind_key_mapping(&starts, source, &mapping));
+        }
+
+        let interpolation = source.rfind("potato").unwrap();
+        let (orig_line, orig_col) =
+            codegen::offset_to_line_col_utf16(source, &starts, interpolation);
+        let mapping = codegen::SourceMapping {
+            gen_line: 0,
+            gen_col: 0,
+            source: 0,
+            orig_line: orig_line as u32,
+            orig_col: orig_col as u32,
+            name: None,
+        };
+        assert!(!is_component_bind_key_mapping(&starts, source, &mapping));
     }
 
     #[test]
