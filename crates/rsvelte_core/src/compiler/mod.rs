@@ -570,7 +570,10 @@ pub(crate) fn parse_component(
     let parse_options = crate::ParseOptions {
         modern: true,
         loose: false,
-        skip_expression_loc: true,
+        // The default legacy result rebuilds ESTree locations only when it is
+        // converted at the JSON boundary. `modernAst`, however, exposes this
+        // tree directly, so its locations still have to be retained here.
+        skip_expression_loc: !modern_ast,
         defer_script_parse: true,
         force_typescript: false,
         lenient_script: false,
