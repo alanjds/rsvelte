@@ -305,13 +305,9 @@ pub fn build_event_handler(
         }
     }
 
-    // Memoisation here uses the same broad "any CallExpression in the tree"
-    // semantics as the rest of Phase 3 — see `expression_tag_has_call` in
-    // `shared/element.rs` for why we don't read Phase 2's narrower flag.
-    let has_call =
-        crate::compiler::phases::phase3_transform::client::visitors::shared::element::expression_tag_has_call(
-            expr_tag,
-        );
+    // Upstream passes the ExpressionTag's Phase 2 metadata into
+    // `build_event_handler`; use the same analyzed call classification here.
+    let has_call = expr_tag.metadata.expression.has_call();
 
     let mut js_expr = js_expr;
 
