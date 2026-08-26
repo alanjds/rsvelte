@@ -2028,11 +2028,12 @@ pass at a time: `collapsed_declaration` and `rune` cost **0 segments on `main` a
 same reading is produced by "these samples contain no `$state`/`$derived`/`$props` lowering
 whose position the pass would have supplied" and by "a span now supplies it", and nothing in
 the gate separates them. Deleting a pass on a 0 therefore needs a population that fires it.
-`collapsed_declaration` now has that independent population: a compile-level regression uses
-`let` and its name on separate source lines, verifies that both client and server code
-generation collapse them, and pins the generated name to the original name after the pass
-is deleted. `rune` remains
-unproven. The earlier passes deleted in #3015 (`default_function_wrapper` 84 → 0,
+Both passes now have independent populations before deletion. The `collapsed_declaration`
+regression uses `let` and its name on separate source lines, verifies that both client and server
+code generation collapse them, and pins the generated name to the original name. The `rune`
+regression constructs all eight source/runtime pairs — including the two pairs each sharing
+`$.state` and `$.derived` — and pins both generated endpoints to the corresponding rune endpoints.
+The earlier passes deleted in #3015 (`default_function_wrapper` 84 → 0,
 `effect_callback` 8 → 0) instead carry a *movement*, which is the reading a 0 cannot give.
 
  There is no corpus-wide source-map gate to fall back on: `verify.mjs` compares generated

@@ -674,7 +674,7 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `component_bind` | 5 | 4 |
 | `verbatim_import` | 4 | 4 |
 | `collapsed_declaration` | 0 | **0 — deleted** |
-| `rune` | 0 | 0 |
+| `rune` | 0 | **0 — deleted** |
 
 `default_function_wrapper` and `effect_callback` are deleted: both are now produced by a
 span, and the before/after column is the attribution. The other nine stay, and what each
@@ -692,13 +692,15 @@ Every row is a `Raw` fragment or a builder call that had a span available and dr
 i.e. #3015's step 1 really is the prerequisite it claims to be, and this measurement names
 which fragments to eradicate first by how many segments they hold.
 
-**`rune` costs 0 on both trees, and that is not evidence it is redundant.** It was already
-contributing nothing before this change, so deleting it cannot be attributed to the span
-work, and the gate is 29 samples — a pass that never fires in those samples is
-indistinguishable from a pass whose output is now produced elsewhere. It stays, and the
-distinction is recorded as gate-coverage 14f. `collapsed_declaration` is deleted separately:
-a compile-level regression deliberately fires its multiline-declaration predicate and pins
-the generated client and server names to the source name after the pass is gone.
+**`rune` costs 0 on both trees, and that alone is not evidence it is redundant.** It was already
+contributing nothing before this change, so deleting it cannot be attributed to the span work,
+and the gate is 29 samples — a pass that never fires in those samples is indistinguishable from
+a pass whose output is now produced elsewhere. The pass is deleted only after a separate
+compile-level population fires all eight source/runtime pairs and pins both endpoints of every
+generated runtime name to its rune. `collapsed_declaration` is likewise deleted only after a
+compile-level regression deliberately fires its multiline-declaration predicate and pins the
+generated client and server names to the source name. The distinction is recorded as
+gate-coverage 14g.
 
 ### Two hazards the change created and paid for
 
