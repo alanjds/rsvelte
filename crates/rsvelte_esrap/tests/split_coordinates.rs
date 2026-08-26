@@ -149,6 +149,7 @@ impl Assembled<'_> {
             self.loc_base,
             None,
             &self.loc_map,
+            &[],
             &PrintOptions::default(),
         )
         .code
@@ -161,6 +162,7 @@ impl Assembled<'_> {
             self.loc_base,
             Some(map_source),
             &self.loc_map,
+            &[],
             &PrintOptions::default(),
         )
     }
@@ -372,7 +374,16 @@ fn an_unlocated_program_keeps_its_statements_interior_comments() {
             program.span.start, 0,
             "{name}: program starts below loc_base"
         );
-        let printed = print_split(&program, source, 1, None, &[], &PrintOptions::default()).code;
+        let printed = print_split(
+            &program,
+            source,
+            1,
+            None,
+            &[],
+            &[],
+            &PrintOptions::default(),
+        )
+        .code;
         assert!(
             printed.contains(needle),
             "{name}: lost {needle} from\n{printed}"

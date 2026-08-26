@@ -2041,6 +2041,10 @@ regression uses `let` and its name on separate source lines, verifies that both 
 code generation collapse them, and pins the generated name to the original name. The `rune`
 regression constructs all eight source/runtime pairs — including the two pairs each sharing
 `$.state` and `$.derived` — and pins both generated endpoints to the corresponding rune endpoints.
+The wrapper's original deletion still
+left a comment-only fallback behind; its final regression therefore constructs a component with
+an instance comment and checks all four brace-boundary segments, a population this aggregate
+count does not identify.
 
  There is no corpus-wide source-map gate to fall back on: `verify.mjs` compares generated
  code, and the svelte2tsx map gate (§ 12) covers a different artifact.

@@ -680,6 +680,8 @@ Segments lost when exactly one client pass is disabled, everything else on:
 `inline_script`, `bind_value`, `component_bind`, `verbatim_import`, `collapsed_declaration` and
 `rune` are deleted: all ten are now produced by source spans,
 and the before/after column is the attribution.
+The wrapper keeps its block span in comment space and passes its two source-backed brace
+positions separately to the printer, so comment placement no longer requires a fallback pass.
 For element handles, `flush_node` records the tag-name span against the component-wide unique
 generated name; both printers apply it to ordinary `Identifier` nodes only at emission time.
 That keeps every lowering matcher on `JsExpr::Identifier` unchanged while reproducing
