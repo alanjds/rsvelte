@@ -103,6 +103,10 @@ pub struct JsArena {
     /// continue to match ordinary `Identifier` nodes while both printers can
     /// recover the location carried by upstream's shared identifier object.
     identifier_spans: UnsafeCell<FxHashMap<CompactString, (u32, u32)>>,
+    /// Source spans inherited by otherwise-unlocated identifiers while one
+    /// generated expression is printed. Keying the scope by `ExprId` keeps
+    /// user identifiers with the same spelling elsewhere independent.
+    expression_identifier_spans: UnsafeCell<FxHashMap<ExprId, (CompactString, (u32, u32))>>,
 }
 
 // JsArena is explicitly NOT Sync - it's single-threaded only.
@@ -119,6 +123,7 @@ impl JsArena {
             exprs: UnsafeCell::new(NodeStore::new()),
             stmts: UnsafeCell::new(NodeStore::new()),
             identifier_spans: UnsafeCell::new(FxHashMap::default()),
+            expression_identifier_spans: UnsafeCell::new(FxHashMap::default()),
         }
     }
 
@@ -136,6 +141,33 @@ impl JsArena {
     pub fn identifier_span(&self, name: &str) -> Option<(u32, u32)> {
         // SAFETY: callers only read during/after single-threaded construction.
         unsafe { (*self.identifier_spans.get()).get(name).copied() }
+    }
+
+    /// Associate unlocated uses of `name` below one generated expression with
+    /// the source identifier that upstream cloned into that expression.
+    pub fn note_expression_identifier_span(
+        &self,
+        expression: ExprId,
+        name: &str,
+        start: u32,
+        end: u32,
+    ) {
+        // SAFETY: like node allocation, span registration is single-threaded.
+        unsafe {
+            (*self.expression_identifier_spans.get())
+                .insert(expression, (CompactString::new(name), (start, end)));
+        }
+    }
+
+    /// Return the identifier span scope attached to an expression handle.
+    #[inline]
+    pub fn expression_identifier_span(&self, expression: ExprId) -> Option<(&str, (u32, u32))> {
+        // SAFETY: callers only read during/after single-threaded construction.
+        unsafe {
+            (*self.expression_identifier_spans.get())
+                .get(&expression)
+                .map(|(name, span)| (name.as_str(), *span))
+        }
     }
 
     // -- expressions --------------------------------------------------------
@@ -221,10 +253,16 @@ impl std::fmt::Debug for JsArena {
             unsafe { ((*self.exprs.get()).len, (*self.stmts.get()).len) };
         // SAFETY: only reading the map length, no mutation.
         let identifier_spans_count = unsafe { (*self.identifier_spans.get()).len() };
+        let expression_identifier_spans_count =
+            unsafe { (*self.expression_identifier_spans.get()).len() };
         f.debug_struct("JsArena")
             .field("exprs_count", &exprs_count)
             .field("stmts_count", &stmts_count)
             .field("identifier_spans_count", &identifier_spans_count)
+            .field(
+                "expression_identifier_spans_count",
+                &expression_identifier_spans_count,
+            )
             .finish()
     }
 }
@@ -323,7 +361,7 @@ mod tests {
         let arena = JsArena::default();
         assert_eq!(
             format!("{:?}", arena),
-            "JsArena { exprs_count: 0, stmts_count: 0, identifier_spans_count: 0 }"
+            "JsArena { exprs_count: 0, stmts_count: 0, identifier_spans_count: 0, expression_identifier_spans_count: 0 }"
         );
     }
 
@@ -334,6 +372,18 @@ mod tests {
 
         assert_eq!(arena.identifier_span("div"), Some((7, 10)));
         assert_eq!(arena.identifier_span("main"), None);
+    }
+
+    #[test]
+    fn test_expression_identifier_span() {
+        let arena = JsArena::new();
+        let expression = arena.alloc_expr(JsExpr::Identifier("foo".into()));
+        arena.note_expression_identifier_span(expression, "foo", 7, 10);
+
+        assert_eq!(
+            arena.expression_identifier_span(expression),
+            Some(("foo", (7, 10)))
+        );
     }
 
     #[test]
