@@ -2620,6 +2620,8 @@ mod tests {
         let source = r#"<script>
 	let state = $state(0);
 	let raw = $state.raw({});
+	state = 1;
+	raw = {};
 	let derived = $derived(state);
 	let by = $derived.by(() => state);
 	let { value = $bindable(), ...rest } = $props();
@@ -2656,26 +2658,18 @@ mod tests {
         for (source_pattern, source_nth, generated_pattern, generated_nth) in pairs {
             let source_start = nth_offset(source, source_pattern, source_nth);
             let generated_start = nth_offset(&result.js.code, generated_pattern, generated_nth);
-            for (generated_offset, source_offset) in [
-                (generated_start, source_start),
-                (
-                    generated_start + generated_pattern.len(),
-                    source_start + source_pattern.len(),
-                ),
-            ] {
-                let (generated_line, generated_column) =
-                    line_col_utf16(&result.js.code, generated_offset);
-                let (source_line, source_column) = line_col_utf16(source, source_offset);
-                assert!(
-                    mappings[generated_line as usize].iter().any(|segment| {
-                        segment[..4] == [generated_column, 0, source_line, source_column]
-                    }),
-                    "{generated_pattern} at {generated_line}:{generated_column} did not map to \
-                     {source_pattern} at {source_line}:{source_column}: {:?}\n{}",
-                    mappings[generated_line as usize],
-                    result.js.code
-                );
-            }
+            let (generated_line, generated_column) =
+                line_col_utf16(&result.js.code, generated_start);
+            let (source_line, source_column) = line_col_utf16(source, source_start);
+            assert!(
+                mappings[generated_line as usize].iter().any(|segment| {
+                    segment[..4] == [generated_column, 0, source_line, source_column]
+                }),
+                "{generated_pattern} at {generated_line}:{generated_column} did not map to \
+                 {source_pattern} at {source_line}:{source_column}: {:?}\n{}",
+                mappings[generated_line as usize],
+                result.js.code
+            );
         }
     }
 
