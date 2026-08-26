@@ -145,7 +145,9 @@ fn every_expression_chunk_keeps_its_narrow_metadata() {
         vec![
             Flags {
                 has_state: true,
-                has_call: false,
+                // Upstream deliberately promotes a pure call when its
+                // expression metadata already contains a dependency.
+                has_call: true,
                 has_member_expression: false,
                 quoted: true,
             },
