@@ -189,6 +189,7 @@ fn convert_once<'a, 'source>(
         arena,
         islands,
         synth: RefCell::new(Synth::new(loc_base)),
+        identifier_span_scopes: RefCell::new(Vec::new()),
         component_brace_span: program
             .component_brace_span
             .as_ref()
@@ -499,6 +500,9 @@ struct Cx<'a, 'arena, 'source> {
     arena: &'arena JsArena,
     islands: &'arena [AstIsland<'source>],
     synth: RefCell<Synth>,
+    /// Identifier locations inherited from the generated expression currently
+    /// being converted. A nested `Spanned` node stamps its own final location.
+    identifier_span_scopes: RefCell<Vec<(&'arena str, (u32, u32))>>,
     /// [`JsProgram::component_brace_span`], matched by function name.
     component_brace_span: Option<(&'arena str, u32, u32)>,
 }
@@ -521,13 +525,29 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
     fn identifier_span(&self, name: &str) -> Span {
         self.arena
             .identifier_span(name)
+            .or_else(|| self.scoped_identifier_span(name))
             .map_or(SPAN, |(start, end)| Span::new(start, end))
+    }
+
+    fn scoped_identifier_span(&self, name: &str) -> Option<(u32, u32)> {
+        self.identifier_span_scopes
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|(scope_name, span)| (*scope_name == name).then_some(*span))
     }
 
     /// Resolve an `ExprId` handle and convert the pointed-to expression.
     #[inline]
     fn expr_id(&self, id: ExprId) -> Option<Expression<'a>> {
-        self.expr(self.arena.get_expr(id))
+        if let Some((name, span)) = self.arena.expression_identifier_span(id) {
+            self.identifier_span_scopes.borrow_mut().push((name, span));
+            let expression = self.expr(self.arena.get_expr(id));
+            self.identifier_span_scopes.borrow_mut().pop();
+            expression
+        } else {
+            self.expr(self.arena.get_expr(id))
+        }
     }
 
     /// Run `f` and report the comment-buffer region it consumed, so a container
@@ -1397,7 +1417,13 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 &self.ab,
             )),
             JsExpr::OpaqueIdentifier(name) => {
-                Some(Expression::new_identifier(SPAN, self.str(name), &self.ab))
+                let span = self
+                    .scoped_identifier_span(name)
+                    .map_or(SPAN, |(start, end)| {
+                        self.note_span(end);
+                        Span::new(start, end)
+                    });
+                Some(Expression::new_identifier(span, self.str(name), &self.ab))
             }
             JsExpr::Literal(lit) => self.literal(lit),
             JsExpr::This => Some(Expression::ThisExpression(ThisExpression::boxed(
@@ -2803,7 +2829,7 @@ mod tests {
         JsArena, JsProgram, JsStatement, builders as b,
     };
     use oxc_allocator::Allocator;
-    use oxc_span::GetSpan;
+    use oxc_span::{GetSpan, Span};
 
     #[test]
     fn generated_identifier_uses_keep_the_registered_span() {
@@ -2844,6 +2870,46 @@ mod tests {
             statement.expression.span(),
             oxc_span::Span::new(1_000, 1_003)
         );
+    }
+
+    #[test]
+    fn expression_identifier_spans_are_scoped_and_keep_explicit_children() {
+        let arena = JsArena::new();
+        let explicit = crate::compiler::phases::phase3_transform::js_ast::JsExpr::Spanned(
+            arena.alloc_expr(b::id("foo")),
+            1,
+            4,
+        );
+        let call = b::call(
+            &arena,
+            b::id("consume"),
+            vec![
+                b::id("foo"),
+                explicit,
+                crate::compiler::phases::phase3_transform::js_ast::JsExpr::OpaqueIdentifier(
+                    "foo".into(),
+                ),
+            ],
+        );
+        let call_id = arena.alloc_expr(call);
+        arena.note_expression_identifier_span(call_id, "foo", 8, 11);
+        let program = JsProgram::with_body(vec![b::stmt(
+            &arena,
+            crate::compiler::phases::phase3_transform::js_ast::JsExpr::Spanned(call_id, 0, 0),
+        )]);
+        let allocator = Allocator::default();
+        let converted = program_to_oxc(&program, &arena, &allocator).expect("call is supported");
+
+        let oxc_ast::ast::Statement::ExpressionStatement(statement) = &converted.program.body[0]
+        else {
+            panic!("expected expression statement");
+        };
+        let oxc_ast::ast::Expression::CallExpression(call) = &statement.expression else {
+            panic!("expected call expression");
+        };
+        assert_eq!(call.arguments[0].span(), Span::new(8, 11));
+        assert_eq!(call.arguments[1].span(), Span::new(1, 4));
+        assert_eq!(call.arguments[2].span(), Span::new(8, 11));
     }
 
     #[test]
