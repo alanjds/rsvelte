@@ -6408,7 +6408,7 @@ impl EvalScope for ClientEvalScope<'_, '_> {
                 return Evaluation::single(EvalValue::NumberMarker);
             }
         }
-        let binding = node
+        let reference_binding = node
             .get("start")
             .and_then(|v| v.as_u64())
             .and_then(|start| {
@@ -6416,18 +6416,47 @@ impl EvalScope for ClientEvalScope<'_, '_> {
                     .state
                     .scope_root
                     .binding_at_reference(name, start as u32)
-            })
-            .or_else(|| {
+            });
+        let binding = match reference_binding {
+            // Phase 2 resolves children of a component against its `let:`
+            // scope before Phase 3 separates those children by slot. A named
+            // slot does not inherit the component's `let:` binding, which the
+            // client visitor represents by omitting its transform. In that
+            // case the active client scope (typically the instance binding
+            // shadowed by the default slot) is the same scope upstream
+            // evaluates. Keep position-based resolution for active `let:`
+            // transforms and every other template-local binding.
+            Some(binding)
+                if self.converted
+                    && binding.kind
+                        == crate::compiler::phases::phase2_analyze::scope::BindingKind::Let
+                    && !self.context.state.transform.contains_key(name) =>
+            {
+                self.context
+                    .state
+                    .get_binding(name)
+                    .filter(|candidate| {
+                        candidate.kind
+                            != crate::compiler::phases::phase2_analyze::scope::BindingKind::Let
+                    })
+                    .or(Some(binding))
+            }
+            Some(binding) => Some(binding),
+            None => {
                 // A converted/synthesized identifier may have lost its source
                 // position. Name lookup is safe only when there is one binding:
                 // `get_binding` deliberately falls back across every scope and
                 // can otherwise substitute an outer constant for a `let:` or
                 // another same-named template-local binding.
-                let bindings = self.context.state.scope_root.bindings_by_name.get(name)?;
-                (bindings.len() == 1)
-                    .then(|| self.context.state.get_binding(name))
-                    .flatten()
-            });
+                self.context
+                    .state
+                    .scope_root
+                    .bindings_by_name
+                    .get(name)
+                    .filter(|bindings| bindings.len() == 1)
+                    .and_then(|_| self.context.state.get_binding(name))
+            }
+        };
         match binding {
             // `build_expression` converts the template expression, but an
             // initializer reached through scope resolution is still its source

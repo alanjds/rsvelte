@@ -92,3 +92,23 @@ fn function_literal_and_scalar_aliases_remain_static() {
         );
     }
 }
+
+/// Component `let:` bindings apply to the default slot, but not to named
+/// slots without their own `let:` directive. Phase 2 reference positions see
+/// the component scope before slots are separated, so the client evaluator
+/// must honor Phase 3's active transform boundary here.
+#[test]
+fn component_let_shadowing_respects_each_slot_scope() {
+    let out = client(
+        "<script>\n\timport Counter from './Counter.svelte';\n\tlet count = 'outer';\n</script>\n<Counter let:count>\n\t{count}\n\t<p slot=\"named\">named {count}</p>\n</Counter>\n",
+    );
+
+    assert!(
+        out.contains("$.template_effect(() => $.set_text(text, $.get(count)))"),
+        "the default slot must read its reactive `let:` binding; got:\n{out}"
+    );
+    assert!(
+        out.contains("p.textContent = 'named outer';"),
+        "the named slot must fold the shadowed outer binding; got:\n{out}"
+    );
+}
