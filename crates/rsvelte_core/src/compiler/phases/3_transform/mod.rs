@@ -165,13 +165,43 @@ pub(crate) fn transform_component_with_sourcemap_content(
     options: &CompileOptions,
     include_sourcemap_content: bool,
 ) -> Result<TransformResult, TransformError> {
+    // The normal compiler/toolchain path supplies phase 1's retained scripts.
+    // Keep the standalone phase-3 API source-map complete as well: its public
+    // signature predates retained scripts, so reconstruct only the two script
+    // programs here and only when their locations can be observed.
+    let retained_scripts = options.enable_sourcemap.then(|| {
+        let retain = |content: Option<&super::phase2_analyze::types::ScriptContent>,
+                      is_typescript| {
+            content.and_then(|content| {
+                source
+                    .get(content.start as usize..content.end as usize)
+                    .map(|script| {
+                        crate::ast::oxc_program::RetainedProgram::parse(script, is_typescript)
+                    })
+            })
+        };
+        crate::ast::oxc_program::RetainedScripts {
+            instance: retain(
+                analysis.instance_script_content.as_ref(),
+                ast.instance
+                    .as_ref()
+                    .is_some_and(|script| script.is_typescript),
+            ),
+            module: retain(
+                analysis.module_script_content.as_ref(),
+                ast.module
+                    .as_ref()
+                    .is_some_and(|script| script.is_typescript),
+            ),
+        }
+    });
     transform_component_with_scripts(
         analysis,
         ast,
         source,
         options,
         include_sourcemap_content,
-        None,
+        retained_scripts.as_ref(),
         None,
         None,
     )
@@ -279,16 +309,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         &mapping_starts,
                     )
                 };
-                let import_mappings = if !map_pass_disabled("import") && source.contains("import ")
-                {
-                    generate_verbatim_import_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                } else {
-                    Vec::new()
-                };
                 let token_mappings = if map_pass_disabled("token") {
                     Vec::new()
                 } else {
@@ -332,7 +352,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + legacy_prop_read_mappings.len()
                     + template_element_mappings.len()
                     + inline_script_mappings.len()
-                    + import_mappings.len()
                     + template_name_mappings.len()
                     + component_bind_key_mappings.len()
                     + token_mappings.len()
@@ -345,7 +364,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(legacy_prop_read_mappings);
                 mappings.extend(template_element_mappings);
                 mappings.extend(inline_script_mappings);
-                mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
                 mappings.extend(component_bind_key_mappings);
                 mappings.extend(token_mappings);
