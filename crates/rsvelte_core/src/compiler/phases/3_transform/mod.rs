@@ -2871,10 +2871,16 @@ mod tests {
             (declaration_column + 10, 25),
             (declaration_column + 12, 27),
         ] {
+            let expected = [
+                i64::from(generated_column),
+                0,
+                0,
+                i64::from(original_column),
+            ];
             assert!(
                 mappings[line]
                     .iter()
-                    .any(|segment| { segment[..4] == [generated_column, 0, 0, original_column] }),
+                    .any(|segment| segment[..4] == expected),
                 "missing inline declaration mapping at {line}:{generated_column}: {:?}",
                 mappings[line]
             );
