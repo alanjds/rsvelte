@@ -1081,6 +1081,14 @@ fn token_pass_owners_diagnostic() {
             owned += 1;
             let generated_text = snippet(&generated, segment[0] as usize, segment[1] as usize, 32);
             let source_text = snippet(&input, segment[3] as usize, segment[4] as usize, 32);
+            let without_line = without
+                .get(&sample)
+                .into_iter()
+                .flatten()
+                .filter(|other| other[0] == segment[0])
+                .copied()
+                .collect::<Vec<_>>();
+            let without_line = serde_json::to_string(&without_line).unwrap();
             let generated_line = generated.lines().nth(segment[0] as usize);
             let official_lines: Vec<usize> = official_code
                 .as_deref()
@@ -1138,11 +1146,11 @@ fn token_pass_owners_diagnostic() {
             };
             match replacement {
                 Some(other) => println!(
-                    "  {sample} REPLACED g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; without token s{}:{}; {oracle}",
+                    "  {sample} REPLACED g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; without token s{}:{} line={without_line}; {oracle}",
                     segment[0], segment[1], segment[3], segment[4], other[3], other[4]
                 ),
                 None => println!(
-                    "  {sample} MISSING  g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; {oracle}",
+                    "  {sample} MISSING  g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; without token line={without_line}; {oracle}",
                     segment[0], segment[1], segment[3], segment[4]
                 ),
             }
