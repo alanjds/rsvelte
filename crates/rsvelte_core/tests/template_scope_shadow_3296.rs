@@ -36,6 +36,22 @@ fn server_const_read_uses_the_shadowing_each_item() {
 }
 
 #[test]
+fn server_declaration_read_uses_the_shadowing_each_item() {
+    let output = compile_target(
+        r#"<script>
+	let base = $state(1);
+	let v = $derived(base + 1);
+</script>
+{#each ["A"] as v}{#if true}{const c = String(v)}{c}{/if}{/each}"#,
+        GenerateMode::Server,
+        None,
+    );
+
+    assert!(output.contains("const c = String(v);"), "{output}");
+    assert!(!output.contains("const c = String(v());"), "{output}");
+}
+
+#[test]
 fn destructured_each_assignment_writes_back_without_promoting_the_outer_binding() {
     let output = compile_target(
         r#"<script>let v = "OUTER";</script>
