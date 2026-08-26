@@ -2478,7 +2478,6 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     PropertyKey::from(expr)
                 }
                 JsPropertyKey::SpannedIdentifier { name, start, end } => {
-                    self.note_span(*end);
                     let expr = Expression::new_identifier(
                         Span::new(*start, *end),
                         self.str(name),
@@ -2487,7 +2486,6 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     PropertyKey::from(expr)
                 }
                 JsPropertyKey::SpannedStringLiteral { value, start, end } => {
-                    self.note_span(*end);
                     PropertyKey::from(Expression::new_string_literal(
                         Span::new(*start, *end),
                         self.str(value),
@@ -2526,7 +2524,6 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 &self.ab,
             )),
             JsPropertyKey::SpannedIdentifier { name, start, end } => {
-                self.note_span(*end);
                 Some(PropertyKey::new_static_identifier(
                     Span::new(*start, *end),
                     self.str(name),
@@ -2534,7 +2531,6 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 ))
             }
             JsPropertyKey::SpannedStringLiteral { value, start, end } => {
-                self.note_span(*end);
                 Some(PropertyKey::from(Expression::new_string_literal(
                     Span::new(*start, *end),
                     self.str(value),
