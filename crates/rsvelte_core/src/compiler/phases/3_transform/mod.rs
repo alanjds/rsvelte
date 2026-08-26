@@ -2538,7 +2538,7 @@ mod tests {
                 map["mappings"].as_str().unwrap(),
             );
         for (line, column, original_line, original_column) in [
-            (16, 14, 4, 1),
+            (16, 14, 4, 0),
             (16, 19, 4, 6),
             (16, 27, 4, 19),
             (16, 30, 4, 22),
