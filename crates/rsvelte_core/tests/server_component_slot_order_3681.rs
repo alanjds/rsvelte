@@ -28,12 +28,17 @@ fn named_slot_before_default_claims_the_first_each_array_name() {
         .js
         .code;
 
+        let slots_start = code.find("$$slots: {").expect("named slots object");
+        let (default_prop, named_slots) = code.split_at(slots_start);
+
         assert!(
-            code.contains("beta: ($$renderer) => {\n\t\t\t\tconst each_array ="),
+            named_slots.contains("beta: ($$renderer) => {")
+                && named_slots.contains("const each_array ="),
             "the first source slot did not claim `each_array` (dev={dev}):\n{code}"
         );
         assert!(
-            code.contains("children: ($$renderer) => {\n\t\t\tconst each_array_1 ="),
+            default_prop.contains("children: ($$renderer) => {")
+                && default_prop.contains("const each_array_1 ="),
             "the later default slot did not claim `each_array_1` (dev={dev}):\n{code}"
         );
     }
