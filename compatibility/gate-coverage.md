@@ -2030,9 +2030,14 @@ whose position the pass would have supplied" and by "a span now supplies it", an
 the gate separates them. Deleting a pass on a 0 therefore needs a population that fires it.
 Both passes now have independent populations before deletion. The `collapsed_declaration`
 regression uses `let` and its name on separate source lines, verifies that both client and server
-code generation collapse them, and pins the generated name to the original name. The `rune`
-regression constructs all eight source/runtime pairs — including the two pairs each sharing
-`$.state` and `$.derived` — and pins both generated endpoints to the corresponding rune endpoints.
+code generation collapse them, and pins the generated name to the original name. The first `rune`
+regression constructed all eight source/runtime pairs, but its declaration runes did not all lower
+to generated calls; making `$state` and `$state.raw` reactive exposed a wrong mapping as soon as the
+pass was removed. Those generated identifiers still come from `RawMapped` script text and have no
+span to replace the pass. The retained pass now combines source spellings that share `$.state` or
+`$.derived`, pairs them in source order, and the regression pins both generated endpoints to the
+corresponding rune endpoints. **[D]** The failed deletion is the discriminating case that a zero in
+the 29-sample gate could not supply.
 The earlier passes deleted in #3015 (`default_function_wrapper` 84 → 0,
 `effect_callback` 8 → 0) instead carry a *movement*, which is the reading a 0 cannot give.
 

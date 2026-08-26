@@ -301,6 +301,17 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         source_token_positions,
                     )
                 };
+                let rune_mappings = if !map_pass_disabled("rune")
+                    && (source.contains("$effect")
+                        || source.contains("$state")
+                        || source.contains("$derived")
+                        || source.contains("$props")
+                        || source.contains("$bindable"))
+                {
+                    generate_rune_mappings_with_starts(&result.code, source, &mapping_starts)
+                } else {
+                    Vec::new()
+                };
                 // The printer reads one span for both brace mapping and comment
                 // resync, so a comment-bearing component cannot carry its own
                 // function braces yet.
@@ -327,6 +338,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + import_mappings.len()
                     + template_name_mappings.len()
                     + token_mappings.len()
+                    + rune_mappings.len()
                     + remaining_result_mappings.len();
                 let mut mappings = Vec::with_capacity(mapping_capacity);
                 mappings.extend(wrapper_mappings);
@@ -339,6 +351,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
                 mappings.extend(token_mappings);
+                mappings = merge_preferred_mappings(mappings, rune_mappings);
                 mappings.extend(remaining_result_mappings);
                 mappings
                     .sort_by(|a, b| a.gen_line.cmp(&b.gen_line).then(a.gen_col.cmp(&b.gen_col)));
@@ -1072,6 +1085,30 @@ fn is_template_element_name_mapping(
     source.as_bytes().get(source_offset.wrapping_sub(1)) == Some(&b'<')
 }
 
+fn merge_preferred_mappings(
+    mut mappings: Vec<js_ast::codegen::SourceMapping>,
+    mut preferred: Vec<js_ast::codegen::SourceMapping>,
+) -> Vec<js_ast::codegen::SourceMapping> {
+    mappings.sort_by(|a, b| a.gen_line.cmp(&b.gen_line).then(a.gen_col.cmp(&b.gen_col)));
+    preferred.sort_by(|a, b| a.gen_line.cmp(&b.gen_line).then(a.gen_col.cmp(&b.gen_col)));
+    let mut result = Vec::with_capacity(mappings.len() + preferred.len());
+    let mut preferred_index = 0;
+    for mapping in mappings {
+        while preferred_index < preferred.len()
+            && (
+                preferred[preferred_index].gen_line,
+                preferred[preferred_index].gen_col,
+            ) <= (mapping.gen_line, mapping.gen_col)
+        {
+            result.push(preferred[preferred_index].clone());
+            preferred_index += 1;
+        }
+        result.push(mapping);
+    }
+    result.extend(preferred.into_iter().skip(preferred_index));
+    result
+}
+
 /// The generated component function's braces map to the instance script tags.
 #[cfg(test)]
 fn generate_default_function_wrapper_mappings(
@@ -1697,6 +1734,72 @@ fn typescript_declaration_annotation_end(source: &str, start: usize, len: usize)
         cursor += 1;
     }
     None
+}
+
+/// Generate source mappings for rune-to-runtime transforms whose generated
+/// identifiers are still emitted by the script text rewriter.
+fn generate_rune_mappings_with_starts(
+    generated: &str,
+    source: &str,
+    starts: &MappingLineStarts,
+) -> Vec<js_ast::codegen::SourceMapping> {
+    use js_ast::codegen::offset_to_line_col_utf16;
+
+    // Some distinct source runes lower to the same generated runtime name. Pair
+    // their combined source occurrences in source order so `$state.raw` cannot
+    // claim the first `$.state` independently of an earlier `$state` (and the
+    // same for `$derived.by` / `$derived`).
+    let rune_transforms: &[(&str, &[&str])] = &[
+        ("$.user_pre_effect", &["$effect.pre"]),
+        ("$.user_effect", &["$effect"]),
+        ("$.state", &["$state", "$state.raw"]),
+        ("$.derived", &["$derived", "$derived.by"]),
+        ("$.rest_props", &["$props"]),
+        ("$.prop", &["$bindable"]),
+    ];
+
+    let gen_line_starts = &starts.generated;
+    let src_line_starts = &starts.source;
+    let mut mappings = Vec::new();
+
+    for &(gen_pattern, src_patterns) in rune_transforms {
+        let mut src_positions = Vec::new();
+        for &src_pattern in src_patterns {
+            for abs in memmem::find_iter(source.as_bytes(), src_pattern) {
+                if matches!(src_pattern, "$effect" | "$state" | "$derived")
+                    && source.as_bytes().get(abs + src_pattern.len()) == Some(&b'.')
+                {
+                    continue;
+                }
+                src_positions.push((abs, src_pattern.len()));
+            }
+        }
+        src_positions.sort_unstable_by_key(|&(position, _)| position);
+
+        for (gen_pos, &(src_pos, src_len)) in
+            memmem::find_iter(generated.as_bytes(), gen_pattern).zip(&src_positions)
+        {
+            for (generated_offset, source_offset) in [
+                (gen_pos, src_pos),
+                (gen_pos + gen_pattern.len(), src_pos + src_len),
+            ] {
+                let (gen_line, gen_col) =
+                    offset_to_line_col_utf16(generated, gen_line_starts, generated_offset);
+                let (orig_line, orig_col) =
+                    offset_to_line_col_utf16(source, src_line_starts, source_offset);
+                mappings.push(js_ast::codegen::SourceMapping {
+                    gen_line: gen_line as u32,
+                    gen_col: gen_col as u32,
+                    source: 0,
+                    orig_line: orig_line as u32,
+                    orig_col: orig_col as u32,
+                    name: None,
+                });
+            }
+        }
+    }
+
+    mappings
 }
 
 /// The legacy prop read inserted ahead of a template expression has two distinct
@@ -2616,7 +2719,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_every_rune_runtime_pair_without_a_text_matching_pass() {
+    fn maps_shared_rune_runtime_names_in_source_order() {
         let source = r#"<script>
 	let state = $state(0);
 	let raw = $state.raw({});
@@ -2658,18 +2761,26 @@ mod tests {
         for (source_pattern, source_nth, generated_pattern, generated_nth) in pairs {
             let source_start = nth_offset(source, source_pattern, source_nth);
             let generated_start = nth_offset(&result.js.code, generated_pattern, generated_nth);
-            let (generated_line, generated_column) =
-                line_col_utf16(&result.js.code, generated_start);
-            let (source_line, source_column) = line_col_utf16(source, source_start);
-            assert!(
-                mappings[generated_line as usize].iter().any(|segment| {
-                    segment[..4] == [generated_column, 0, source_line, source_column]
-                }),
-                "{generated_pattern} at {generated_line}:{generated_column} did not map to \
-                 {source_pattern} at {source_line}:{source_column}: {:?}\n{}",
-                mappings[generated_line as usize],
-                result.js.code
-            );
+            for (generated_offset, source_offset) in [
+                (generated_start, source_start),
+                (
+                    generated_start + generated_pattern.len(),
+                    source_start + source_pattern.len(),
+                ),
+            ] {
+                let (generated_line, generated_column) =
+                    line_col_utf16(&result.js.code, generated_offset);
+                let (source_line, source_column) = line_col_utf16(source, source_offset);
+                assert!(
+                    mappings[generated_line as usize].iter().any(|segment| {
+                        segment[..4] == [generated_column, 0, source_line, source_column]
+                    }),
+                    "{generated_pattern} at {generated_line}:{generated_column} did not map to \
+                     {source_pattern} at {source_line}:{source_column}: {:?}\n{}",
+                    mappings[generated_line as usize],
+                    result.js.code
+                );
+            }
         }
     }
 
