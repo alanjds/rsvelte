@@ -249,18 +249,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         &mapping_starts,
                     )
                 };
-                let inline_script_mappings = if !map_pass_disabled("inline_script")
-                    && source.contains("<script>")
-                    && source.contains("export ")
-                {
-                    generate_inline_script_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                } else {
-                    Vec::new()
-                };
                 let bind_value_mappings = if !map_pass_disabled("bind_value")
                     && source.contains("bind:value={")
                 {
@@ -343,7 +331,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + component_bind_mappings.len()
                     + runtime_mappings.len()
                     + template_element_mappings.len()
-                    + inline_script_mappings.len()
                     + import_mappings.len()
                     + template_name_mappings.len()
                     + precise_result_mappings.len()
@@ -356,7 +343,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(component_bind_mappings);
                 mappings.extend(runtime_mappings);
                 mappings.extend(template_element_mappings);
-                mappings.extend(inline_script_mappings);
                 mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
                 mappings.extend(precise_result_mappings);
@@ -2494,74 +2480,6 @@ fn generate_bind_value_mappings_with_starts(
     mappings
 }
 
-#[cfg(test)]
-fn generate_inline_script_mappings(
-    generated: &str,
-    source: &str,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    generate_inline_script_mappings_with_starts(
-        generated,
-        source,
-        &MappingLineStarts::new(generated, source),
-    )
-}
-
-fn generate_inline_script_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = source[cursor..].find("<script>") {
-        let content_start = cursor + relative + "<script>".len();
-        let Some(content_end) = source[content_start..].find("</script>") else {
-            break;
-        };
-        let content_end = content_start + content_end;
-        let content = &source[content_start..content_end];
-        let leading = content.len() - content.trim_start().len();
-        let declaration_start = content_start + leading;
-        let declaration = &source[declaration_start..content_end];
-        let Some(declaration) = declaration.strip_prefix("export ") else {
-            cursor = content_end + "</script>".len();
-            continue;
-        };
-        let source_declaration_start = declaration_start + "export ".len();
-        if let Some(generated_start) = generated.find(declaration) {
-            for offset in 0..=declaration.len() {
-                if !declaration.is_char_boundary(offset) {
-                    continue;
-                }
-                let (gen_line, gen_col) = offset_to_line_col_utf16(
-                    generated,
-                    &generated_starts,
-                    generated_start + offset,
-                );
-                let (orig_line, orig_col) = offset_to_line_col_utf16(
-                    source,
-                    &source_starts,
-                    source_declaration_start + offset,
-                );
-                mappings.push(js_ast::codegen::SourceMapping {
-                    gen_line: gen_line as u32,
-                    gen_col: gen_col as u32,
-                    source: 0,
-                    orig_line: orig_line as u32,
-                    orig_col: orig_col as u32,
-                    name: None,
-                });
-            }
-        }
-        cursor = content_end + "</script>".len();
-    }
-    mappings
-}
-
 /// Returns true if a token should be skipped during source map matching.
 /// Framework-generated tokens, JS keywords, and common internal identifiers
 /// should be skipped to avoid false matches against the user's source code.
@@ -2787,11 +2705,10 @@ mod tests {
 
     use super::{
         MappingLineStarts, generate_bind_value_mappings,
-        generate_default_function_wrapper_mappings, generate_inline_script_mappings,
-        generate_server_declaration_mappings, generate_server_token_mappings,
-        generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
-        generate_token_mappings, generate_verbatim_import_mappings, js_ast::codegen,
-        typescript_declaration_annotation_end,
+        generate_default_function_wrapper_mappings, generate_server_declaration_mappings,
+        generate_server_token_mappings, generate_server_wrapper_mappings,
+        generate_template_element_runtime_mappings, generate_token_mappings,
+        generate_verbatim_import_mappings, js_ast::codegen, typescript_declaration_annotation_end,
     };
 
     #[test]
@@ -2951,20 +2868,46 @@ mod tests {
     #[test]
     fn client_maps_inline_export_declaration_after_lowering() {
         let source = "<script>export const b = 2;</script>";
-        let generated = "\tconst b = 2;";
-        let mappings = generate_inline_script_mappings(generated, source);
+        let result = compile(
+            source,
+            CompileOptions {
+                generate: GenerateMode::Client,
+                filename: Some("input.svelte".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let map: serde_json::Value =
+            serde_json::from_str(result.js.map.as_deref().unwrap()).unwrap();
+        let mappings =
+            crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+                map["mappings"].as_str().unwrap(),
+            );
+        let (line, declaration_column) = result
+            .js
+            .code
+            .lines()
+            .enumerate()
+            .find_map(|(line, code)| {
+                code.find("const b = 2;")
+                    .map(|column| (line, column as u32))
+            })
+            .unwrap_or_else(|| {
+                panic!("missing declaration in generated code:\n{}", result.js.code)
+            });
 
-        for expected in [(0, 1, 0, 15), (0, 11, 0, 25), (0, 12, 0, 26)] {
+        for (generated_column, original_column) in [
+            (declaration_column, 15),
+            (declaration_column + 6, 21),
+            (declaration_column + 10, 25),
+            (declaration_column + 12, 27),
+        ] {
             assert!(
-                mappings.iter().any(|mapping| {
-                    (
-                        mapping.gen_line,
-                        mapping.gen_col,
-                        mapping.orig_line,
-                        mapping.orig_col,
-                    ) == expected
-                }),
-                "missing inline declaration mapping {expected:?}: {mappings:?}"
+                mappings[line]
+                    .iter()
+                    .any(|segment| { segment[..4] == [generated_column, 0, 0, original_column] }),
+                "missing inline declaration mapping at {line}:{generated_column}: {:?}",
+                mappings[line]
             );
         }
     }
