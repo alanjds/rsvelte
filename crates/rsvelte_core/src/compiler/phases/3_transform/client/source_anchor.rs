@@ -18,6 +18,7 @@ use super::types::ComponentClientTransformState;
 use crate::ast::template::ExpressionTag;
 use crate::compiler::phases::phase3_transform::js_ast::arena::JsArena;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::{JsExpr, JsSourceAnchor};
+use crate::compiler::phases::phase3_transform::shared::js_scan;
 use compact_str::CompactString;
 
 /// One `{ … }` region and the comments written in it.
@@ -67,12 +68,9 @@ impl CommentRegion {
         .parse();
         // A caller may deliberately span template punctuation between two
         // source nodes (for example an each header and a following `{@const}`).
-        // The slice is not necessarily a valid JS program, but the lexer still
-        // reports its comments accurately.
-        if ret.program.comments.is_empty() {
-            return None;
-        }
-        let comments = ret
+        // Preserve whatever comments the parser reaches, then supplement them
+        // below when that punctuation stops parsing early.
+        let mut comments: Vec<_> = ret
             .program
             .comments
             .iter()
@@ -85,6 +83,27 @@ impl CommentRegion {
                 )
             })
             .collect();
+        // Some callers deliberately include Svelte template punctuation or a
+        // declaration such as `const c = ...`. Such a slice is not a valid
+        // parenthesized expression, and the parser can stop before lexing a
+        // later comment. Supplement its results with the shared opaque-aware
+        // scanner. Keeping both matters for comments inside `${...}`, which
+        // the parser sees while the scanner treats the template as opaque.
+        for (relative_start, relative_end) in js_scan::comment_ranges(inner.as_bytes()) {
+            let line = inner.as_bytes()[relative_start + 1] == b'/';
+            let start = relative_start as u32 + inner_start;
+            let end = relative_end as u32 + inner_start;
+            if comments.iter().any(|&(comment_start, comment_end, _)| {
+                comment_start == start && comment_end == end
+            }) {
+                continue;
+            }
+            comments.push((start, end, line));
+        }
+        if comments.is_empty() {
+            return None;
+        }
+        comments.sort_unstable_by_key(|&(start, _, _)| start);
         Some(Self {
             start: from,
             end: inner_end,

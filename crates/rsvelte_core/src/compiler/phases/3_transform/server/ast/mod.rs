@@ -28,8 +28,9 @@ use crate::compiler::phases::phase2_analyze::ComponentAnalysis;
 use crate::compiler::phases::phase3_transform::builders::B;
 use crate::compiler::phases::phase3_transform::jsnode_to_oxc::jsnode_to_oxc_expr;
 use crate::compiler::phases::phase3_transform::server::evaluate::EvalValue;
+use crate::compiler::phases::phase3_transform::shared::js_scan;
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{Comment, Expression as OxcExpression, Statement};
+use oxc_ast::ast::{Comment, CommentKind, Expression as OxcExpression, Statement};
 use oxc_ast_visit::VisitMut;
 use oxc_span::{GetSpan, GetSpanMut, SPAN, Span};
 use visitors::shared::TemplateEntry;
@@ -398,7 +399,8 @@ impl<'a> ServerTransformState<'a> {
             oxc_span::SourceType::mjs().with_typescript(true),
         )
         .parse();
-        ret.program
+        let mut comments: Vec<_> = ret
+            .program
             .comments
             .iter()
             .map(|comment| {
@@ -407,7 +409,38 @@ impl<'a> ServerTransformState<'a> {
                 comment.attached_to = comment.span.end;
                 comment
             })
-            .collect()
+            .collect();
+        // A template region can include Svelte punctuation between otherwise
+        // valid JavaScript fragments. The parser may stop at that punctuation
+        // before reaching a later comment, so supplement its comments with a
+        // lexical pass that skips strings, templates, regexes and comments.
+        // Retain the parser results as well because it sees comments inside
+        // `${...}`, while the scanner deliberately treats templates as opaque.
+        for (comment_start, comment_end) in js_scan::comment_ranges(slice.as_bytes()) {
+            let comment_start = comment_start as u32 + start;
+            let comment_end = comment_end as u32 + start;
+            if comments
+                .iter()
+                .any(|comment| comment.span == Span::new(comment_start, comment_end))
+            {
+                continue;
+            }
+            let relative_start = (comment_start - start) as usize;
+            let relative_end = (comment_end - start) as usize;
+            let raw = &slice[relative_start..relative_end];
+            let kind = if raw.starts_with("//") {
+                CommentKind::Line
+            } else if raw.contains('\n') || raw.contains('\r') {
+                CommentKind::MultiLineBlock
+            } else {
+                CommentKind::SingleLineBlock
+            };
+            let mut comment = Comment::new(comment_start, comment_end, kind);
+            comment.attached_to = comment_end;
+            comments.push(comment);
+        }
+        comments.sort_unstable_by_key(|comment| comment.span.start);
+        comments
     }
 
     /// Restrict a template expression's interior to the part reachable by
