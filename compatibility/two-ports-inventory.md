@@ -386,10 +386,11 @@ remaining phase-2 writers are the reachable call, object-spread and top-level-sp
 template-expression walker.
 
 The first migration slices now attach and consume that Phase 2 metadata for `AttachTag`,
-`SpreadAttribute`, `StyleDirective`, and the expressions inside a regular `style=` attribute.
-The generic attribute builder's `walk_metadata_flags` / `json_contains_call` path and the shared
-`expression_has_call` helper remain separate Phase 3 decisions, so this row stays open rather
-than treating deletion of four local re-walks as agreement of the whole port family.
+`SpreadAttribute`, `StyleDirective`, the expressions inside a regular `style=` attribute, and
+standalone generic attribute values. The generic attribute builder's multi-part
+`walk_metadata_flags` / `json_contains_call` path and the shared `expression_has_call` helper
+remain separate Phase 3 decisions, so this row stays open rather than treating deletion of these
+local re-walks as agreement of the whole port family.
 
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 

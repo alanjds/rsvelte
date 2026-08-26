@@ -82,7 +82,8 @@ where
         AttributeValue::Expression(expr_tag) => {
             // Extract the expression from the ExpressionTag using the full expression converter
             let expression = extract_expression_from_tag_with_context(expr_tag, context);
-            let mut metadata = extract_metadata_from_tag(expr_tag);
+            let mut metadata =
+                ExpressionMetadata::from_template_metadata(&expr_tag.metadata.expression);
 
             // Check for reactive state using the comprehensive check that considers transforms
             let has_reactive_state =
@@ -94,11 +95,7 @@ where
             // `build_attribute_value`, so feeding it the broad walk would
             // wrap pure calls like `<Child prop={encodeURIComponent('x')}>`
             // in `$.derived(...)` (regresses the `purity` snapshot fixture).
-            let has_call = expr_tag.metadata.expression.has_call();
-            // `build_expression` reads the same flag upstream does, so a pure
-            // call (`String(1)`) must not be wrapped just because the phase-3
-            // walk saw a `CallExpression`.
-            metadata.set_has_call(has_call);
+            let has_call = metadata.has_call();
 
             // Apply transforms via build_expression (handles props: x -> x())
             let transformed = build_expression(context, &expression, &metadata);
@@ -136,7 +133,8 @@ where
 
                 AttributeValuePart::ExpressionTag(expr_tag) => {
                     let expression = extract_expression_from_tag_with_context(expr_tag, context);
-                    let mut metadata = extract_metadata_from_tag(expr_tag);
+                    let mut metadata =
+                        ExpressionMetadata::from_template_metadata(&expr_tag.metadata.expression);
 
                     // Check for reactive state using the comprehensive check that considers transforms
                     let has_reactive_state =
@@ -145,8 +143,7 @@ where
                     // Use Phase 2's narrow has_call (matches the official
                     // compiler) — see the matching comment in the
                     // `AttributeValue::Expression` arm above for why.
-                    let has_call = expr_tag.metadata.expression.has_call();
-                    metadata.set_has_call(has_call);
+                    let has_call = metadata.has_call();
 
                     // Apply transforms via build_expression (handles props: x -> x())
                     let transformed = build_expression(context, &expression, &metadata);
