@@ -1980,6 +1980,7 @@ impl<'a> Parser<'a> {
                 name_loc,
                 value,
                 modifiers,
+                metadata: Box::default(),
             },
         )))
     }

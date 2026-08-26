@@ -700,14 +700,10 @@ pub fn build_style_directives_object_with_memoizer(
     let mut has_await = false;
 
     for directive in style_directives {
-        // Track metadata for memoization decision
-        for expr in &get_directive_expressions(directive) {
-            has_call = has_call || super::utils::expression_has_call(expr, context);
-            has_state = has_state
-                || super::utils::expression_has_reactive_state(expr, context)
-                || super::utils::expression_has_call(expr, context);
-            has_await = has_await || super::utils::expression_has_await(expr);
-        }
+        let metadata = &directive.metadata.expression;
+        has_call |= metadata.has_call();
+        has_state |= metadata.has_state();
+        has_await |= metadata.has_await();
 
         // Build the expression for this directive
         let expression = if matches!(&directive.value, AttributeValue::True(true)) {
@@ -1047,60 +1043,16 @@ pub fn build_set_style(
         // Build style directives object
         next = Some(build_style_directives_object(style_directives, context));
 
-        // Check if any style directive has state, non-pure function calls, or async blockers
-        // In the official compiler, has_call implies has_state for template_effect routing
-        // Also check for async blockers - variables that depend on async promises should be
-        // treated as having state so they end up in template_effect with proper promise deps
-        for directive in style_directives {
-            // Upstream analyzes a SHORTHAND directive by binding KIND alone
-            // (`binding.kind !== 'normal'`, StyleDirective.js) — it never
-            // evaluates the value, so an unmutated `$state` stays reactive
-            // here even though the explicit `style:x={x}` form would fold it
-            // as a known constant via `scope.evaluate`.
-            if matches!(&directive.value, AttributeValue::True(_)) {
-                let name = directive.name.as_str();
-                let shadowed = context.state.each_binding_context.iter().any(|c| {
-                    c.item_name == name || (!c.index_name.is_empty() && c.index_name == name)
-                });
-                let non_normal_binding = context
-                    .state
-                    .scope_root
-                    .binding_at_reference(name, directive.start)
-                    .or_else(|| context.state.get_binding(name))
-                    .is_some_and(|b| {
-                        !matches!(
-                            b.kind,
-                            crate::compiler::phases::phase2_analyze::scope::BindingKind::Normal
-                        )
-                    });
-                if shadowed || non_normal_binding {
-                    has_state = true;
-                    break;
-                }
-            } else {
-                if get_directive_expressions(directive).iter().any(|expr| {
-                    super::utils::expression_has_reactive_state(expr, context)
-                        || super::utils::expression_has_call(expr, context)
-                }) {
-                    has_state = true;
-                    break;
-                }
-            }
-            // Check for async blockers: convert directive expression to JS and check blockers
-            let js_expr = if matches!(&directive.value, AttributeValue::True(true)) {
-                b::id(directive.name.as_str())
-            } else {
-                let result = build_attribute_value(&directive.value, context, |expr, _| expr);
-                result.value
-            };
-            if context
-                .state
-                .has_blockers_for_expr(&js_expr, &context.arena)
-            {
-                has_state = true;
-                break;
-            }
-        }
+        has_state |= style_directives.iter().any(|directive| {
+            let metadata = &directive.metadata.expression;
+            metadata.has_state()
+                || metadata.has_await()
+                || metadata.dependencies.iter().any(|binding_idx| {
+                    context.state.scope_root.bindings[*binding_idx]
+                        .blocker
+                        .is_some()
+                })
+        });
 
         if has_state {
             let id = context.state.memoizer.generate_id("styles");
@@ -1366,36 +1318,6 @@ fn build_style_attribute_value_with_memoization(
             });
             (value, has_state)
         }
-    }
-}
-
-/// Helper to get the expressions from a style directive value.
-///
-/// Upstream's phase-2 `StyleDirective` visitor merges the metadata of EVERY
-/// `ExpressionTag` chunk, so a directive is reactive when any chunk is.
-fn get_directive_expressions<'a>(
-    directive: &StyleDirective<'a>,
-) -> Vec<crate::ast::js::Expression<'a>> {
-    use crate::ast::js::Expression;
-
-    match &directive.value {
-        AttributeValue::Expression(expr_tag) => vec![expr_tag.expression.clone()],
-        AttributeValue::True(_) => {
-            // For style:color shorthand, create an identifier expression
-            vec![Expression::from_json(serde_json::json!({
-                "type": "Identifier",
-                "name": directive.name.to_string()
-            }))]
-        }
-        AttributeValue::Sequence(parts) => parts
-            .iter()
-            .filter_map(|part| match part {
-                crate::ast::template::AttributeValuePart::ExpressionTag(expr_tag) => {
-                    Some(expr_tag.expression.clone())
-                }
-                _ => None,
-            })
-            .collect(),
     }
 }
 

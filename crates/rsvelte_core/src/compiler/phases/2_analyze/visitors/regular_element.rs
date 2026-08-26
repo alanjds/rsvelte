@@ -802,8 +802,8 @@ pub fn visit<'a, 'b: 'a>(
                 // `class_directive::visit` can populate `directive.metadata`.
             }
             Attribute::StyleDirective(_) => {
-                // Re-borrow the style directive for the visit call
-                if let Attribute::StyleDirective(style_dir) = &element.attributes[i] {
+                // Re-borrow the style directive mutably so analysis can populate metadata.
+                if let Attribute::StyleDirective(style_dir) = &mut element.attributes[i] {
                     super::style_directive::visit(style_dir, context)?;
                 }
             }
