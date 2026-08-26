@@ -1061,6 +1061,8 @@ fn token_pass_owners_diagnostic() {
         // deliberately reads that checked-in population directly. An unchanged
         // generated line gives positions a stable local frame even when lines
         // elsewhere in the output changed between the two compiler revisions.
+        // Ignore leading indentation: rsvelte uses spaces where the pinned
+        // official fixture uses tabs, which is not a semantic line change.
         let fixture = |file: &str| {
             fs::read_to_string(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1095,7 +1097,11 @@ fn token_pass_owners_diagnostic() {
                 .into_iter()
                 .flat_map(str::lines)
                 .enumerate()
-                .filter_map(|(line, text)| (Some(text) == generated_line).then_some(line))
+                .filter_map(|(line, text)| {
+                    generated_line
+                        .is_some_and(|generated| text.trim() == generated.trim())
+                        .then_some(line)
+                })
                 .collect();
             let source_matches = official_map.as_ref().is_some_and(|map| {
                 map.sources_content
