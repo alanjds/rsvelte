@@ -68,6 +68,7 @@ use oxc_syntax::operator::{
 };
 use rsvelte_esrap::LocRange;
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 /// A converted program plus the comment coordinate space it needs to be printed
 /// in (see the module docs). `comment_source` is `None` for the common
@@ -417,6 +418,11 @@ struct Synth {
     source: String,
     loc_base: u32,
     comments: Vec<Comment>,
+    /// Original-source comment ranges already copied into an anchored region.
+    /// Overlapping [`JsSourceAnchor`] regions share the upstream comment
+    /// cursor, so the same source comment must only enter the synthetic buffer
+    /// once even when their `region_start`s differ.
+    source_comments: HashSet<(u32, u32)>,
     /// Comment-space ranges resolving back to original-source offsets, for
     /// source maps: one per chunk region, plus one per reserved anchor.
     loc_map: Vec<LocRange>,
@@ -452,6 +458,7 @@ impl Synth {
             source,
             loc_base,
             comments: Vec::new(),
+            source_comments: HashSet::new(),
             loc_map: Vec::new(),
             pending_region: None,
             last_region_source: None,
@@ -653,27 +660,25 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             synth.source.push_str(&anchor.region);
             synth.source.push('\n');
             let region_start = anchor.region_start;
-            synth.comments.extend(
-                anchor
-                    .comments
-                    .iter()
-                    .map(|&(start, end, line)| -> Comment {
-                        let start = base + (start - region_start);
-                        let end = base + (end - region_start);
-                        let kind = if line {
-                            CommentKind::Line
-                        } else if anchor.region[(start - base) as usize..(end - base) as usize]
-                            .contains('\n')
-                        {
-                            CommentKind::MultiLineBlock
-                        } else {
-                            CommentKind::SingleLineBlock
-                        };
-                        let mut comment = Comment::new(start, end, kind);
-                        comment.attached_to = end;
-                        comment
-                    }),
-            );
+            for &(source_start, source_end, line) in &anchor.comments {
+                if !synth.source_comments.insert((source_start, source_end)) {
+                    continue;
+                }
+                let start = base + (source_start - region_start);
+                let end = base + (source_end - region_start);
+                let kind = if line {
+                    CommentKind::Line
+                } else if anchor.region[(start - base) as usize..(end - base) as usize]
+                    .contains('\n')
+                {
+                    CommentKind::MultiLineBlock
+                } else {
+                    CommentKind::SingleLineBlock
+                };
+                let mut comment = Comment::new(start, end, kind);
+                comment.attached_to = end;
+                synth.comments.push(comment);
+            }
             synth.open_source_region = Some(anchor.region_start);
             synth.open_source_base = base;
         }

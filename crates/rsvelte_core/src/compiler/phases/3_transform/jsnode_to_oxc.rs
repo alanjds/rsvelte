@@ -862,15 +862,21 @@ impl<'a, 'arena> Cx<'a, 'arena> {
             }
             JsNode::MemberExpression { .. } => Some(Expression::from(self.member_expr(node)?)),
             JsNode::CallExpression {
+                start,
+                end,
                 callee,
                 arguments,
                 optional,
-                ..
             } => {
                 let callee = self.expr_id(*callee)?;
                 let args = self.arguments(*arguments)?;
                 Some(Expression::CallExpression(CallExpression::boxed(
-                    SPAN, callee, None, args, *optional, &self.ab,
+                    Span::new(*start, *end),
+                    callee,
+                    None,
+                    args,
+                    *optional,
+                    &self.ab,
                 )))
             }
             JsNode::NewExpression {
