@@ -685,7 +685,7 @@ still carries is a named lowering, not a mystery:
 | `let x = $.prop($$props, …)` and its default | the declaration is written by the *script text* rewriter, which records nothing; the chunk projection has to re-derive it by alignment |
 | hoisted verbatim `import` lines | `extract_imports` returns text with no offset, so they are emitted as `JsStatement::Raw` |
 | element/component identifier *uses* (`pre.textContent`, `$.sibling(div, 2)`) | `flush_node` stamps the declaration; `SiblingPrev::Reuse` carries a bare `b::id` |
-| component `bind:` accessor pairs (`get potato()`) | built from `JsExpr::Raw` text |
+| component `bind:` interpolation fallback (`${potato() ?? …}`) | the generated interpolation is still recovered by matching the source `{potato}`; accessor keys now carry the full `bind:potato` range on dedicated spanned property-key variants |
 | the `(deps, $.untrack(…))` sequence tail | builder-made, with no source anchor |
 
 Every row is a `Raw` fragment or a builder call that had a span available and dropped it —

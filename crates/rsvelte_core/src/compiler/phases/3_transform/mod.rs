@@ -269,9 +269,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 };
                 let component_bind_mappings = if !map_pass_disabled("component_bind")
                     && source.contains("bind:")
-                    && (result.code.contains("get ")
-                        || result.code.contains("set ")
-                        || result.code.contains("${"))
+                    && result.code.contains("${")
                 {
                     generate_component_bind_mappings_with_starts(
                         &result.code,
@@ -2297,7 +2295,8 @@ fn collect_runtime_use_sites<'code>(
     sites
 }
 
-/// Inline instance declarations survive lowering verbatim after `export` is removed.
+/// Preserve the remaining component-bind template interpolation mapping.
+/// Accessor keys carry their directive span on `JsPropertyKey` directly.
 fn generate_component_bind_mappings_with_starts(
     generated: &str,
     source: &str,
@@ -2329,32 +2328,6 @@ fn generate_component_bind_mappings_with_starts(
             continue;
         };
         let directive_end = name_start + name.len();
-        for prefix in ["get ", "set "] {
-            let pattern = format!("{prefix}{name}");
-            let mut generated_cursor = 0;
-            while let Some(relative) = generated[generated_cursor..].find(&pattern) {
-                let key_start = generated_cursor + relative + prefix.len();
-                for (generated_offset, original_offset) in [
-                    (key_start, directive_start),
-                    (key_start + name.len(), directive_end),
-                ] {
-                    let (gen_line, gen_col) =
-                        offset_to_line_col_utf16(generated, &generated_starts, generated_offset);
-                    let (orig_line, orig_col) =
-                        offset_to_line_col_utf16(source, &source_starts, original_offset);
-                    mappings.push(js_ast::codegen::SourceMapping {
-                        gen_line: gen_line as u32,
-                        gen_col: gen_col as u32,
-                        source: 0,
-                        orig_line: orig_line as u32,
-                        orig_col: orig_col as u32,
-                        name: None,
-                    });
-                }
-                generated_cursor = key_start + name.len();
-            }
-        }
-
         let template = format!("{{{name}}}");
         if let Some(template_start) = source.find(&template) {
             let source_name = template_start + 1;
@@ -2998,7 +2971,7 @@ mod tests {
     }
 
     #[test]
-    fn client_keeps_component_bind_shorthand_carriers_after_merging() {
+    fn client_maps_component_bind_accessor_keys_without_generated_text_matching() {
         let source = "<script>\n\texport let potato;\n</script>\n\n{potato}\n<Widget bind:potato/>";
         let result = compile(
             source,
@@ -3030,6 +3003,19 @@ mod tests {
                 mappings[line]
             );
         }
+    }
+
+    #[test]
+    fn component_bind_pass_does_not_recover_accessor_keys() {
+        let source = "<Widget bind:potato/>";
+        let generated =
+            "const props = { get potato() { return potato; }, set potato($$value) {} };";
+        let starts = MappingLineStarts::new(generated, source);
+
+        assert!(
+            generate_component_bind_mappings_with_starts(generated, source, &starts).is_empty(),
+            "accessor key mappings must come from JsPropertyKey spans"
+        );
     }
 
     #[test]

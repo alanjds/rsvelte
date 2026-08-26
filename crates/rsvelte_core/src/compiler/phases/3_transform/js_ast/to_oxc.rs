@@ -2425,6 +2425,22 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     let expr = Expression::new_identifier(SPAN, self.str(name), &self.ab);
                     PropertyKey::from(expr)
                 }
+                JsPropertyKey::SpannedIdentifier { name, start, end } => {
+                    let expr = Expression::new_identifier(
+                        Span::new(*start, *end),
+                        self.str(name),
+                        &self.ab,
+                    );
+                    PropertyKey::from(expr)
+                }
+                JsPropertyKey::SpannedStringLiteral { value, start, end } => {
+                    PropertyKey::from(Expression::StringLiteral(StringLiteral::new(
+                        Span::new(*start, *end),
+                        self.str(value),
+                        None,
+                        &self.ab,
+                    )))
+                }
                 JsPropertyKey::Literal(lit) => {
                     let expr = self.literal(lit)?;
                     PropertyKey::from(expr)
@@ -2455,6 +2471,18 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 self.str(name),
                 &self.ab,
             )),
+            JsPropertyKey::SpannedIdentifier { name, start, end } => {
+                Some(PropertyKey::new_static_identifier(
+                    Span::new(*start, *end),
+                    self.str(name),
+                    &self.ab,
+                ))
+            }
+            JsPropertyKey::SpannedStringLiteral { value, start, end } => {
+                Some(PropertyKey::from(Expression::StringLiteral(
+                    StringLiteral::new(Span::new(*start, *end), self.str(value), None, &self.ab),
+                )))
+            }
             JsPropertyKey::Literal(lit) => {
                 // A literal key is the literal expression in key position.
                 let expr = self.literal(lit)?;
