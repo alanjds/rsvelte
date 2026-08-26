@@ -270,18 +270,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 } else {
                     Vec::new()
                 };
-                let component_bind_mappings = if !map_pass_disabled("component_bind")
-                    && source.contains("bind:")
-                    && result.code.contains("${")
-                {
-                    generate_component_bind_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                } else {
-                    Vec::new()
-                };
                 let collapsed_declaration_mappings = if map_pass_disabled("collapsed") {
                     Vec::new()
                 } else {
@@ -340,7 +328,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 };
                 let mapping_capacity = wrapper_mappings.len()
                     + bind_value_mappings.len()
-                    + component_bind_mappings.len()
                     + runtime_mappings.len()
                     + legacy_prop_read_mappings.len()
                     + template_element_mappings.len()
@@ -354,7 +341,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 let mut mappings = Vec::with_capacity(mapping_capacity);
                 mappings.extend(wrapper_mappings);
                 mappings.extend(bind_value_mappings);
-                mappings.extend(component_bind_mappings);
                 mappings.extend(runtime_mappings);
                 mappings.extend(legacy_prop_read_mappings);
                 mappings.extend(template_element_mappings);
@@ -2368,71 +2354,6 @@ fn collect_runtime_use_sites<'code>(
     sites
 }
 
-/// Preserve the remaining component-bind template interpolation mapping.
-/// Accessor keys carry their directive span on `JsPropertyKey` directly.
-fn generate_component_bind_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    fn identifier_after(code: &str, mut offset: usize) -> Option<(usize, &str)> {
-        let start = offset;
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            offset += 1;
-        }
-        (offset > start).then_some((start, &code[start..offset]))
-    }
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = source[cursor..].find("bind:") {
-        let directive_start = cursor + relative;
-        let name_start = directive_start + "bind:".len();
-        let Some((_, name)) = identifier_after(source, name_start) else {
-            cursor = name_start;
-            continue;
-        };
-        let directive_end = name_start + name.len();
-        let template = format!("{{{name}}}");
-        if let Some(template_start) = source.find(&template) {
-            let source_name = template_start + 1;
-            let generated_pattern = format!("${{{name}() ??");
-            let mut generated_cursor = 0;
-            while let Some(relative) = generated[generated_cursor..].find(&generated_pattern) {
-                let generated_name = generated_cursor + relative + 2;
-                for (generated_offset, original_offset) in [
-                    (generated_name, source_name),
-                    (generated_name + name.len(), source_name + name.len()),
-                ] {
-                    let (gen_line, gen_col) =
-                        offset_to_line_col_utf16(generated, &generated_starts, generated_offset);
-                    let (orig_line, orig_col) =
-                        offset_to_line_col_utf16(source, &source_starts, original_offset);
-                    mappings.push(js_ast::codegen::SourceMapping {
-                        gen_line: gen_line as u32,
-                        gen_col: gen_col as u32,
-                        source: 0,
-                        orig_line: orig_line as u32,
-                        orig_col: orig_col as u32,
-                        name: None,
-                    });
-                }
-                generated_cursor = generated_name + name.len();
-            }
-        }
-        cursor = directive_end;
-    }
-    mappings
-}
-
 #[cfg(test)]
 fn generate_bind_value_mappings(
     generated: &str,
@@ -2844,12 +2765,12 @@ mod tests {
 
     use super::{
         MappingLineStarts, generate_bind_value_mappings,
-        generate_component_bind_mappings_with_starts, generate_default_function_wrapper_mappings,
-        generate_inline_script_mappings, generate_legacy_prop_read_mappings,
-        generate_server_declaration_mappings, generate_server_token_mappings,
-        generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
-        generate_token_mappings, generate_verbatim_import_mappings, is_component_bind_key_mapping,
-        js_ast::codegen, typescript_declaration_annotation_end,
+        generate_default_function_wrapper_mappings, generate_inline_script_mappings,
+        generate_legacy_prop_read_mappings, generate_server_declaration_mappings,
+        generate_server_token_mappings, generate_server_wrapper_mappings,
+        generate_template_element_runtime_mappings, generate_token_mappings,
+        generate_verbatim_import_mappings, is_component_bind_key_mapping, js_ast::codegen,
+        typescript_declaration_annotation_end,
     };
 
     #[test]
@@ -3045,7 +2966,7 @@ mod tests {
     }
 
     #[test]
-    fn client_maps_component_bind_accessor_keys_without_generated_text_matching() {
+    fn client_maps_component_bind_accessors_and_interpolation_without_text_matching() {
         let source = "<script>\n\texport let potato;\n</script>\n\n{potato}\n<Widget bind:potato/>";
         let result = compile(
             source,
@@ -3085,19 +3006,6 @@ mod tests {
         let generated_template = generated.find("${potato() ??").unwrap() + 2;
         assert_mapping(generated_template, 4, 1);
         assert_mapping(generated_template + "potato".len(), 4, 7);
-    }
-
-    #[test]
-    fn component_bind_pass_does_not_recover_accessor_keys() {
-        let source = "<Widget bind:potato/>";
-        let generated =
-            "const props = { get potato() { return potato; }, set potato($$value) {} };";
-        let starts = MappingLineStarts::new(generated, source);
-
-        assert!(
-            generate_component_bind_mappings_with_starts(generated, source, &starts).is_empty(),
-            "accessor key mappings must come from JsPropertyKey spans"
-        );
     }
 
     #[test]

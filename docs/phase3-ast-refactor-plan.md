@@ -671,21 +671,20 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `legacy_prop_read` | 16 | 16 |
 | `inline_script` | 7 | 4 |
 | `bind_value` | 5 | 5 |
-| `component_bind` | 5 | 4 |
+| `component_bind` | 5 | **0 — deleted** |
 | `verbatim_import` | 4 | 4 |
 | `collapsed_declaration` | 0 | 0 |
 | `rune` | 0 | 0 |
 
-`default_function_wrapper` and `effect_callback` are deleted: both are now produced by a
-span, and the before/after column is the attribution. The other nine stay, and what each
-still carries is a named lowering, not a mystery:
+`default_function_wrapper`, `effect_callback` and `component_bind` are deleted: all are now
+produced by spans, and the before/after column is the attribution. The other eight stay, and
+what each still carries is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
 | --- | --- |
 | `let x = $.prop($$props, …)` and its default | the declaration is written by the *script text* rewriter, which records nothing; the chunk projection has to re-derive it by alignment |
 | hoisted verbatim `import` lines | `extract_imports` returns text with no offset, so they are emitted as `JsStatement::Raw` |
 | element/component identifier *uses* (`pre.textContent`, `$.sibling(div, 2)`) | `flush_node` stamps the declaration; `SiblingPrev::Reuse` carries a bare `b::id` |
-| component `bind:` interpolation fallback (`${potato() ?? …}`) | the generated interpolation is still recovered by matching the source `{potato}`; accessor keys now carry the full `bind:potato` range on dedicated spanned property-key variants |
 | the `(deps, $.untrack(…))` sequence tail | builder-made, with no source anchor |
 
 Every row is a `Raw` fragment or a builder call that had a span available and dropped it —
