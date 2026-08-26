@@ -414,6 +414,7 @@ pub(crate) fn print_module_program(
                         converted.loc_base,
                         None,
                         &converted.loc_map,
+                        &converted.brace_mappings,
                         &print_opts,
                     )
                     .code
@@ -2682,6 +2683,7 @@ pub(crate) fn transform_client(
                             converted.loc_base,
                             map_source,
                             &converted.loc_map,
+                            &converted.brace_mappings,
                             &print_opts,
                         );
                         super::profile::record_esrap_client_split(super::profile::timer_elapsed(

@@ -66,7 +66,7 @@ use oxc_syntax::number::{BigintBase, NumberBase};
 use oxc_syntax::operator::{
     AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator, UpdateOperator,
 };
-use rsvelte_esrap::LocRange;
+use rsvelte_esrap::{BraceMapping, LocRange};
 use std::cell::RefCell;
 
 /// A converted program plus the comment coordinate space it needs to be printed
@@ -77,6 +77,7 @@ pub struct Converted<'a> {
     pub comment_source: Option<String>,
     pub loc_base: u32,
     pub loc_map: Vec<LocRange>,
+    pub brace_mappings: Vec<BraceMapping>,
 }
 
 impl<'a> Converted<'a> {
@@ -189,6 +190,7 @@ fn convert_once<'a, 'source>(
         arena,
         islands,
         synth: RefCell::new(Synth::new(loc_base)),
+        brace_mappings: RefCell::new(Vec::new()),
         component_brace_span: program
             .component_brace_span
             .as_ref()
@@ -206,6 +208,7 @@ fn convert_once<'a, 'source>(
     })?;
 
     let synth = cx.synth.into_inner();
+    let brace_mappings = cx.brace_mappings.into_inner();
     let ab = AstBuilder::new(allocator);
     let body = ArenaVec::from_iter_in(body, &ab);
     let comments = ArenaVec::from_iter_in(synth.comments.iter().cloned(), &ab);
@@ -224,6 +227,7 @@ fn convert_once<'a, 'source>(
         comment_source: synth.enabled.then(|| synth.source.clone()),
         loc_base: synth.loc_base,
         loc_map: synth.loc_map.clone(),
+        brace_mappings,
     };
     Some((converted, synth))
 }
@@ -499,6 +503,7 @@ struct Cx<'a, 'arena, 'source> {
     arena: &'arena JsArena,
     islands: &'arena [AstIsland<'source>],
     synth: RefCell<Synth>,
+    brace_mappings: RefCell<Vec<BraceMapping>>,
     /// [`JsProgram::component_brace_span`], matched by function name.
     component_brace_span: Option<(&'arena str, u32, u32)>,
 }
@@ -1195,6 +1200,12 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         let span = if span.is_empty() {
             Span::new(start, end)
         } else {
+            self.brace_mappings.borrow_mut().push(BraceMapping {
+                body_start: span.start,
+                body_end: span.end,
+                source_start: start,
+                source_end: end,
+            });
             span
         };
         Some((stmts, span))

@@ -676,9 +676,12 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `collapsed_declaration` | 0 | 0 |
 | `rune` | 0 | 0 |
 
-`default_function_wrapper` and `effect_callback` are deleted: both are now produced by a
-span, and the before/after column is the attribution. The other nine stay, and what each
-still carries is a named lowering, not a mystery:
+`default_function_wrapper` and `effect_callback` are deleted: both are now produced by AST
+positions, and the before/after column is the attribution. The first wrapper change still
+retained a kill-switch-backed text pass for comment-bearing components because their block span
+also drives comment placement. The follow-up keeps that span in comment space and passes the two
+source-backed brace positions separately to the printer, so the client pass is now actually gone.
+The other nine stay, and what each still carries is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
 | --- | --- |

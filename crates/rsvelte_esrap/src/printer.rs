@@ -123,6 +123,9 @@ pub struct Printer<'opt, const HAS_COMMENTS: bool = true, const DIRECT: bool = f
     /// Sorted, disjoint ranges translating a comment-space offset back to a
     /// source-map-space offset.
     loc_map: Vec<LocRange>,
+    /// Source-backed brace ranges for blocks whose ordinary span must remain in
+    /// comment space. Keyed by that ordinary body span.
+    brace_mappings: Vec<BraceMapping>,
     /// Decorator expressions have no esrap mapping visitor, so their nested
     /// tokens must stay unmapped too.
     map_nodes: bool,
@@ -143,6 +146,17 @@ pub struct LocRange {
     pub source: Option<u32>,
     /// Whether the range advances through the source byte for byte.
     pub linear: bool,
+}
+
+/// A block body whose braces map somewhere other than its comment-placement
+/// span. This lets a synthetic wrapper retain its comment island while its
+/// generated braces map to an enclosing source construct.
+#[derive(Debug, Clone, Copy)]
+pub struct BraceMapping {
+    pub body_start: u32,
+    pub body_end: u32,
+    pub source_start: u32,
+    pub source_end: u32,
 }
 
 /// esrap's `write_comment`: re-emit a comment, splitting a multi-line block
@@ -699,6 +713,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             map_line_starts: None,
             loc_base: None,
             loc_map: Vec::new(),
+            brace_mappings: Vec::new(),
             map_nodes: true,
         }
     }
@@ -723,6 +738,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             placement_source: None,
             loc_base: None,
             loc_map: Vec::new(),
+            brace_mappings: Vec::new(),
             map_nodes: true,
         }
     }
@@ -753,12 +769,14 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         map_line_starts: Vec<u32>,
         loc_base: u32,
         loc_map: &[LocRange],
+        brace_mappings: &[BraceMapping],
         emit_locations: bool,
     ) -> Self {
         self.emit_locations = emit_locations;
         self.map_line_starts = Some(map_line_starts);
         self.loc_base = Some(loc_base);
         self.loc_map = loc_map.to_vec();
+        self.brace_mappings = brace_mappings.to_vec();
         self
     }
 
@@ -940,6 +958,19 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         body_end: u32,
         open: bool,
     ) {
+        if let Some(mapping) = self
+            .brace_mappings
+            .iter()
+            .find(|mapping| mapping.body_start == body_start && mapping.body_end == body_end)
+        {
+            let span = if open {
+                Span::new(mapping.source_start, mapping.source_start + 1)
+            } else {
+                Span::new(mapping.source_end - 1, mapping.source_end)
+            };
+            self.write_node(ctx, span, if open { "{" } else { "}" });
+            return;
+        }
         if body_start >= body_end {
             ctx.write_ascii(if open { b'{' } else { b'}' });
             return;

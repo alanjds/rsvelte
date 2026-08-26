@@ -321,24 +321,7 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 } else {
                     Vec::new()
                 };
-                // The printer reads one span for both brace mapping and comment
-                // resync, so a comment-bearing component cannot carry its own
-                // function braces yet.
-                let wrapper_mappings = if map_pass_disabled("wrapper") {
-                    Vec::new()
-                } else {
-                    ast.instance.as_deref().map_or_else(Vec::new, |script| {
-                        generate_default_function_wrapper_mappings_with_starts(
-                            &result.code,
-                            source,
-                            script.start as usize,
-                            script.end as usize,
-                            &mapping_starts,
-                        )
-                    })
-                };
-                let mapping_capacity = wrapper_mappings.len()
-                    + bind_value_mappings.len()
+                let mapping_capacity = bind_value_mappings.len()
                     + component_bind_mappings.len()
                     + runtime_mappings.len()
                     + legacy_prop_read_mappings.len()
@@ -350,7 +333,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + rune_mappings.len()
                     + remaining_result_mappings.len();
                 let mut mappings = Vec::with_capacity(mapping_capacity);
-                mappings.extend(wrapper_mappings);
                 mappings.extend(bind_value_mappings);
                 mappings.extend(component_bind_mappings);
                 mappings.extend(runtime_mappings);
@@ -3108,6 +3090,64 @@ mod tests {
                     ) == expected
                 }),
                 "missing function boundary mapping {expected:?}: {mappings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn client_maps_comment_bearing_default_function_boundaries_from_ast() {
+        let source = "<script>\n\t// keep me\n\tlet value = 1;\n</script>\n\n<p>{value}</p>";
+        let script_end = source.find("</script>").unwrap() + "</script>".len();
+        let result = compile(
+            source,
+            CompileOptions {
+                generate: GenerateMode::Client,
+                filename: Some("input.svelte".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(result.js.code.contains("// keep me"), "{}", result.js.code);
+
+        let function_start = result.js.code.find("export default function ").unwrap();
+        let open = function_start + result.js.code[function_start..].find('{').unwrap();
+        let close = result.js.code.rfind('}').unwrap();
+        let map: serde_json::Value =
+            serde_json::from_str(result.js.map.as_deref().unwrap()).unwrap();
+        let decoded =
+            crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+                map["mappings"].as_str().unwrap(),
+            );
+
+        let line_col = |text: &str, offset: usize| {
+            let prefix = &text[..offset];
+            let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+            let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
+            let column = text[line_start..offset].encode_utf16().count();
+            (line, column)
+        };
+        for (generated, original) in [
+            (open, 0),
+            (open + 1, 1),
+            (close, script_end - 1),
+            (close + 1, script_end),
+        ] {
+            let (generated_line, generated_column) = line_col(&result.js.code, generated);
+            let (original_line, original_column) = line_col(source, original);
+            assert!(
+                decoded[generated_line].iter().any(|segment| {
+                    segment.len() >= 4
+                        && segment[..4]
+                            == [
+                                generated_column as i64,
+                                0,
+                                original_line as i64,
+                                original_column as i64,
+                            ]
+                }),
+                "missing function boundary mapping {generated_line}:{generated_column} -> {original_line}:{original_column}: {}: {:?}",
+                result.js.code,
+                decoded[generated_line]
             );
         }
     }
