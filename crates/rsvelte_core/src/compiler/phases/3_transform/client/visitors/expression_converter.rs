@@ -723,15 +723,23 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
             }
 
             let conv_object = {
+                // Downstream matchers walk a member chain by variant, so a span
+                // wrapper in object position hides the root identifier from them.
+                // A prop read changes that root to a Call anyway; apply that read
+                // before removing the wrapper so its identifier remains the
+                // source carrier inside `foo().bar`.
+                let object_node = pa.get_js_node(*object);
+                let converted = convert_js_node(object_node, context);
+                let converted = if let Some(name) = get_jsnode_identifier_name(object_node)
+                    && let Some(binding) = context.state.get_binding(&name)
+                    && matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
+                    && let Some(read) = context.state.transform.get(&name).and_then(|t| t.read)
                 {
-                    // Downstream matchers walk a member chain by variant, so a span
-                    // wrapper in object position hides the root identifier from them.
-                    let __tmp = without_outer_source_span(
-                        convert_js_node(pa.get_js_node(*object), context),
-                        context,
-                    );
-                    context.arena.alloc_expr(__tmp)
-                }
+                    read(&context.arena, converted)
+                } else {
+                    without_outer_source_span(converted, context)
+                };
+                context.arena.alloc_expr(converted)
             };
 
             let prop_node = pa.get_js_node(*property);
