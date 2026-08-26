@@ -448,7 +448,7 @@ pub fn visit<'a, 'b: 'a>(
 
     for attr in &mut element.attributes {
         if let Attribute::SpreadAttribute(spread) = attr {
-            spread_attribute::visit(spread, context)?;
+            spread_attribute::visit(spread, context, true)?;
         }
     }
 

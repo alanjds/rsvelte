@@ -84,7 +84,7 @@ pub fn visit<'a, 'b: 'a>(
                 }
             }
             Attribute::SpreadAttribute(spread) => {
-                super::spread_attribute::visit(spread, context)?;
+                super::spread_attribute::visit(spread, context, false)?;
             }
             Attribute::Attribute(a) => {
                 super::shared::attribute::warn_attribute_quoted(context, a);

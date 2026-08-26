@@ -12,10 +12,15 @@ use crate::compiler::phases::phase2_analyze::AnalysisError;
 pub fn visit(
     attribute: &mut SpreadAttribute,
     context: &mut VisitorContext,
+    can_set_dom_attributes: bool,
 ) -> Result<(), AnalysisError> {
-    // Spreads can contain class/style/id, so we can't safely prune CSS
-    context.analysis.css.has_dynamic_classes = true;
-    context.analysis.css.has_dynamic_ids = true;
+    // A spread on a DOM element can contain class/style/id, so we can't safely
+    // prune CSS. Component and slot spreads pass props instead and must not
+    // affect selector matching.
+    if can_set_dom_attributes {
+        context.analysis.css.has_dynamic_classes = true;
+        context.analysis.css.has_dynamic_ids = true;
+    }
 
     // Check if this is a $$restProps or $$props spread (for legacy mode)
     if !context.analysis.runes

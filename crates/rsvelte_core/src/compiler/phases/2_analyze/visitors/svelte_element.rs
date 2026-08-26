@@ -279,7 +279,7 @@ pub fn visit<'a, 'b: 'a>(
                 }
             }
             Attribute::SpreadAttribute(spread) => {
-                super::spread_attribute::visit(spread, context)?;
+                super::spread_attribute::visit(spread, context, true)?;
             }
             Attribute::OnDirective(on) => {
                 super::on_directive::visit(on, context)?;

@@ -91,7 +91,7 @@ pub fn visit<'a, 'b: 'a>(
                 super::attribute::visit_attribute_value_expressions(&mut a.value, context)?;
             }
             Attribute::SpreadAttribute(spread) => {
-                super::spread_attribute::visit(spread, context)?;
+                super::spread_attribute::visit(spread, context, false)?;
             }
             _ => {}
         }

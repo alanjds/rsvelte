@@ -40,6 +40,24 @@ fn spread_flags(source: &str) -> (bool, bool) {
     )
 }
 
+fn css_dynamic_flags(source: &str) -> (bool, bool) {
+    let mut root = parse(
+        source,
+        &oxc_allocator::Allocator::default(),
+        ParseOptions::default(),
+    )
+    .expect("parse");
+    // SAFETY: `root.arena` outlives the guard and analysis below.
+    let _arena_guard = unsafe { SerializeArenaGuard::new(&raw const root.arena) };
+    let analysis =
+        analyze_component(&mut root, source, &CompileOptions::default()).expect("analyze");
+
+    (
+        analysis.css.has_dynamic_classes,
+        analysis.css.has_dynamic_ids,
+    )
+}
+
 #[test]
 fn every_legal_host_populates_local_call_metadata() {
     for source in [
@@ -65,6 +83,21 @@ fn global_call_is_not_promoted_to_an_impure_call() {
 fn state_reference_does_not_invent_a_call() {
     let source = "<script>let props = $state();</script><div {...props}></div>";
     assert_eq!(spread_flags(source), (true, false));
+}
+
+#[test]
+fn only_dom_spreads_make_css_attributes_dynamic() {
+    assert_eq!(css_dynamic_flags("<div {...props}></div>"), (true, true));
+    assert_eq!(
+        css_dynamic_flags("<svelte:element this=\"div\" {...props} />"),
+        (true, true)
+    );
+    assert_eq!(css_dynamic_flags("<Widget {...props} />"), (false, false));
+    assert_eq!(
+        css_dynamic_flags("<svelte:component this={Widget} {...props} />"),
+        (false, false)
+    );
+    assert_eq!(css_dynamic_flags("<slot {...props} />"), (false, false));
 }
 
 #[test]
