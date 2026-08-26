@@ -228,12 +228,9 @@ where
 
                 // Build the expression using full context-aware conversion
                 let expression = extract_expression_from_tag_with_context(expr_tag, context);
-                let mut metadata = extract_metadata_from_tag(expr_tag);
-
-                // Phase 3 needs the broad "any CallExpression in the tree" check
-                // for memoisation decisions; see `expression_tag_has_call`.
-                let chunk_has_call = expression_tag_has_call(expr_tag);
-                metadata.set_has_call(chunk_has_call);
+                let mut metadata =
+                    ExpressionMetadata::from_template_metadata(&expr_tag.metadata.expression);
+                let chunk_has_call = metadata.has_call();
 
                 // Update metadata.has_state with comprehensive reactive state check
                 // (the analysis-phase metadata may not account for transforms registered later)
@@ -338,6 +335,7 @@ fn extract_expression_from_tag_with_context(
 /// `has_state` / `dynamic` are reset; the caller recomputes `has_state`
 /// via `expression_has_reactive_state(...)` so transforms registered
 /// later in the pipeline are accounted for.
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 fn extract_metadata_from_tag(expr_tag: &ExpressionTag) -> ExpressionMetadata {
     let mut metadata = ExpressionMetadata::default();
 
@@ -365,6 +363,7 @@ fn extract_metadata_from_tag(expr_tag: &ExpressionTag) -> ExpressionMetadata {
 /// The four AST-derived flags `extract_metadata_from_tag` sets, plus the
 /// literal short-circuit that suppresses setting them at all.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 struct MetadataFlags {
     is_literal: bool,
     has_call: bool,
@@ -373,6 +372,7 @@ struct MetadataFlags {
     has_await: bool,
 }
 
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 impl MetadataFlags {
     #[inline]
     fn all_found(&self) -> bool {
@@ -382,6 +382,7 @@ impl MetadataFlags {
 
 /// JSON form of the flag computation — kept as the oracle the typed walk is
 /// checked against.
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 fn json_metadata_flags(val: &serde_json::Value) -> MetadataFlags {
     let mut flags = MetadataFlags::default();
     if is_literal_value(val) {
@@ -400,6 +401,7 @@ fn json_metadata_flags(val: &serde_json::Value) -> MetadataFlags {
 
 /// Typed equivalent of `json_metadata_flags`, walking `JsNode` children through
 /// `for_each_js_child` instead of materializing the expression as JSON.
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 fn typed_metadata_flags(node: &JsNode, arena: &ParseArena) -> MetadataFlags {
     let mut flags = MetadataFlags::default();
     if is_literal_node(node) {
@@ -411,6 +413,7 @@ fn typed_metadata_flags(node: &JsNode, arena: &ParseArena) -> MetadataFlags {
 }
 
 /// Typed counterpart of `walk_metadata_flags`, node-type for node-type.
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 fn walk_metadata_flags_typed(node: &JsNode, arena: &ParseArena, flags: &mut MetadataFlags) {
     if flags.all_found() {
         return;
@@ -442,6 +445,7 @@ fn walk_metadata_flags_typed(node: &JsNode, arena: &ParseArena, flags: &mut Meta
 /// function also accepts (`NumericLiteral`, `StringLiteral`, `BooleanLiteral`,
 /// `NullLiteral`) have no `JsNode` variant; `JsNode::Null` serializes to a bare
 /// JSON `null`, which `is_literal_value` also reports as a literal.
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 fn is_literal_node(node: &JsNode) -> bool {
     matches!(node, JsNode::Literal { .. } | JsNode::Null)
 }
@@ -449,6 +453,7 @@ fn is_literal_node(node: &JsNode) -> bool {
 /// Single-pass walk that sets the four AST-derived flags on which
 /// Phase 3 memoisation / untrack wrapping decisions depend. Mirrors the
 /// pre-bd01699 `ast_extract_metadata_flags` helper.
+#[allow(dead_code)] // Removed by the next stacked cleanup PR.
 fn walk_metadata_flags(
     val: &serde_json::Value,
     has_call: &mut bool,

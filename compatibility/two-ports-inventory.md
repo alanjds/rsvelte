@@ -387,10 +387,11 @@ template-expression walker.
 
 The first migration slices now attach and consume that Phase 2 metadata for `AttachTag`,
 `SpreadAttribute`, `StyleDirective`, the expressions inside a regular `style=` attribute, and
-standalone generic attribute values and event handlers. The generic attribute builder's multi-part
-`walk_metadata_flags` / `json_contains_call` path and the shared `expression_has_call` helper
-remain separate Phase 3 decisions, so this row stays open rather than treating deletion of these
-local re-walks as agreement of the whole port family.
+every generic attribute-value chunk and event handlers. The old generic attribute
+`walk_metadata_flags` / `json_contains_call` implementations remain in `shared/element.rs` as
+test-supported code, and the shared `expression_has_call` helper remains a separate production
+Phase 3 decision. This row therefore stays open rather than treating migration of these consumers
+as agreement of the whole port family.
 
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 

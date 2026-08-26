@@ -8,6 +8,7 @@
 
 <div title={local(title)}></div>
 <div title="{local(title).toUpperCase()}"></div>
+<div title="pure:{String(title)};local:{local(title)}"></div>
 <div title={String(title)}></div>
 <button onclick={globalThis.make()}>global handler</button>
 <Widget prop={local(title)} />
