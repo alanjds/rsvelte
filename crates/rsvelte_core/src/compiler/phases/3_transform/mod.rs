@@ -2022,6 +2022,8 @@ mod tests {
         let source = r#"<script>
 	let state = $state(0);
 	let raw = $state.raw({});
+	state = 1;
+	raw = {};
 	let derived = $derived(state);
 	let by = $derived.by(() => state);
 	let { value = $bindable(), ...rest } = $props();
