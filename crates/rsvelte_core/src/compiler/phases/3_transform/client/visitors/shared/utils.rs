@@ -3645,8 +3645,8 @@ pub fn build_template_chunk(
                     // Convert Expression to JsExpr using the proper converter
                     let converted_expr = convert_expression(&expr_tag.expression, context);
 
-                    // Check if the expression references reactive state, contains calls, member expressions, or await
-                    // in a single pass over the AST, instead of 4 separate walks.
+                    // Keep the remaining Phase 3 property checks in one pass. `has_call`
+                    // comes from Phase 2, matching upstream's metadata consumer.
                     // Special case: $effect.pending() is inherently reactive (has_state=true)
                     // but NOT a "call" for memoization. This matches the official Svelte compiler's
                     // phase 2 analysis where $effect.pending() explicitly sets has_state = true
@@ -3655,17 +3655,11 @@ pub fn build_template_chunk(
                         is_effect_pending_expr(&expr_tag.expression, context.state.parse_arena);
                     let expr_props = analyze_expression_properties(&expr_tag.expression, context);
                     let expr_has_state = expr_props.has_state || is_pending_rune;
-                    // $effect.pending() is treated as a pure call by the official compiler,
-                    // so it should NOT have has_call=true. This prevents it from being memoized.
-                    let expr_has_call = if is_pending_rune {
-                        false
-                    } else {
-                        expr_props.has_call
-                    };
                     let expr_has_member = expr_props.has_member;
                     let expr_has_await = expr_props.has_await;
 
                     // Build the expression with transforms applied (e.g., $.get() wrapping)
+                    let expr_has_call = expr_tag.metadata.expression.has_call();
                     let mut expr_metadata = ExpressionMetadata::default();
                     expr_metadata.set_has_state(expr_has_state);
                     expr_metadata.set_has_call(expr_has_call);
@@ -4876,24 +4870,22 @@ pub(crate) fn json_keypath(node: &serde_json::Value) -> Option<String> {
 /// Result of analyzing multiple expression properties in a single AST walk.
 pub struct ExpressionProperties {
     pub has_state: bool,
-    pub has_call: bool,
     pub has_member: bool,
     pub has_await: bool,
     pub has_assignment: bool,
 }
 
-/// Analyze an expression for reactive state, calls, member expressions, and await
+/// Analyze an expression for reactive state, member expressions, and await
 /// expressions in a single pass over the JSON AST.
 ///
-/// This is equivalent to computing the reactive-state, call, member-expression,
-/// and await properties separately, but avoids walking the tree 4 times.
+/// This is equivalent to computing the reactive-state, member-expression, and
+/// await properties separately, but avoids walking the tree 3 times.
 pub fn analyze_expression_properties(
     expr: &crate::ast::js::Expression,
     context: &ComponentContext,
 ) -> ExpressionProperties {
     let mut props = ExpressionProperties {
         has_state: false,
-        has_call: false,
         has_member: false,
         has_await: false,
         has_assignment: false,
@@ -4909,7 +4901,7 @@ pub fn analyze_expression_properties(
 
 /// Internal recursive helper for `analyze_expression_properties`.
 ///
-/// Walks the JSON AST once, setting flags for reactive state, calls, member expressions,
+/// Walks the JSON AST once, setting flags for reactive state, member expressions,
 /// and await expressions. Once all flags are set to true, stops recursing (short-circuit).
 fn analyze_props_json(
     json_value: &serde_json::Value,
@@ -4917,12 +4909,7 @@ fn analyze_props_json(
     props: &mut ExpressionProperties,
 ) {
     // Short-circuit: if all flags are already true, no need to walk further
-    if props.has_state
-        && props.has_call
-        && props.has_member
-        && props.has_await
-        && props.has_assignment
-    {
+    if props.has_state && props.has_member && props.has_await && props.has_assignment {
         return;
     }
 
@@ -4937,7 +4924,6 @@ fn analyze_props_json(
         "Identifier" => {
             // has_member: no
             // has_await: no
-            // has_call: no (identifiers are not calls)
             // has_state: check bindings/transforms
             if !props.has_state && obj.get("name").and_then(|v| v.as_str()).is_some() {
                 props.has_state = has_reactive_state_json(json_value, context);
@@ -4952,13 +4938,6 @@ fn analyze_props_json(
                 props.has_state = has_reactive_state_json(json_value, context);
             }
 
-            // has_call: check object subtree
-            if !props.has_call
-                && let Some(object) = obj.get("object")
-            {
-                props.has_call = has_call_json(object, context);
-            }
-
             // has_await: check object subtree
             if !props.has_await
                 && let Some(object) = obj.get("object")
@@ -4967,11 +4946,6 @@ fn analyze_props_json(
             }
         }
         "CallExpression" | "TaggedTemplateExpression" => {
-            // has_call: use existing logic (involves is_pure + has_reactive_state checks)
-            if !props.has_call {
-                props.has_call = has_call_json(json_value, context);
-            }
-
             // has_state: use existing logic (complex CallExpression handling)
             if !props.has_state {
                 props.has_state = has_reactive_state_json(json_value, context);
@@ -5033,7 +5007,7 @@ fn analyze_props_json(
             props.has_await = true;
             // has_state: AwaitExpression is always reactive
             props.has_state = true;
-            // has_member/has_call: not directly, but don't need to recurse for state/await
+            // has_member: not directly, but don't need to recurse for state/await
         }
         "BinaryExpression" | "LogicalExpression" => {
             if let Some(left) = obj.get("left") {
@@ -5103,12 +5077,6 @@ fn analyze_props_json(
                     }
                 }
             }
-            // has_call: check right side
-            if !props.has_call
-                && let Some(right) = obj.get("right")
-            {
-                props.has_call = has_call_json(right, context);
-            }
             // has_await: not checked for AssignmentExpression by has_await_json
         }
         "ArrayExpression" => {
@@ -5124,14 +5092,6 @@ fn analyze_props_json(
                     if let Some(prop_obj) = prop.as_object() {
                         if let Some(value) = prop_obj.get("value") {
                             analyze_props_json(value, context, props);
-                        }
-                        // has_call also checks computed keys
-                        if !props.has_call
-                            && prop_obj.get("computed").and_then(|v| v.as_bool()) == Some(true)
-                            && let Some(key) = prop_obj.get("key")
-                            && has_call_json(key, context)
-                        {
-                            props.has_call = true;
                         }
                     }
                 }

@@ -18,3 +18,6 @@
 	--mixed="pure:{globalThis.make()};dependent-global:{String(title)};local:{local(title)}"
 />
 <svelte:element this="div" title={local(title)}></svelte:element>
+<p>{local(title)}</p>
+<p>{globalThis.make()}</p>
+<p>pure:{globalThis.make()};dependent-global:{String(title)};local:{local(title)}</p>

@@ -392,9 +392,11 @@ The old generic attribute
 `walk_metadata_flags` / `json_contains_call` implementations and the tests that only compared
 those unused walkers were then removed. The component CSS-property migration also removed the
 last production caller and definition of the shared `expression_has_call` helper, so Phase 3 no
-longer independently answers this question for generic attribute values. `shared/events.rs`
-still asks the broader "contains any call" question for `OnDirective`, so the inventory row
-remains open for that separate path.
+longer independently answers this question for generic attribute values. The shared text
+template-chunk builder now also reads `has_call` from each expression tag's Phase 2 metadata,
+rather than calculating a fourth answer while lowering text content. `shared/events.rs` still
+asks the broader "contains any call" question for `OnDirective`, so the inventory row remains
+open for that separate path.
 
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 
