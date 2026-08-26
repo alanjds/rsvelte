@@ -22,10 +22,15 @@ fn attach_flags(source: &str) -> (bool, bool) {
     let _arena_guard = unsafe { SerializeArenaGuard::new(&raw const root.arena) };
     analyze_component(&mut root, source, &CompileOptions::default()).expect("analyze");
 
-    let TemplateNode::RegularElement(element) = &root.fragment.nodes[0] else {
-        panic!("expected regular element");
+    let attributes = match &root.fragment.nodes[0] {
+        TemplateNode::RegularElement(element) => &element.attributes,
+        TemplateNode::Component(component) => &component.attributes,
+        TemplateNode::SvelteComponent(component) => &component.attributes,
+        TemplateNode::SvelteElement(element) => &element.attributes,
+        TemplateNode::SvelteBody(element) => &element.attributes,
+        other => panic!("expected an element host, got {other:?}"),
     };
-    let Attribute::AttachTag(attach) = &element.attributes[0] else {
+    let Some(Attribute::AttachTag(attach)) = attributes.last() else {
         panic!("expected attach tag");
     };
 
@@ -36,9 +41,16 @@ fn attach_flags(source: &str) -> (bool, bool) {
 }
 
 #[test]
-fn local_call_is_stateful_and_impure() {
-    let source = "<script>function make() {}</script><div {@attach make()}></div>";
-    assert_eq!(attach_flags(source), (true, true));
+fn every_legal_host_populates_local_call_metadata() {
+    for source in [
+        "<script>function make() {}</script><div {@attach make()}></div>",
+        "<script>function make() {}</script><Widget {@attach make()} />",
+        "<script>function make() {}</script><svelte:component this={Widget} {@attach make()} />",
+        "<script>function make() {}</script><svelte:element this=\"div\" {@attach make()} />",
+        "<script>function make() {}</script><svelte:body {@attach make()} />",
+    ] {
+        assert_eq!(attach_flags(source), (true, true), "{source}");
+    }
 }
 
 #[test]
