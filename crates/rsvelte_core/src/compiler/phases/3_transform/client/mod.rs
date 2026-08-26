@@ -8268,7 +8268,6 @@ fn transform_instance_script_for_visitors(
                 exported_names: &exported_names,
             };
             let mut used_retained = false;
-            let retained_counters = AstStateCounterSnapshot::capture();
             let ast_result = retained_program.and_then(|program| {
                 let retained_core = original_script.trim();
                 let result_core = result.trim();
@@ -8332,18 +8331,7 @@ fn transform_instance_script_for_visitors(
                 })
             });
             let ast_result = if used_retained {
-                ast_result.or_else(|| {
-                    // The retained component walk can find no replacement for
-                    // a comment-straddled `$props()` declaration. Restore any
-                    // generated-name counters that walk touched, then retry
-                    // against the exact instance-script text being emitted.
-                    retained_counters.restore();
-                    has_props_calls
-                        .then(|| {
-                            ast_state_transform::transform_state_vars_ast(&result, &ast_config)
-                        })
-                        .flatten()
-                })
+                ast_result
             } else {
                 #[cfg(test)]
                 {
