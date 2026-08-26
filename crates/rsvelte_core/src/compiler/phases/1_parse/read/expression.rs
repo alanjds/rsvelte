@@ -7488,9 +7488,12 @@ fn convert_parsed_program<'ast>(
                     .map(|label| at.saturating_add(label.len() as usize).min(content.len()))
                     .unwrap_or(at);
                 let aligned = realign_missing_semicolon(content, at, &first_error.message);
-                if is_typescript || aligned.1.as_str() != first_error.message.as_ref() {
+                if is_typescript {
                     aligned
                 } else {
+                    // A TS declaration can first look like a missing semicolon
+                    // to OXC. Acorn still stops at the declaration keyword, so
+                    // the plain-JS pass must also see that intermediate result.
                     realign_plain_js_typescript_diagnostic(
                         content, aligned.0, label_end, &aligned.1,
                     )
