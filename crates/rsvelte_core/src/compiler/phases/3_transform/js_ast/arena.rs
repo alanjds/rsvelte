@@ -24,6 +24,8 @@
 //!   aliases exist
 
 use super::nodes::{JsExpr, JsStatement};
+use compact_str::CompactString;
+use rustc_hash::FxHashMap;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 
@@ -96,6 +98,11 @@ impl<T> Drop for NodeStore<T> {
 pub struct JsArena {
     exprs: UnsafeCell<NodeStore<JsExpr>>,
     stmts: UnsafeCell<NodeStore<JsStatement>>,
+    /// Source spans for generated identifiers whose names are unique within
+    /// this compilation unit. Keeping this out of [`JsExpr`] lets lowering
+    /// continue to match ordinary `Identifier` nodes while both printers can
+    /// recover the location carried by upstream's shared identifier object.
+    identifier_spans: UnsafeCell<FxHashMap<CompactString, (u32, u32)>>,
 }
 
 // JsArena is explicitly NOT Sync - it's single-threaded only.
@@ -111,7 +118,24 @@ impl JsArena {
         Self {
             exprs: UnsafeCell::new(NodeStore::new()),
             stmts: UnsafeCell::new(NodeStore::new()),
+            identifier_spans: UnsafeCell::new(FxHashMap::default()),
         }
+    }
+
+    /// Associate every use of a generated, compilation-unit-unique identifier
+    /// with the source location from which it was derived.
+    pub fn note_identifier_span(&self, name: &str, start: u32, end: u32) {
+        // SAFETY: like node allocation, span registration is single-threaded.
+        unsafe {
+            (*self.identifier_spans.get()).insert(CompactString::new(name), (start, end));
+        }
+    }
+
+    /// Return the source span attached to a generated identifier name.
+    #[inline]
+    pub fn identifier_span(&self, name: &str) -> Option<(u32, u32)> {
+        // SAFETY: callers only read during/after single-threaded construction.
+        unsafe { (*self.identifier_spans.get()).get(name).copied() }
     }
 
     // -- expressions --------------------------------------------------------
@@ -195,9 +219,11 @@ impl std::fmt::Debug for JsArena {
         // SAFETY: only reading len, no mutation
         let (exprs_count, stmts_count) =
             unsafe { ((*self.exprs.get()).len, (*self.stmts.get()).len) };
+        let identifier_spans_count = unsafe { (*self.identifier_spans.get()).len() };
         f.debug_struct("JsArena")
             .field("exprs_count", &exprs_count)
             .field("stmts_count", &stmts_count)
+            .field("identifier_spans_count", &identifier_spans_count)
             .finish()
     }
 }
@@ -296,8 +322,17 @@ mod tests {
         let arena = JsArena::default();
         assert_eq!(
             format!("{:?}", arena),
-            "JsArena { exprs_count: 0, stmts_count: 0 }"
+            "JsArena { exprs_count: 0, stmts_count: 0, identifier_spans_count: 0 }"
         );
+    }
+
+    #[test]
+    fn test_generated_identifier_span() {
+        let arena = JsArena::new();
+        arena.note_identifier_span("div", 7, 10);
+
+        assert_eq!(arena.identifier_span("div"), Some((7, 10)));
+        assert_eq!(arena.identifier_span("main"), None);
     }
 
     #[test]

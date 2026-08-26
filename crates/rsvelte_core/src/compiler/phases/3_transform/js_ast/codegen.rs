@@ -879,7 +879,17 @@ impl<'a> JsCodegen<'a> {
 
     fn emit_expression_inner(&mut self, expr: &JsExpr) {
         match expr {
-            JsExpr::Identifier(name) => self.output.push_str(name),
+            JsExpr::Identifier(name) => {
+                if self.track_mappings
+                    && let Some((start, end)) = self.arena.identifier_span(name)
+                {
+                    self.record_span_start(start, end);
+                    self.output.push_str(name);
+                    self.record_span_start(end, end);
+                } else {
+                    self.output.push_str(name);
+                }
+            }
             JsExpr::OpaqueIdentifier(name) => self.output.push_str(name),
             JsExpr::Literal(lit) => self.emit_literal(lit),
             JsExpr::TemplateLiteral(template) => self.emit_template_literal(template),
@@ -3185,6 +3195,30 @@ pub fn generate_sourcemap_json_multi(
 mod tests {
     use super::*;
     use crate::compiler::phases::phase3_transform::js_ast::builders::*;
+
+    #[test]
+    fn generated_identifier_uses_carry_the_registered_source_span() {
+        let arena = JsArena::new();
+        arena.note_identifier_span("div", 1, 4);
+        let program = program(vec![stmt(&arena, id("div")), stmt(&arena, id("div"))]);
+
+        let generated = generate_with_sourcemap(&program, "<div>", &arena).unwrap();
+        assert_eq!(generated.code, "div;\ndiv;");
+        for expected in [(0, 0, 0, 1), (0, 3, 0, 4), (1, 0, 0, 1), (1, 3, 0, 4)] {
+            assert!(
+                generated.mappings.iter().any(|mapping| {
+                    (
+                        mapping.gen_line,
+                        mapping.gen_col,
+                        mapping.orig_line,
+                        mapping.orig_col,
+                    ) == expected
+                }),
+                "missing generated identifier mapping {expected:?}: {:?}",
+                generated.mappings
+            );
+        }
+    }
 
     #[test]
     fn sourcemap_can_externalize_single_source_content() {

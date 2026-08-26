@@ -512,6 +512,17 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         self.ab.allocator().alloc_str(s)
     }
 
+    /// Resolve an out-of-band generated-identifier span and include it when
+    /// sizing the source-coordinate side of the split comment space.
+    fn identifier_span(&self, name: &str) -> Span {
+        self.arena
+            .identifier_span(name)
+            .map_or(SPAN, |(start, end)| {
+                self.note_span(end);
+                Span::new(start, end)
+            })
+    }
+
     /// Resolve an `ExprId` handle and convert the pointed-to expression.
     #[inline]
     fn expr_id(&self, id: ExprId) -> Option<Expression<'a>> {
@@ -1379,9 +1390,11 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
 
     fn expr(&self, expr: &JsExpr) -> Option<Expression<'a>> {
         match expr {
-            JsExpr::Identifier(name) => {
-                Some(Expression::new_identifier(SPAN, self.str(name), &self.ab))
-            }
+            JsExpr::Identifier(name) => Some(Expression::new_identifier(
+                self.identifier_span(name),
+                self.str(name),
+                &self.ab,
+            )),
             JsExpr::OpaqueIdentifier(name) => {
                 Some(Expression::new_identifier(SPAN, self.str(name), &self.ab))
             }
@@ -2199,7 +2212,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         match expr {
             JsExpr::Identifier(name) => {
                 Some(SimpleAssignmentTarget::new_assignment_target_identifier(
-                    SPAN,
+                    self.identifier_span(name),
                     self.str(name),
                     &self.ab,
                 ))
@@ -2337,7 +2350,8 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 }
                 _ => return None,
             };
-            let binding = IdentifierReference::new(SPAN, self.str(name), &self.ab);
+            let binding =
+                IdentifierReference::new(self.identifier_span(name), self.str(name), &self.ab);
             return Some(
                 oxc_ast::ast::AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(
                     AssignmentTargetPropertyIdentifier::boxed(SPAN, binding, init, &self.ab),
@@ -2789,6 +2803,23 @@ mod tests {
     };
     use oxc_allocator::Allocator;
     use oxc_span::GetSpan;
+
+    #[test]
+    fn generated_identifier_uses_keep_the_registered_span() {
+        let arena = JsArena::new();
+        arena.note_identifier_span("div", 7, 10);
+        let program = JsProgram::with_body(vec![b::stmt(&arena, b::id("div"))]);
+        let allocator = Allocator::default();
+        let converted =
+            program_to_oxc(&program, &arena, &allocator).expect("identifier is supported");
+
+        let oxc_ast::ast::Statement::ExpressionStatement(statement) = &converted.program.body[0]
+        else {
+            panic!("expected expression statement");
+        };
+        assert_eq!(statement.expression.span().start, 7);
+        assert_eq!(statement.expression.span().end, 10);
+    }
 
     #[test]
     fn retained_island_keeps_absolute_source_spans() {

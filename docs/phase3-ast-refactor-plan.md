@@ -667,7 +667,7 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `default_function_wrapper` | 84 | **0 — deleted** |
 | `effect_callback` | 8 | **0 — deleted** |
 | `token` | 80 | 23 |
-| `template_element_runtime` | 25 | 21 |
+| `template_element_runtime` | 25 | **0 — deleted** |
 | `legacy_prop_read` | 16 | 16 |
 | `inline_script` | 7 | 4 |
 | `bind_value` | 5 | 5 |
@@ -676,15 +676,18 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `collapsed_declaration` | 0 | 0 |
 | `rune` | 0 | 0 |
 
-`default_function_wrapper` and `effect_callback` are deleted: both are now produced by a
-span, and the before/after column is the attribution. The other nine stay, and what each
-still carries is a named lowering, not a mystery:
+`default_function_wrapper`, `effect_callback` and `template_element_runtime` are deleted:
+all three are now produced by source spans, and the before/after column is the attribution.
+For element handles, `flush_node` records the tag-name span against the component-wide unique
+generated name; both printers apply it to ordinary `Identifier` nodes only at emission time.
+That keeps every lowering matcher on `JsExpr::Identifier` unchanged while reproducing
+upstream's reuse of one located identifier for the declaration and all runtime uses. The other
+eight passes stay, and what each still carries is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
 | --- | --- |
 | `let x = $.prop($$props, …)` and its default | the declaration is written by the *script text* rewriter, which records nothing; the chunk projection has to re-derive it by alignment |
 | hoisted verbatim `import` lines | `extract_imports` returns text with no offset, so they are emitted as `JsStatement::Raw` |
-| element/component identifier *uses* (`pre.textContent`, `$.sibling(div, 2)`) | `flush_node` stamps the declaration; `SiblingPrev::Reuse` carries a bare `b::id` |
 | component `bind:` accessor pairs (`get potato()`) | built from `JsExpr::Raw` text |
 | the `(deps, $.untrack(…))` sequence tail | builder-made, with no source anchor |
 
