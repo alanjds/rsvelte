@@ -1085,30 +1085,6 @@ fn is_template_element_name_mapping(
     source.as_bytes().get(source_offset.wrapping_sub(1)) == Some(&b'<')
 }
 
-fn merge_preferred_mappings(
-    mut mappings: Vec<js_ast::codegen::SourceMapping>,
-    mut preferred: Vec<js_ast::codegen::SourceMapping>,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    mappings.sort_by(|a, b| a.gen_line.cmp(&b.gen_line).then(a.gen_col.cmp(&b.gen_col)));
-    preferred.sort_by(|a, b| a.gen_line.cmp(&b.gen_line).then(a.gen_col.cmp(&b.gen_col)));
-    let mut result = Vec::with_capacity(mappings.len() + preferred.len());
-    let mut preferred_index = 0;
-    for mapping in mappings {
-        while preferred_index < preferred.len()
-            && (
-                preferred[preferred_index].gen_line,
-                preferred[preferred_index].gen_col,
-            ) <= (mapping.gen_line, mapping.gen_col)
-        {
-            result.push(preferred[preferred_index].clone());
-            preferred_index += 1;
-        }
-        result.push(mapping);
-    }
-    result.extend(preferred.into_iter().skip(preferred_index));
-    result
-}
-
 /// The generated component function's braces map to the instance script tags.
 #[cfg(test)]
 fn generate_default_function_wrapper_mappings(
