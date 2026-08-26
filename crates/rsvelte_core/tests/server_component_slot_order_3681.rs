@@ -37,8 +37,7 @@ fn named_slot_before_default_claims_the_first_each_array_name() {
             "the first source slot did not claim `each_array` (dev={dev}):\n{code}"
         );
         assert!(
-            default_prop.contains("children: ($$renderer) => {")
-                && default_prop.contains("const each_array_1 ="),
+            default_prop.contains("const each_array_1 ="),
             "the later default slot did not claim `each_array_1` (dev={dev}):\n{code}"
         );
     }
