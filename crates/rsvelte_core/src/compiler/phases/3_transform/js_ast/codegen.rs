@@ -1461,7 +1461,13 @@ impl<'a> JsCodegen<'a> {
         if needs_parens {
             self.output.push('(');
         }
-        self.emit_expression(object);
+        if let Some((start, end)) = self.arena.bare_expr_span(member.object) {
+            self.record_span_start(start, end);
+            self.emit_expression(object);
+            self.record_span_start(end, end);
+        } else {
+            self.emit_expression(object);
+        }
         if needs_parens {
             self.output.push(')');
         }
@@ -3219,6 +3225,36 @@ mod tests {
             offset_to_line_col_utf16(source, &starts, source.len()),
             (1, 0)
         );
+    }
+
+    #[test]
+    fn text_fallback_maps_bare_member_object_span() {
+        let arena = JsArena::new();
+        let object = arena.alloc_expr(JsExpr::Identifier("Math".into()));
+        arena.set_bare_expr_span(object, 7, 11);
+        let member = JsExpr::Member(JsMemberExpression {
+            object,
+            property: JsMemberProperty::Identifier("random".into()),
+            computed: false,
+            optional: false,
+        });
+        let program = JsProgram::with_body(vec![stmt(&arena, member)]);
+
+        let generated = generate_with_sourcemap(&program, "xxxxxxxMath.random", &arena).unwrap();
+
+        assert_eq!(generated.code, "Math.random;");
+        assert!(generated.mappings.iter().any(|mapping| {
+            mapping.gen_line == 0
+                && mapping.gen_col == 0
+                && mapping.orig_line == 0
+                && mapping.orig_col == 7
+        }));
+        assert!(generated.mappings.iter().any(|mapping| {
+            mapping.gen_line == 0
+                && mapping.gen_col == 4
+                && mapping.orig_line == 0
+                && mapping.orig_col == 11
+        }));
     }
 
     #[test]

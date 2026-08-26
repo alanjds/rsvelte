@@ -171,6 +171,21 @@ fn without_outer_source_span(expr: JsExpr, context: &ComponentContext) -> JsExpr
     }
 }
 
+/// Allocate an expression while preserving a source span out of band.
+///
+/// Member-expression consumers walk their object chain by IR variant, so a
+/// `Spanned` wrapper in object position is not semantically transparent.
+#[inline]
+fn alloc_without_outer_source_span(expr: JsExpr, context: &ComponentContext) -> ExprId {
+    match expr {
+        JsExpr::Spanned(inner, start, end) => {
+            context.arena.set_bare_expr_span(inner, start, end);
+            inner
+        }
+        other => context.arena.alloc_expr(other),
+    }
+}
+
 /// Convert a JsNode directly to JsExpr via pattern matching, bypassing serde_json::Value
 /// for simple expression types. Complex types fall back to convert_json_value.
 fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
@@ -683,11 +698,8 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
 
                 if let Some((field_type, in_constructor)) = field_info {
                     let base_object = {
-                        let __tmp = without_outer_source_span(
-                            convert_js_node(pa.get_js_node(*object), context),
-                            context,
-                        );
-                        context.arena.alloc_expr(__tmp)
+                        let converted = convert_js_node(pa.get_js_node(*object), context);
+                        alloc_without_outer_source_span(converted, context)
                     };
                     let base_member = JsExpr::Member(JsMemberExpression {
                         object: base_object,
@@ -735,7 +747,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                     JsExpr::Spanned(inner, _, _)
                         if matches!(context.arena.get_expr(*inner), JsExpr::Identifier(_))
                 );
-                let converted = if is_spanned_identifier
+                if is_spanned_identifier
                     && let Some(name) = get_jsnode_identifier_name(object_node)
                     && let Some(binding) = context.state.get_binding(&name)
                     && matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
@@ -745,11 +757,10 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                     )
                     && let Some(read) = context.state.transform.get(&name).and_then(|t| t.read)
                 {
-                    read(&context.arena, converted)
+                    context.arena.alloc_expr(read(&context.arena, converted))
                 } else {
-                    without_outer_source_span(converted, context)
-                };
-                context.arena.alloc_expr(converted)
+                    alloc_without_outer_source_span(converted, context)
+                }
             };
 
             let prop_node = pa.get_js_node(*property);

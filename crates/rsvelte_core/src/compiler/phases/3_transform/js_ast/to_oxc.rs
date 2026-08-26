@@ -518,6 +518,18 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         self.expr(self.arena.get_expr(id))
     }
 
+    /// Convert a member object and restore a span that could not be represented
+    /// by an in-band `Spanned` wrapper without hiding its IR variant.
+    #[inline]
+    fn member_object(&self, id: ExprId) -> Option<Expression<'a>> {
+        let mut object = self.expr_id(id)?;
+        if let Some((start, end)) = self.arena.bare_expr_span(id) {
+            *object.span_mut() = Span::new(start, end);
+            self.note_span(end);
+        }
+        Some(object)
+    }
+
     /// Run `f` and report the comment-buffer region it consumed, so a container
     /// node can span the comments its children carry (esrap brackets a body's
     /// leading/trailing comments by the body's own `loc`). [`SPAN`] when the
@@ -2134,7 +2146,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
     /// Build a [`MemberExpression`] node from the IR member expression. Shared
     /// by the `Member` expression arm and the assignment-target helper.
     fn member_expr(&self, m: &JsMemberExpression) -> Option<oxc_ast::ast::MemberExpression<'a>> {
-        let object = self.expr_id(m.object)?;
+        let object = self.member_object(m.object)?;
         let member = match &m.property {
             JsMemberProperty::Identifier(name) => {
                 let property = IdentifierName::new(SPAN, self.str(name), &self.ab);
@@ -2785,9 +2797,11 @@ mod tests {
     use super::{AstIsland, program_to_oxc, program_to_oxc_with_islands};
     use crate::ast::oxc_program::RetainedProgram;
     use crate::compiler::phases::phase3_transform::js_ast::{
-        JsArena, JsProgram, JsStatement, builders as b,
+        JsArena, JsExpr, JsMemberExpression, JsMemberProperty, JsProgram, JsStatement,
+        builders as b,
     };
     use oxc_allocator::Allocator;
+    use oxc_ast::ast::{Expression, Statement};
     use oxc_span::GetSpan;
 
     #[test]
@@ -2849,5 +2863,33 @@ mod tests {
                 .starts_with("export default function Input() {")
         );
         assert!(printed.mappings.iter().all(|mapping| mapping.gen_line != 0));
+    }
+
+    #[test]
+    fn member_object_keeps_out_of_band_identifier_span() {
+        let arena = JsArena::new();
+        let object = arena.alloc_expr(JsExpr::Identifier("Math".into()));
+        arena.set_bare_expr_span(object, 7, 11);
+        let member = JsExpr::Member(JsMemberExpression {
+            object,
+            property: JsMemberProperty::Identifier("random".into()),
+            computed: false,
+            optional: false,
+        });
+        let program = JsProgram::with_body(vec![b::stmt(&arena, member)]);
+        let allocator = Allocator::default();
+        let converted = program_to_oxc(&program, &arena, &allocator).expect("member is supported");
+
+        let Statement::ExpressionStatement(statement) = &converted.program.body[0] else {
+            panic!("expected expression statement");
+        };
+        let Expression::StaticMemberExpression(member) = &statement.expression else {
+            panic!("expected static member");
+        };
+        let Expression::Identifier(object) = &member.object else {
+            panic!("expected bare identifier object");
+        };
+        assert_eq!(object.span.start, 7);
+        assert_eq!(object.span.end, 11);
     }
 }

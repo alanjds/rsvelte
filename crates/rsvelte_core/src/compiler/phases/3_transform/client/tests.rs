@@ -64,6 +64,45 @@ fn retained_instance_script_preserves_identifier_and_literal_source_map_spans() 
 }
 
 #[test]
+fn template_member_root_identifier_preserves_source_map_span() {
+    let source = "<p>{Math.random()}</p>";
+    let result = crate::compiler::compile(
+        source,
+        crate::compiler::CompileOptions {
+            filename: Some("member-root-source-map.svelte".to_string()),
+            enable_sourcemap: true,
+            ..Default::default()
+        },
+    )
+    .expect("compiles");
+    let map: serde_json::Value =
+        serde_json::from_str(result.js.map.as_deref().expect("map")).expect("valid source map");
+    let mappings = crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+        map["mappings"].as_str().expect("VLQ mappings"),
+    );
+    let generated_line = result
+        .js
+        .code
+        .lines()
+        .position(|line| line.contains("Math.random()"))
+        .expect("template expression is printed");
+    let generated = result.js.code.lines().nth(generated_line).unwrap();
+    let root_column = generated.find("Math.random()").unwrap() as i64;
+    let line = &mappings[generated_line];
+
+    assert!(
+        line.iter()
+            .any(|segment| segment.as_slice() == [root_column, 0, 0, 4]),
+        "member root must retain its start; generated={generated:?}, segments={line:?}"
+    );
+    assert!(
+        line.iter()
+            .any(|segment| segment.as_slice() == [root_column + 4, 0, 0, 8]),
+        "member root must retain its end; generated={generated:?}, segments={line:?}"
+    );
+}
+
+#[test]
 fn own_line_comments_in_template_arrow_bodies_stay_with_the_following_statement() {
     let source = r#"<Story play={async () => {
 	// first
