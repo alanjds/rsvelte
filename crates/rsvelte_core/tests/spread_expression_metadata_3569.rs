@@ -66,3 +66,39 @@ fn state_reference_does_not_invent_a_call() {
     let source = "<script>let props = $state();</script><div {...props}></div>";
     assert_eq!(spread_flags(source), (true, false));
 }
+
+#[test]
+fn const_tag_object_rest_is_reactive() {
+    let source = concat!(
+        "<script>let props = $state({});</script>",
+        "<Widget>{@const { ...rest } = props}<Inner {...rest} /></Widget>",
+    );
+    let mut root = parse(
+        source,
+        &oxc_allocator::Allocator::default(),
+        ParseOptions::default(),
+    )
+    .expect("parse");
+    // SAFETY: `root.arena` outlives the guard and analysis below.
+    let _arena_guard = unsafe { SerializeArenaGuard::new(&raw const root.arena) };
+    analyze_component(&mut root, source, &CompileOptions::default()).expect("analyze");
+
+    let TemplateNode::Component(outer) = &root.fragment.nodes[0] else {
+        panic!("expected outer component");
+    };
+    let inner = outer
+        .fragment
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            TemplateNode::Component(component) => Some(component),
+            _ => None,
+        })
+        .expect("inner component");
+    let Some(Attribute::SpreadAttribute(spread)) = inner.attributes.last() else {
+        panic!("expected spread attribute");
+    };
+
+    assert!(spread.metadata.expression.has_state());
+    assert!(!spread.metadata.expression.has_call());
+}

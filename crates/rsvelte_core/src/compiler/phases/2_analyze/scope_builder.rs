@@ -3942,12 +3942,23 @@ impl<'a> ScopeBuilder<'a> {
             JsNode::ObjectPattern { properties, .. }
             | JsNode::ObjectExpression { properties, .. } => {
                 for prop in self.arena.get_js_children(*properties) {
-                    if let Some(value_id) = prop.value_node() {
-                        self.declare_decl_tag_bindings_node(
-                            self.arena.get_js_node(value_id),
-                            decl_kind,
-                            binding_kind,
-                        );
+                    match prop {
+                        JsNode::RestElement { argument, .. } => {
+                            self.declare_decl_tag_bindings_node(
+                                self.arena.get_js_node(*argument),
+                                decl_kind,
+                                binding_kind,
+                            );
+                        }
+                        _ => {
+                            if let Some(value_id) = prop.value_node() {
+                                self.declare_decl_tag_bindings_node(
+                                    self.arena.get_js_node(value_id),
+                                    decl_kind,
+                                    binding_kind,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -4071,8 +4082,16 @@ impl<'a> ScopeBuilder<'a> {
             JsNode::ObjectPattern { properties, .. }
             | JsNode::ObjectExpression { properties, .. } => {
                 for prop in self.arena.get_js_children(*properties) {
-                    if let Some(value_id) = prop.value_node() {
-                        self.process_binding_pattern_from_node(self.arena.get_js_node(value_id));
+                    match prop {
+                        JsNode::RestElement { argument, .. } => self
+                            .process_binding_pattern_from_node(self.arena.get_js_node(*argument)),
+                        _ => {
+                            if let Some(value_id) = prop.value_node() {
+                                self.process_binding_pattern_from_node(
+                                    self.arena.get_js_node(value_id),
+                                );
+                            }
+                        }
                     }
                 }
             }
