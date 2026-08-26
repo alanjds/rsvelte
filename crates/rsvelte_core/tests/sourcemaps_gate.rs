@@ -1137,7 +1137,11 @@ fn token_pass_owners_diagnostic() {
             let oracle = if generated_line.is_none() || official_lines.is_empty() || !source_matches
             {
                 official_incomparable += 1;
-                "official INCOMPARABLE".to_string()
+                format!(
+                    "official INCOMPARABLE generated-line={} matching-lines={} source-matches={source_matches}",
+                    generated_line.is_some(),
+                    official_lines.len()
+                )
             } else {
                 match official_segments
                     .iter()
