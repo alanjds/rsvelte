@@ -962,13 +962,14 @@ fn token_pass_owners_diagnostic() {
     const CHILD: &str = "RSVELTE_TOKEN_MAP_DIAGNOSTIC_CHILD";
     const PREFIX: &str = "TOKEN_MAP\t";
 
-    fn compile_diagnostic(input: &str) -> Compiled {
+    fn compile_diagnostic(input: &str, sample: &str) -> Compiled {
         let result = compile(
             input,
             CompileOptions {
                 generate: GenerateMode::Client,
                 filename: Some("input.svelte".to_string()),
                 css: CssMode::External,
+                dev: fixture_dev(sample),
                 ..Default::default()
             },
         )
@@ -984,7 +985,7 @@ fn token_pass_owners_diagnostic() {
             let Some(input) = load_input(&sample) else {
                 continue;
             };
-            let compiled = compile_diagnostic(&input);
+            let compiled = compile_diagnostic(&input, &sample);
             let Some(map) = compiled.map.as_deref().and_then(decode_map) else {
                 continue;
             };
@@ -1040,6 +1041,10 @@ fn token_pass_owners_diagnostic() {
     let full = inventory(false);
     let without = inventory(true);
     let mut owned = 0usize;
+    let mut official_exact = 0usize;
+    let mut official_wrong = 0usize;
+    let mut official_absent = 0usize;
+    let mut official_incomparable = 0usize;
     println!("\n=== client token-pass mapping owners ===");
     for (sample, full_segments) in full {
         let without_by_generated: BTreeMap<(i64, i64), &[i64; 5]> = without
@@ -1049,7 +1054,22 @@ fn token_pass_owners_diagnostic() {
             .map(|segment| ((segment[0], segment[1]), segment))
             .collect();
         let input = load_input(&sample).unwrap();
-        let generated = compile_diagnostic(&input).code;
+        let generated = compile_diagnostic(&input, &sample).code;
+        // The repository currently tracks its sourcemap oracle at this Svelte
+        // revision while the submodule has advanced. This temporary diagnostic
+        // deliberately reads that checked-in population directly: code equality
+        // below rejects any sample whose upstream output changed between them.
+        let fixture = |file: &str| {
+            fs::read_to_string(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../fixtures/44a781373057/sourcemaps")
+                    .join(&sample)
+                    .join(file),
+            )
+            .ok()
+        };
+        let official_code = fixture("client.js");
+        let official_map = fixture("client.js.map").as_deref().and_then(decode_map);
         for segment in full_segments {
             let generated_position = (segment[0], segment[1]);
             let replacement = without_by_generated.get(&generated_position);
@@ -1059,19 +1079,48 @@ fn token_pass_owners_diagnostic() {
             owned += 1;
             let generated_text = snippet(&generated, segment[0] as usize, segment[1] as usize, 32);
             let source_text = snippet(&input, segment[3] as usize, segment[4] as usize, 32);
+            let oracle = if official_code.as_deref() != Some(generated.as_str()) {
+                official_incomparable += 1;
+                "official INCOMPARABLE".to_string()
+            } else {
+                let official = official_map
+                    .as_ref()
+                    .and_then(|map| map.lines.get(segment[0] as usize))
+                    .and_then(|line| line.iter().find(|other| other.first() == Some(&segment[1])));
+                match official {
+                    Some(other) if other.get(2..4) == Some(&segment[3..5]) => {
+                        official_exact += 1;
+                        "official EXACT".to_string()
+                    }
+                    Some(other) => {
+                        official_wrong += 1;
+                        format!(
+                            "official DIFFERENT s{}:{}",
+                            other.get(2).copied().unwrap_or(-1),
+                            other.get(3).copied().unwrap_or(-1)
+                        )
+                    }
+                    None => {
+                        official_absent += 1;
+                        "official ABSENT".to_string()
+                    }
+                }
+            };
             match replacement {
                 Some(other) => println!(
-                    "  {sample} REPLACED g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; without token s{}:{}",
+                    "  {sample} REPLACED g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; without token s{}:{}; {oracle}",
                     segment[0], segment[1], segment[3], segment[4], other[3], other[4]
                 ),
                 None => println!(
-                    "  {sample} MISSING  g{}:{} {generated_text:?} -> s{}:{} {source_text:?}",
+                    "  {sample} MISSING  g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; {oracle}",
                     segment[0], segment[1], segment[3], segment[4]
                 ),
             }
         }
     }
-    panic!("intentional #3015 diagnostic: token pass owns {owned} client mappings");
+    panic!(
+        "intentional #3015 diagnostic: token pass owns {owned} client mappings; official exact {official_exact}, different {official_wrong}, absent {official_absent}, incomparable {official_incomparable}"
+    );
 }
 
 fn summary(report: &Report) -> String {
