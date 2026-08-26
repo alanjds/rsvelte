@@ -839,9 +839,7 @@ fn measure() -> Report {
                 report.identical_code.push(key.clone());
                 match theirs.map.as_deref().and_then(decode_map) {
                     Some(their_map) => {
-                        if std::env::var_os("SOURCEMAP_PARITY_DETAIL").is_some()
-                            || std::env::var_os("CI").is_some()
-                        {
+                        if std::env::var_os("SOURCEMAP_PARITY_DETAIL").is_some() {
                             explain_parity(&key, &their_map, &map, &ours.code, &input);
                         }
                         report.parity.insert(key.clone(), parity(&their_map, &map));
