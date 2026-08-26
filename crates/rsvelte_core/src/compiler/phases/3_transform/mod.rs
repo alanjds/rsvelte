@@ -1088,7 +1088,18 @@ fn is_template_element_name_mapping(
         return false;
     };
     let source_offset = line_start.saturating_add(mapping.orig_col as usize);
-    source.as_bytes().get(source_offset.wrapping_sub(1)) == Some(&b'<')
+    let bytes = source.as_bytes();
+    let mut name_start = source_offset;
+    while name_start > 0
+        && bytes
+            .get(name_start - 1)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':'))
+    {
+        name_start -= 1;
+    }
+
+    bytes.get(name_start.wrapping_sub(1)) == Some(&b'<')
+        && bytes.get(name_start).is_some_and(u8::is_ascii_lowercase)
 }
 
 fn merge_preferred_mappings(
@@ -2520,8 +2531,38 @@ mod tests {
         generate_inline_script_mappings, generate_legacy_prop_read_mappings,
         generate_server_declaration_mappings, generate_server_token_mappings,
         generate_server_wrapper_mappings, generate_token_mappings,
-        generate_verbatim_import_mappings, typescript_declaration_annotation_end,
+        generate_verbatim_import_mappings, is_template_element_name_mapping,
+        typescript_declaration_annotation_end,
     };
+
+    #[test]
+    fn prioritizes_both_ends_of_template_element_name_mappings() {
+        let source = "<my-element class={value}>";
+        let mapping_at = |orig_col| super::js_ast::codegen::SourceMapping {
+            gen_line: 0,
+            gen_col: 0,
+            source: 0,
+            orig_line: 0,
+            orig_col,
+            name: None,
+        };
+
+        assert!(is_template_element_name_mapping(
+            &[0],
+            source,
+            &mapping_at(1)
+        ));
+        assert!(is_template_element_name_mapping(
+            &[0],
+            source,
+            &mapping_at(11)
+        ));
+        assert!(!is_template_element_name_mapping(
+            &[0],
+            source,
+            &mapping_at(17)
+        ));
+    }
 
     #[test]
     fn maps_binding_end_past_erased_typescript_annotation() {
