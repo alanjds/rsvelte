@@ -27,7 +27,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::shared::fragmen
 };
 use crate::compiler::phases::phase3_transform::client::visitors::shared::utils::{
     build_render_statement_with_memoizer, build_template_chunk,
-    collect_expression_identifiers_for_blockers, expression_has_reactive_state,
+    collect_expression_identifiers_for_blockers, expression_has_reactive_state, get_literal_value,
     is_known_defined_global_call, js_expr_keypath,
 };
 use crate::compiler::phases::phase3_transform::client::visitors::transition_directive::transition_directive;
@@ -1171,7 +1171,8 @@ pub fn visit_regular_element(
                 !super::shared::utils::is_effect_pending_expr(
                     &expr_tag.expression,
                     context.state.parse_arena,
-                ) && !expression_has_reactive_state(&expr_tag.expression, context)
+                ) && (get_literal_value(&expr_tag.expression, context).is_some()
+                    || !expression_has_reactive_state(&expr_tag.expression, context))
                     && !expr_tag.metadata.expression.has_call()
                     && !has_blockers
             }

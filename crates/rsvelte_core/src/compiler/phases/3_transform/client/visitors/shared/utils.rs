@@ -6389,6 +6389,15 @@ impl EvalScope for ClientEvalScope<'_, '_> {
     }
 
     fn evaluate_identifier(&self, node: &serde_json::Value, name: &str, depth: u8) -> Evaluation {
+        // The converted template expression reads the transform's runtime
+        // value, not the source binding's initializer. Keep this guard inside
+        // the evaluator so it also covers transformed identifiers nested in a
+        // unary, binary or template expression. Initializers are evaluated
+        // with `converted: false` below and therefore still recurse normally.
+        if self.converted && self.context.state.transform.contains_key(name) {
+            return Evaluation::unknown();
+        }
+
         // An enclosing `{#each … as item, index}` shadows any outer binding of
         // the same name, and the loop scope is not on `state.scope`.
         for c in self.context.state.each_binding_context.iter().rev() {
