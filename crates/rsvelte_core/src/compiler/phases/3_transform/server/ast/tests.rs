@@ -5090,6 +5090,14 @@ fn ast_matches_oracle_async_attribute_hoisting() {
         ),
         ("element-spread", "<div {...await p}></div>"),
         (
+            "element-object-spread-await",
+            "<div {...{ 'data-x': String(await p) }}></div>",
+        ),
+        (
+            "element-object-spread-nested-await",
+            "<div {...{ 'data-x': (async () => await p)() }}></div>",
+        ),
+        (
             "custom-element-class-directive",
             "<my-element class:on={await p}></my-element>",
         ),
@@ -5113,7 +5121,15 @@ fn ast_matches_oracle_async_attribute_hoisting() {
             "dynamic-element-spread",
             "<svelte:element this={'div'} {...await p}></svelte:element>",
         ),
+        (
+            "dynamic-element-object-spread-await",
+            "<svelte:element this={'div'} {...{ 'data-x': await 'v' }}></svelte:element>",
+        ),
         ("component-spread", "<Component {...await p} />"),
+        (
+            "component-object-spread-await",
+            "<Component {...{ x: (await p) + state }} />",
+        ),
     ];
 
     let mut mismatches = Vec::new();
