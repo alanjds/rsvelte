@@ -669,15 +669,15 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `token` | 80 | 23 |
 | `template_element_runtime` | 25 | 21 |
 | `legacy_prop_read` | 16 | 16 |
-| `inline_script` | 7 | 4 |
+| `inline_script` | 7 | **0 — deleted** |
 | `bind_value` | 5 | 5 |
 | `component_bind` | 5 | 4 |
 | `verbatim_import` | 4 | 4 |
 | `collapsed_declaration` | 0 | 0 |
 | `rune` | 0 | 0 |
 
-`default_function_wrapper` and `effect_callback` are deleted: both are now produced by a
-span, and the before/after column is the attribution. The other nine stay, and what each
+`default_function_wrapper`, `effect_callback`, and `inline_script` are deleted: all are now
+produced by spans, and the before/after column is the attribution. The other eight stay, and what each
 still carries is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
