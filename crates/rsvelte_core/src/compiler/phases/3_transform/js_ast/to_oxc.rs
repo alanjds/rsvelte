@@ -2436,12 +2436,12 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 }
                 JsPropertyKey::SpannedStringLiteral { value, start, end } => {
                     self.note_span(*end);
-                    PropertyKey::from(Expression::StringLiteral(StringLiteral::new(
+                    PropertyKey::from(Expression::new_string_literal(
                         Span::new(*start, *end),
                         self.str(value),
                         None,
                         &self.ab,
-                    )))
+                    ))
                 }
                 JsPropertyKey::Literal(lit) => {
                     let expr = self.literal(lit)?;
@@ -2483,8 +2483,11 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             }
             JsPropertyKey::SpannedStringLiteral { value, start, end } => {
                 self.note_span(*end);
-                Some(PropertyKey::from(Expression::StringLiteral(
-                    StringLiteral::new(Span::new(*start, *end), self.str(value), None, &self.ab),
+                Some(PropertyKey::from(Expression::new_string_literal(
+                    Span::new(*start, *end),
+                    self.str(value),
+                    None,
+                    &self.ab,
                 )))
             }
             JsPropertyKey::Literal(lit) => {
