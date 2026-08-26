@@ -672,24 +672,28 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `inline_script` | 7 | 4 |
 | `bind_value` | 5 | 5 |
 | `component_bind` | 5 | **0 — deleted** |
-| `verbatim_import` | 4 | 4 |
+| `verbatim_import` | 4 | **0 — deleted** |
 | `collapsed_declaration` | 0 | 0 |
 | `rune` | 0 | 0 |
 
-`default_function_wrapper`, `effect_callback` and `component_bind` are deleted: all are now
-produced by spans, and the before/after column is the attribution. The other eight stay, and
+`default_function_wrapper`, `effect_callback`, `component_bind` and `verbatim_import` are deleted:
+all are now produced by spans, and the before/after column is the attribution. The other seven stay, and
 what each still carries is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
 | --- | --- |
 | `let x = $.prop($$props, …)` and its default | the declaration is written by the *script text* rewriter, which records nothing; the chunk projection has to re-derive it by alignment |
-| hoisted verbatim `import` lines | `extract_imports` returns text with no offset, so they are emitted as `JsStatement::Raw` |
 | element/component identifier *uses* (`pre.textContent`, `$.sibling(div, 2)`) | `flush_node` stamps the declaration; `SiblingPrev::Reuse` carries a bare `b::id` |
 | the `(deps, $.untrack(…))` sequence tail | builder-made, with no source anchor |
 
 Every row is a `Raw` fragment or a builder call that had a span available and dropped it —
 i.e. #3015's step 1 really is the prerequisite it claims to be, and this measurement names
 which fragments to eradicate first by how many segments they hold.
+
+Hoisted imports now pair the extractor's output with the phase-1 import declaration that produced
+it. TypeScript erasure and import cleanup are applied only to prove the pair; the retained
+declaration range supplies `RawMapped` token spans, so no generated-output/source line match is
+needed.
 
 **`collapsed_declaration` and `rune` cost 0 on both trees, and that is not evidence they
 are redundant.** They were already contributing nothing before this change, so deleting
