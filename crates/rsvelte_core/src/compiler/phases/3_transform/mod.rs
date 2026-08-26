@@ -229,16 +229,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         remaining_result_mappings.push(mapping);
                     }
                 }
-                let legacy_prop_read_mappings =
-                    if !map_pass_disabled("legacy_prop") && source.contains("export let ") {
-                        generate_legacy_prop_read_mappings_with_starts(
-                            &result.code,
-                            source,
-                            &mapping_starts,
-                        )
-                    } else {
-                        Vec::new()
-                    };
                 let template_element_mappings = if map_pass_disabled("template_element") {
                     Vec::new()
                 } else {
@@ -341,7 +331,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + bind_value_mappings.len()
                     + component_bind_mappings.len()
                     + runtime_mappings.len()
-                    + legacy_prop_read_mappings.len()
                     + template_element_mappings.len()
                     + inline_script_mappings.len()
                     + import_mappings.len()
@@ -354,7 +343,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(bind_value_mappings);
                 mappings.extend(component_bind_mappings);
                 mappings.extend(runtime_mappings);
-                mappings.extend(legacy_prop_read_mappings);
                 mappings.extend(template_element_mappings);
                 mappings.extend(inline_script_mappings);
                 mappings.extend(import_mappings);
@@ -1908,125 +1896,6 @@ fn generate_rune_mappings_with_starts(
     mappings
 }
 
-/// The legacy prop read inserted ahead of a template expression has two distinct
-/// source carriers: the exported binding and the expression itself.
-#[cfg(test)]
-fn generate_legacy_prop_read_mappings(
-    generated: &str,
-    source: &str,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    generate_legacy_prop_read_mappings_with_starts(
-        generated,
-        source,
-        &MappingLineStarts::new(generated, source),
-    )
-}
-
-fn generate_legacy_prop_read_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    fn identifier_after(code: &str, mut offset: usize) -> Option<(usize, &str)> {
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(u8::is_ascii_whitespace)
-        {
-            offset += 1;
-        }
-        let start = offset;
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            offset += 1;
-        }
-        (offset > start).then_some((start, &code[start..offset]))
-    }
-
-    fn push_pair(
-        mappings: &mut Vec<js_ast::codegen::SourceMapping>,
-        generated: &str,
-        source: &str,
-        generated_starts: &[usize],
-        source_starts: &[usize],
-        generated_offset: usize,
-        source_offset: usize,
-        len: usize,
-    ) {
-        for (gen_offset, orig_offset) in [
-            (generated_offset, source_offset),
-            (generated_offset + len, source_offset + len),
-        ] {
-            let (gen_line, gen_col) =
-                offset_to_line_col_utf16(generated, generated_starts, gen_offset);
-            let (orig_line, orig_col) =
-                offset_to_line_col_utf16(source, source_starts, orig_offset);
-            mappings.push(js_ast::codegen::SourceMapping {
-                gen_line: gen_line as u32,
-                gen_col: gen_col as u32,
-                source: 0,
-                orig_line: orig_line as u32,
-                orig_col: orig_col as u32,
-                name: None,
-            });
-        }
-    }
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = generated[cursor..].find("$.deep_read_state(") {
-        let read_start = cursor + relative + "$.deep_read_state(".len();
-        let Some((generated_name, name)) = identifier_after(generated, read_start) else {
-            cursor = read_start;
-            continue;
-        };
-        let binding = format!("export let {name}");
-        if let Some(binding_start) = source.find(&binding) {
-            let source_name = binding_start + "export let ".len();
-            push_pair(
-                &mut mappings,
-                generated,
-                source,
-                &generated_starts,
-                &source_starts,
-                generated_name,
-                source_name,
-                name.len(),
-            );
-        }
-
-        let mut untrack_cursor = generated_name + name.len();
-        if let Some(relative) = generated[untrack_cursor..].find("$.untrack(() =>") {
-            untrack_cursor += relative + "$.untrack(() =>".len();
-            if let Some((untrack_name, untrack_identifier)) =
-                identifier_after(generated, untrack_cursor)
-                && untrack_identifier == name
-                && let Some(source_name) = source.rfind(name)
-            {
-                push_pair(
-                    &mut mappings,
-                    generated,
-                    source,
-                    &generated_starts,
-                    &source_starts,
-                    untrack_name,
-                    source_name,
-                    name.len(),
-                );
-            }
-        }
-        cursor = generated_name + name.len();
-    }
-    mappings
-}
-
 /// Runtime element handles retain the source span of the corresponding template tag.
 #[cfg(test)]
 fn generate_template_element_runtime_mappings(
@@ -2798,11 +2667,10 @@ mod tests {
 
     use super::{
         generate_bind_value_mappings, generate_default_function_wrapper_mappings,
-        generate_inline_script_mappings, generate_legacy_prop_read_mappings,
-        generate_server_declaration_mappings, generate_server_token_mappings,
-        generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
-        generate_token_mappings, generate_verbatim_import_mappings,
-        typescript_declaration_annotation_end,
+        generate_inline_script_mappings, generate_server_declaration_mappings,
+        generate_server_token_mappings, generate_server_wrapper_mappings,
+        generate_template_element_runtime_mappings, generate_token_mappings,
+        generate_verbatim_import_mappings, typescript_declaration_annotation_end,
     };
 
     #[test]
@@ -2852,18 +2720,54 @@ mod tests {
     }
 
     #[test]
-    fn client_maps_legacy_prop_read_and_template_expression_separately() {
+    fn client_keeps_legacy_prop_read_carriers_after_merging() {
         let source = "<script>\n\texport let foo;\n</script>\n\n{foo.bar}";
-        let generated = "$.deep_read_state(foo()); $.untrack(() => foo().bar)";
-        let mappings = generate_legacy_prop_read_mappings(generated, source);
-
-        for expected in [(18, 1, 12), (21, 1, 15), (42, 4, 1), (45, 4, 4)] {
-            assert!(
-                mappings.iter().any(|mapping| {
-                    (mapping.gen_col, mapping.orig_line, mapping.orig_col) == expected
-                }),
-                "missing prop-read mapping {expected:?}: {mappings:?}"
+        let result = compile(
+            source,
+            CompileOptions {
+                generate: GenerateMode::Client,
+                filename: Some("input.svelte".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let map: serde_json::Value =
+            serde_json::from_str(result.js.map.as_deref().unwrap()).unwrap();
+        let mappings =
+            crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+                map["mappings"].as_str().unwrap(),
             );
+
+        for (needle, original_line, original_column) in [
+            ("$.deep_read_state(foo())", 1, 12),
+            ("$.untrack(() => foo().bar)", 4, 1),
+        ] {
+            let (line, generated_column) = result
+                .js
+                .code
+                .lines()
+                .enumerate()
+                .find_map(|(line, code)| {
+                    let expression = code.find(needle)?;
+                    let identifier = code[expression..].find("foo")?;
+                    Some((line, (expression + identifier) as u32))
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing {needle} in generated code:\n{}", result.js.code)
+                });
+
+            for (column, original_column) in [
+                (generated_column, original_column),
+                (generated_column + 3, original_column + 3),
+            ] {
+                assert!(
+                    mappings[line].iter().any(|segment| {
+                        segment[..4] == [column, 0, original_line, original_column]
+                    }),
+                    "missing merged prop-read mapping at {line}:{column}: {:?}",
+                    mappings[line]
+                );
+            }
         }
     }
 
