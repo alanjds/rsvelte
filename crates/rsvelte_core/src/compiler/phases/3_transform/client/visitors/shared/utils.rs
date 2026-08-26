@@ -4885,9 +4885,8 @@ pub struct ExpressionProperties {
 /// Analyze an expression for reactive state, calls, member expressions, and await
 /// expressions in a single pass over the JSON AST.
 ///
-/// This is equivalent to calling `expression_has_reactive_state`, `expression_has_call`,
-/// `expression_has_member`, and `expression_has_await` individually, but avoids
-/// walking the tree 4 times.
+/// This is equivalent to computing the reactive-state, call, member-expression,
+/// and await properties separately, but avoids walking the tree 4 times.
 pub fn analyze_expression_properties(
     expr: &crate::ast::js::Expression,
     context: &ComponentContext,
@@ -6111,25 +6110,6 @@ fn has_reactive_state_json(json_value: &serde_json::Value, context: &ComponentCo
     }
 }
 
-/// Check if an expression contains a non-pure function call.
-///
-/// Matches the official Svelte compiler's behavior: a call is only considered
-/// "has_call" if the callee is NOT pure. Pure callees are global identifiers
-/// (no local binding) like console.log, Math.max, and literals.
-/// Pure calls with only pure arguments are not counted.
-#[inline]
-pub fn expression_has_call(expr: &crate::ast::js::Expression, context: &ComponentContext) -> bool {
-    // Fast path: a leaf expression (Identifier, Literal, …) trivially
-    // contains no call. Returning early here avoids the `as_json()`
-    // serialization for `Expression::Typed` inputs, which would
-    // otherwise lower the whole JsNode into a `serde_json::Value`
-    // just to discover there's no CallExpression to find.
-    if is_call_member_await_free_leaf(expr) {
-        return false;
-    }
-    has_call_json(expr.as_json(), context)
-}
-
 /// Check if an expression (or its callee) is "pure" in the Svelte sense.
 /// Pure means: the expression doesn't reference any local bindings.
 /// Globals (identifiers without scope bindings) are pure.
@@ -6692,15 +6672,14 @@ fn has_member_json(json_value: &serde_json::Value) -> bool {
 /// Returns true if the expression contains an AwaitExpression at any level.
 #[inline]
 pub fn expression_has_await(expr: &crate::ast::js::Expression) -> bool {
-    // Leaf short-circuit — see `expression_has_call` for the rationale.
+    // Leaf short-circuit avoids materializing a typed leaf as JSON.
     if is_call_member_await_free_leaf(expr) {
         return false;
     }
     has_await_json(expr.as_json())
 }
 
-/// Type-dispatch fast path used by `expression_has_call` /
-/// `expression_has_member` / `expression_has_await` to skip the
+/// Type-dispatch fast path used by expression-property queries to skip the
 /// full `as_json()` serialization for expressions that can't
 /// possibly contain a CallExpression / MemberExpression /
 /// AwaitExpression.

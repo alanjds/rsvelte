@@ -1209,46 +1209,30 @@ fn process_regular_attribute(
     );
     // Handle custom CSS properties (--var)
     if attr.name.starts_with("--") {
-        // Build the attribute value with potential memoization
-        // This matches the official Svelte behavior where CSS prop values
-        // can be memoized if they contain function calls with state
-        let result = build_attribute_value(&attr.value, context, |value, _metadata| value);
-
-        // Check if this value needs memoization
-        let has_call =
-            super::utils::expression_has_call(&get_original_expression(&attr.value), context);
-        let _has_await = false; // TODO: detect await
-
-        // For CSS props, memoization happens when there's a call with state
-        let final_value = if has_call && result.has_state {
-            // Add to memoizer - this creates a derived variable
+        let arena_ptr = (&context.arena) as *const _;
+        let result = build_attribute_value(&attr.value, context, |value, metadata| {
             let memo_id = memoizer.add(
-                result.value.clone(),
-                true,  // has_call
-                false, // has_await
-                false, // memoize_if_state
-                true,  // has_state
+                value.clone(),
+                metadata.has_call(),
+                metadata.has_await(),
+                false,
+                metadata.has_state(),
             );
 
-            // If memoization happened (memo_id is $N), wrap in $.get()
             if let JsExpr::Identifier(name) = &memo_id {
                 if name.starts_with('$') && name.chars().skip(1).all(|c| c.is_ascii_digit()) {
-                    b::call(
-                        &context.arena,
-                        b::member_path(&context.arena, "$.get"),
-                        vec![memo_id],
-                    )
+                    // SAFETY: the arena outlives this `build_attribute_value` call.
+                    let arena = unsafe { &*arena_ptr };
+                    b::call(arena, b::member_path(arena, "$.get"), vec![memo_id])
                 } else {
-                    result.value
+                    value
                 }
             } else {
-                result.value
+                memo_id
             }
-        } else {
-            result.value
-        };
+        });
 
-        custom_css_props.push(b::prop(&context.arena, attr.name.as_str(), final_value));
+        custom_css_props.push(b::prop(&context.arena, attr.name.as_str(), result.value));
         return;
     }
 
@@ -1338,31 +1322,6 @@ fn process_regular_attribute(
             props_and_spreads,
             b::prop(&context.arena, attr.name.as_str(), final_value),
         );
-    }
-}
-
-/// Extract the original AST expression from an AttributeValue.
-fn get_original_expression<'a>(value: &AttributeValue<'a>) -> crate::ast::js::Expression<'a> {
-    match value {
-        AttributeValue::Expression(expr_tag) => expr_tag.expression.clone(),
-        AttributeValue::Sequence(parts) if parts.len() == 1 => {
-            if let AttributeValuePart::ExpressionTag(expr_tag) = &parts[0] {
-                expr_tag.expression.clone()
-            } else {
-                // Text - create a dummy literal expression
-                crate::ast::js::Expression::from_json(serde_json::json!({
-                    "type": "Literal",
-                    "value": ""
-                }))
-            }
-        }
-        _ => {
-            // Other cases - create a dummy literal expression
-            crate::ast::js::Expression::from_json(serde_json::json!({
-                "type": "Literal",
-                "value": ""
-            }))
-        }
     }
 }
 

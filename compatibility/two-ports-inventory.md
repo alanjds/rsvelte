@@ -385,14 +385,16 @@ three writes cannot change output while that single producer and consumer remain
 remaining phase-2 writers are the reachable call, object-spread and top-level-spread arms in the
 template-expression walker.
 
-The first migration slices now attach and consume that Phase 2 metadata for `AttachTag`,
+The migration slices now attach and consume that Phase 2 metadata for `AttachTag`,
 `SpreadAttribute`, `StyleDirective`, the expressions inside a regular `style=` attribute, and
-every generic attribute-value chunk and generic event attribute. The old generic attribute
+every generic attribute-value chunk, generic event attribute and component CSS custom property.
+The old generic attribute
 `walk_metadata_flags` / `json_contains_call` implementations and the tests that only compared
-those unused walkers were then removed. The shared `expression_has_call` helper remains a
-separate production Phase 3 decision, while `shared/events.rs` independently asks the broader
-"contains any call" question for `OnDirective`. This row therefore stays open rather than
-treating migration of the generic attribute consumers as agreement of the whole port family.
+those unused walkers were then removed. The component CSS-property migration also removed the
+last production caller and definition of the shared `expression_has_call` helper, so Phase 3 no
+longer independently answers this question for generic attribute values. `shared/events.rs`
+still asks the broader "contains any call" question for `OnDirective`, so the inventory row
+remains open for that separate path.
 
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 

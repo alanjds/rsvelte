@@ -12,4 +12,9 @@
 <div title={String(title)}></div>
 <button onclick={globalThis.make()}>global handler</button>
 <Widget prop={local(title)} />
+<Widget
+	--single={local(title)}
+	--pure={globalThis.make()}
+	--mixed="pure:{globalThis.make()};dependent-global:{String(title)};local:{local(title)}"
+/>
 <svelte:element this="div" title={local(title)}></svelte:element>
