@@ -44,6 +44,6 @@ fn issue_3675_hugs_an_unbreakable_expression_run() {
 fn a_short_element_keeps_its_open_bracket_on_the_block_line() {
     assert_fmt(
         "          {#each group.breadcrumbs as breadcrumb}<span>{breadcrumb}</span>{/each}\n",
-        "          {#each group.breadcrumbs as breadcrumb}<span>{breadcrumb}</span\n            >{/each}\n",
+        "{#each group.breadcrumbs as breadcrumb}<span>{breadcrumb}</span>{/each}\n",
     );
 }
