@@ -165,13 +165,43 @@ pub(crate) fn transform_component_with_sourcemap_content(
     options: &CompileOptions,
     include_sourcemap_content: bool,
 ) -> Result<TransformResult, TransformError> {
+    // The normal compiler/toolchain path supplies phase 1's retained scripts.
+    // Keep the standalone phase-3 API source-map complete as well: its public
+    // signature predates retained scripts, so reconstruct only the two script
+    // programs here and only when their locations can be observed.
+    let retained_scripts = options.enable_sourcemap.then(|| {
+        let retain = |content: Option<&super::phase2_analyze::types::ScriptContent>,
+                      is_typescript| {
+            content.and_then(|content| {
+                source
+                    .get(content.start as usize..content.end as usize)
+                    .map(|script| {
+                        crate::ast::oxc_program::RetainedProgram::parse(script, is_typescript)
+                    })
+            })
+        };
+        crate::ast::oxc_program::RetainedScripts {
+            instance: retain(
+                analysis.instance_script_content.as_ref(),
+                ast.instance
+                    .as_ref()
+                    .is_some_and(|script| script.is_typescript),
+            ),
+            module: retain(
+                analysis.module_script_content.as_ref(),
+                ast.module
+                    .as_ref()
+                    .is_some_and(|script| script.is_typescript),
+            ),
+        }
+    });
     transform_component_with_scripts(
         analysis,
         ast,
         source,
         options,
         include_sourcemap_content,
-        None,
+        retained_scripts.as_ref(),
         None,
         None,
     )
@@ -267,20 +297,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 } else {
                     Vec::new()
                 };
-                let component_bind_mappings = if !map_pass_disabled("component_bind")
-                    && source.contains("bind:")
-                    && (result.code.contains("get ")
-                        || result.code.contains("set ")
-                        || result.code.contains("${"))
-                {
-                    generate_component_bind_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                } else {
-                    Vec::new()
-                };
                 let collapsed_declaration_mappings = if map_pass_disabled("collapsed") {
                     Vec::new()
                 } else {
@@ -289,16 +305,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         source,
                         &mapping_starts,
                     )
-                };
-                let import_mappings = if !map_pass_disabled("import") && source.contains("import ")
-                {
-                    generate_verbatim_import_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                } else {
-                    Vec::new()
                 };
                 let token_mappings = if map_pass_disabled("token") {
                     Vec::new()
@@ -339,12 +345,10 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 };
                 let mapping_capacity = wrapper_mappings.len()
                     + bind_value_mappings.len()
-                    + component_bind_mappings.len()
                     + runtime_mappings.len()
                     + legacy_prop_read_mappings.len()
                     + template_element_mappings.len()
                     + inline_script_mappings.len()
-                    + import_mappings.len()
                     + template_name_mappings.len()
                     + token_mappings.len()
                     + rune_mappings.len()
@@ -352,12 +356,10 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 let mut mappings = Vec::with_capacity(mapping_capacity);
                 mappings.extend(wrapper_mappings);
                 mappings.extend(bind_value_mappings);
-                mappings.extend(component_bind_mappings);
                 mappings.extend(runtime_mappings);
                 mappings.extend(legacy_prop_read_mappings);
                 mappings.extend(template_element_mappings);
                 mappings.extend(inline_script_mappings);
-                mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
                 mappings.extend(token_mappings);
                 mappings.extend(rune_mappings);
@@ -2297,96 +2299,6 @@ fn collect_runtime_use_sites<'code>(
     sites
 }
 
-/// Inline instance declarations survive lowering verbatim after `export` is removed.
-fn generate_component_bind_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    fn identifier_after(code: &str, mut offset: usize) -> Option<(usize, &str)> {
-        let start = offset;
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            offset += 1;
-        }
-        (offset > start).then_some((start, &code[start..offset]))
-    }
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = source[cursor..].find("bind:") {
-        let directive_start = cursor + relative;
-        let name_start = directive_start + "bind:".len();
-        let Some((_, name)) = identifier_after(source, name_start) else {
-            cursor = name_start;
-            continue;
-        };
-        let directive_end = name_start + name.len();
-        for prefix in ["get ", "set "] {
-            let pattern = format!("{prefix}{name}");
-            let mut generated_cursor = 0;
-            while let Some(relative) = generated[generated_cursor..].find(&pattern) {
-                let key_start = generated_cursor + relative + prefix.len();
-                for (generated_offset, original_offset) in [
-                    (key_start, directive_start),
-                    (key_start + name.len(), directive_end),
-                ] {
-                    let (gen_line, gen_col) =
-                        offset_to_line_col_utf16(generated, &generated_starts, generated_offset);
-                    let (orig_line, orig_col) =
-                        offset_to_line_col_utf16(source, &source_starts, original_offset);
-                    mappings.push(js_ast::codegen::SourceMapping {
-                        gen_line: gen_line as u32,
-                        gen_col: gen_col as u32,
-                        source: 0,
-                        orig_line: orig_line as u32,
-                        orig_col: orig_col as u32,
-                        name: None,
-                    });
-                }
-                generated_cursor = key_start + name.len();
-            }
-        }
-
-        let template = format!("{{{name}}}");
-        if let Some(template_start) = source.find(&template) {
-            let source_name = template_start + 1;
-            let generated_pattern = format!("${{{name}() ??");
-            let mut generated_cursor = 0;
-            while let Some(relative) = generated[generated_cursor..].find(&generated_pattern) {
-                let generated_name = generated_cursor + relative + 2;
-                for (generated_offset, original_offset) in [
-                    (generated_name, source_name),
-                    (generated_name + name.len(), source_name + name.len()),
-                ] {
-                    let (gen_line, gen_col) =
-                        offset_to_line_col_utf16(generated, &generated_starts, generated_offset);
-                    let (orig_line, orig_col) =
-                        offset_to_line_col_utf16(source, &source_starts, original_offset);
-                    mappings.push(js_ast::codegen::SourceMapping {
-                        gen_line: gen_line as u32,
-                        gen_col: gen_col as u32,
-                        source: 0,
-                        orig_line: orig_line as u32,
-                        orig_col: orig_col as u32,
-                        name: None,
-                    });
-                }
-                generated_cursor = generated_name + name.len();
-            }
-        }
-        cursor = directive_end;
-    }
-    mappings
-}
-
 #[cfg(test)]
 fn generate_bind_value_mappings(
     generated: &str,
@@ -2797,7 +2709,8 @@ mod tests {
     use crate::{CompileOptions, GenerateMode, compile};
 
     use super::{
-        generate_bind_value_mappings, generate_default_function_wrapper_mappings,
+        MappingLineStarts, generate_bind_value_mappings,
+        generate_component_bind_mappings_with_starts, generate_default_function_wrapper_mappings,
         generate_inline_script_mappings, generate_legacy_prop_read_mappings,
         generate_server_declaration_mappings, generate_server_token_mappings,
         generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
@@ -2998,7 +2911,7 @@ mod tests {
     }
 
     #[test]
-    fn client_keeps_component_bind_shorthand_carriers_after_merging() {
+    fn client_maps_component_bind_accessors_and_interpolation_without_text_matching() {
         let source = "<script>\n\texport let potato;\n</script>\n\n{potato}\n<Widget bind:potato/>";
         let result = compile(
             source,

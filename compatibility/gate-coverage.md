@@ -2034,6 +2034,13 @@ carry a *movement*, which is the reading a 0 cannot give.
  There is no corpus-wide source-map gate to fall back on: `verify.mjs` compares generated
  code, and the svelte2tsx map gate (§ 12) covers a different artifact.
 
+The component-bind pass illustrates why the discriminating test must survive a partial
+deletion too: its generated-text search formerly supplied both `get`/`set` property-key
+segments and a template-interpolation segment. The accessor keys now carry the complete raw
+directive-name range as dedicated spanned property-key variants, and the pass no longer searches
+for `get` or `set`; its remaining `${name() ?? …}` scan is a separate carrier and must not be
+declared redundant from the accessor movement alone.
+
 ### Blind spot 14h — the unit is a segment, so a change that improves the map and breaks the *code* scores green
 
 Every comparison here reads `map.mappings`; nothing in the file looks at the generated JS the

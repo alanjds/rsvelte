@@ -3669,7 +3669,13 @@ pub fn pattern_to_string(pattern: &JsPattern) -> String {
                                 s.push('[');
                             }
                             match key {
-                                JsPropertyKey::Identifier(n) => s.push_str(n),
+                                JsPropertyKey::Identifier(n)
+                                | JsPropertyKey::SpannedIdentifier { name: n, .. } => s.push_str(n),
+                                JsPropertyKey::SpannedStringLiteral { value, .. } => {
+                                    s.push('"');
+                                    s.push_str(value);
+                                    s.push('"');
+                                }
                                 JsPropertyKey::Literal(lit) => match lit {
                                     JsLiteral::String(n) => {
                                         s.push('"');

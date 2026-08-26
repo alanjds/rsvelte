@@ -1284,6 +1284,16 @@ impl<'a> JsCodegen<'a> {
     fn emit_property_key(&mut self, key: &JsPropertyKey) {
         match key {
             JsPropertyKey::Identifier(name) => self.output.push_str(name),
+            JsPropertyKey::SpannedIdentifier { name, start, end } => {
+                self.record_span_start(*start, *end);
+                self.output.push_str(name);
+                self.record_span_start(*end, *end);
+            }
+            JsPropertyKey::SpannedStringLiteral { value, start, end } => {
+                self.record_span_start(*start, *end);
+                self.emit_literal(&JsLiteral::String(value.clone()));
+                self.record_span_start(*end, *end);
+            }
             JsPropertyKey::Literal(lit) => self.emit_literal(lit),
             JsPropertyKey::Computed(expr_id) => self.emit_expression(self.arena.get_expr(*expr_id)),
         }

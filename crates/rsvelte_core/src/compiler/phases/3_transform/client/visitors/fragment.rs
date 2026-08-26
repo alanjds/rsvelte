@@ -1083,8 +1083,12 @@ pub(crate) fn collect_ids_from_expr_props(
                         // Check if this property is named "children" or "$$slots" -
                         // skip their arrow/function values as children handle their own async
                         let prop_name = match &prop.key {
-                            JsPropertyKey::Identifier(name) => Some(name.as_str()),
+                            JsPropertyKey::Identifier(name)
+                            | JsPropertyKey::SpannedIdentifier { name, .. } => Some(name.as_str()),
                             JsPropertyKey::Literal(JsLiteral::String(name)) => Some(name.as_str()),
+                            JsPropertyKey::SpannedStringLiteral { value, .. } => {
+                                Some(value.as_str())
+                            }
                             _ => None,
                         };
                         let is_children_prop = matches!(prop_name, Some("children" | "$$slots"));
