@@ -441,6 +441,11 @@ fn find_code_from(bytes: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 /// accepts. The identifier-character test is the same rule one byte over:
 /// `a$state(` is a single identifier that merely ends in the rune's spelling.
 pub(crate) fn find_rune_code(bytes: &[u8], needle: &[u8]) -> Option<usize> {
+    debug_assert_eq!(
+        needle.last(),
+        Some(&b'('),
+        "find_rune_code needs a call needle ending in `(`"
+    );
     debug_assert!(
         !needle
             .iter()

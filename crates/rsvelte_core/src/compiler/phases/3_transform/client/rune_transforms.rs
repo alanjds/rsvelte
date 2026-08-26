@@ -83,7 +83,7 @@ pub(super) fn transform_client_runes_with_skip_and_state<'a>(
     // source statement. The ordinary `$props()` population remains on the AST
     // path below, so this does not restore its former per-statement scan.
     if !store_sub_vars.iter().any(|name| name == "$props")
-        && let Some(props_at) = find_rune_code(result.as_bytes(), b"$props")
+        && let Some(props_at) = find_rune_code(result.as_bytes(), b"$props(")
         && let Some(assignment) = code_bytes(&result.as_bytes()[..props_at])
             .filter_map(|(offset, byte)| (byte == b'=').then_some(offset))
             .last()
