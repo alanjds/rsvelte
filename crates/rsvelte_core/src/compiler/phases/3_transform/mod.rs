@@ -2786,11 +2786,12 @@ mod tests {
     use crate::{CompileOptions, GenerateMode, compile};
 
     use super::{
-        generate_bind_value_mappings, generate_default_function_wrapper_mappings,
-        generate_inline_script_mappings, generate_server_declaration_mappings,
-        generate_server_token_mappings, generate_server_wrapper_mappings,
-        generate_template_element_runtime_mappings, generate_token_mappings,
-        generate_verbatim_import_mappings, typescript_declaration_annotation_end,
+        MappingLineStarts, generate_bind_value_mappings,
+        generate_default_function_wrapper_mappings, generate_inline_script_mappings,
+        generate_server_declaration_mappings, generate_server_token_mappings,
+        generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
+        generate_token_mappings, generate_verbatim_import_mappings, js_ast::codegen,
+        typescript_declaration_annotation_end,
     };
 
     #[test]
@@ -3007,23 +3008,44 @@ mod tests {
             crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
                 map["mappings"].as_str().unwrap(),
             );
-        for (line, column, original_line, original_column) in [
-            (16, 14, 4, 1),
-            (16, 19, 4, 6),
-            (16, 27, 4, 19),
-            (16, 30, 4, 22),
-            (16, 55, 4, 19),
-            (16, 58, 4, 22),
-            (16, 59, 4, 19),
-            (16, 62, 4, 22),
-        ] {
+        let generated = result.js.code.as_str();
+        let starts = MappingLineStarts::new(generated, source);
+        let bind_start = generated.rfind("$.bind_value(").unwrap();
+
+        for (name, original_column) in [("input", 1), ("foo", 19), ("bar", 23), ("baz", 27)] {
+            let generated_offsets = generated[bind_start..]
+                .match_indices(name)
+                .map(|(relative, _)| relative)
+                .collect::<Vec<_>>();
             assert!(
-                mappings[line]
-                    .iter()
-                    .any(|segment| { segment[..4] == [column, 0, original_line, original_column] }),
-                "missing merged mapping at {line}:{column}: {:?}",
-                mappings[line]
+                !generated_offsets.is_empty(),
+                "missing {name} in generated bind_value call: {}",
+                &generated[bind_start..]
             );
+
+            for relative in generated_offsets {
+                let generated_start = bind_start + relative;
+                for (generated_offset, source_column) in [
+                    (generated_start, original_column),
+                    (
+                        generated_start + name.len(),
+                        original_column + name.len() as i64,
+                    ),
+                ] {
+                    let (line, column) = codegen::offset_to_line_col_utf16(
+                        generated,
+                        &starts.generated,
+                        generated_offset,
+                    );
+                    assert!(
+                        mappings[line].iter().any(|segment| {
+                            segment[..4] == [column as i64, 0, 4, source_column]
+                        }),
+                        "missing merged {name} mapping at {line}:{column}: {:?}",
+                        mappings[line]
+                    );
+                }
+            }
         }
     }
 
