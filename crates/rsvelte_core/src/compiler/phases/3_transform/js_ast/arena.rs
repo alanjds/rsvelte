@@ -107,6 +107,13 @@ pub struct JsArena {
     /// generated expression is printed. Keying the scope by `ExprId` keeps
     /// user identifiers with the same spelling elsewhere independent.
     expression_identifier_spans: UnsafeCell<FxHashMap<ExprId, (CompactString, (u32, u32))>>,
+    /// Source spans for expressions that must remain bare IR variants.
+    ///
+    /// In particular, member-expression consumers inspect the object by
+    /// variant, so wrapping its root identifier in `JsExpr::Spanned` changes
+    /// transform semantics. Keep those uncommon spans out of band instead of
+    /// growing every expression node.
+    bare_expr_spans: UnsafeCell<Option<FxHashMap<ExprId, (u32, u32)>>>,
 }
 
 // JsArena is explicitly NOT Sync - it's single-threaded only.
@@ -124,6 +131,7 @@ impl JsArena {
             stmts: UnsafeCell::new(NodeStore::new()),
             identifier_spans: UnsafeCell::new(FxHashMap::default()),
             expression_identifier_spans: UnsafeCell::new(FxHashMap::default()),
+            bare_expr_spans: UnsafeCell::new(None),
         }
     }
 
@@ -191,6 +199,31 @@ impl JsArena {
         unsafe {
             let store = &*self.exprs.get();
             &*store.ptr(id.0 as usize)
+        }
+    }
+
+    /// Attach a source span without changing the expression's IR variant.
+    #[inline]
+    pub fn set_bare_expr_span(&self, id: ExprId, start: u32, end: u32) {
+        // SAFETY: like node allocation, span metadata is mutated only by the
+        // single thread that owns this arena.
+        unsafe {
+            let spans = &mut *self.bare_expr_spans.get();
+            spans
+                .get_or_insert_with(FxHashMap::default)
+                .insert(id, (start, end));
+        }
+    }
+
+    /// Return an out-of-band source span, when this expression carries one.
+    #[inline]
+    pub fn bare_expr_span(&self, id: ExprId) -> Option<(u32, u32)> {
+        // SAFETY: the arena is single-threaded and callers do not retain a
+        // reference into the map across a mutation.
+        unsafe {
+            (&*self.bare_expr_spans.get())
+                .as_ref()
+                .and_then(|spans| spans.get(&id).copied())
         }
     }
 
