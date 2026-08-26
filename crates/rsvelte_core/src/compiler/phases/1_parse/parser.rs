@@ -1118,7 +1118,7 @@ impl<'a> Parser<'a> {
             let swallowed_block_close = candidate.rfind('{').is_some_and(|block_open| {
                 let block_name = candidate[block_open + 1..].trim();
                 matches!(block_name, "/if" | "/each" | "/await" | "/key" | "/snippet")
-                    && memchr::memmem::find(candidate[..block_open].as_bytes(), b"</").is_some()
+                    && memchr::memmem::find(&candidate.as_bytes()[..block_open], b"</").is_some()
             });
             // In malformed markup such as `{@const c = 1<b>x</b>{/if}`, the
             // lexical bracket scan reads `</b>` as the start of a regexp and
