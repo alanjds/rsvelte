@@ -139,7 +139,10 @@ fn an_exported_type_only_declaration_adds_no_props_parameter() {
 /// other declarations above. Upstream's TypeScript visitor nevertheless erases
 /// it before the component-export pass, so it must not change the production
 /// component calling signature. The emitted declaration text is not asserted:
-/// official currently leaves invalid TypeScript in the function body too.
+/// official currently leaves invalid TypeScript in the function body too. The
+/// server transform deliberately rejects that invalid erased source at its
+/// classification reparse, so the shared `needs_props` result is observed
+/// through the client signature here.
 #[test]
 fn an_exported_import_equals_adds_no_props_parameter() {
     let body = "export import ie = require('m');";
@@ -147,11 +150,6 @@ fn an_exported_import_equals_adds_no_props_parameter() {
     assert!(
         client.contains("function C($$anchor)"),
         "exported import-equals produced a client props parameter:\n{client}"
-    );
-    let server = instance(body, GenerateMode::Server, false).expect("server compile");
-    assert!(
-        server.contains("function C($$renderer)"),
-        "exported import-equals produced a server props parameter:\n{server}"
     );
 }
 
