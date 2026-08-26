@@ -2734,7 +2734,7 @@ pub fn emit_validate_binding(
     use crate::compiler::phases::phase2_analyze::scope::BindingKind;
 
     // Extract the root object name from the original AST expression
-    let root_name = extract_root_name_from_json(node.expression.as_json());
+    let root_name = get_ast_root_identifier(&node.expression);
     let root_name = match root_name {
         Some(n) => n,
         None => return,
