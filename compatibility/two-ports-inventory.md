@@ -385,6 +385,12 @@ three writes cannot change output while that single producer and consumer remain
 remaining phase-2 writers are the reachable call, object-spread and top-level-spread arms in the
 template-expression walker.
 
+The first migration slices now attach and consume that Phase 2 metadata for `AttachTag`,
+`SpreadAttribute`, `StyleDirective`, and the expressions inside a regular `style=` attribute.
+The generic attribute builder's `walk_metadata_flags` / `json_contains_call` path and the shared
+`expression_has_call` helper remain separate Phase 3 decisions, so this row stays open rather
+than treating deletion of four local re-walks as agreement of the whole port family.
+
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 
 **Upstream:** `css-prune.js:130` `prune()` sets `complex_selector.metadata.used` **and**

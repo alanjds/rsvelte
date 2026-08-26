@@ -1139,6 +1139,27 @@ pub fn build_set_style(
     }
 }
 
+/// Build one style attribute expression from its phase 2 metadata.
+fn build_style_attribute_expression(
+    expr_tag: &ExpressionTag,
+    context: &mut ComponentContext,
+) -> (JsExpr, bool) {
+    use crate::compiler::phases::phase3_transform::client::visitors::expression_converter::convert_expression;
+
+    let converted = convert_expression(&expr_tag.expression, context);
+    let metadata = ExpressionMetadata::from_template_metadata(&expr_tag.metadata.expression);
+    let has_call = metadata.has_call();
+    let has_state = metadata.has_state();
+    let has_await = metadata.has_await();
+    let built = build_expression(context, &converted, &metadata);
+    let value = context
+        .state
+        .memoizer
+        .add_memoized(built, has_call, has_await, false, has_state);
+
+    (value, has_state || has_call || has_await)
+}
+
 /// Build a style attribute value with proper memoization of inner expressions.
 ///
 /// This function builds the style value while memoizing expressions that contain
@@ -1153,67 +1174,18 @@ fn build_style_attribute_value_with_memoization(
     context: &mut ComponentContext,
 ) -> (JsExpr, bool) {
     use crate::ast::template::AttributeValuePart;
-    use crate::compiler::phases::phase3_transform::client::visitors::expression_converter::convert_expression;
 
     match attr_value {
         AttributeValue::True(_) => (b::boolean(true), false),
 
-        AttributeValue::Expression(expr_tag) => {
-            // Single expression value - analyze all properties in one pass
-            let converted = convert_expression(&expr_tag.expression, context);
-            let expr_props =
-                super::utils::analyze_expression_properties(&expr_tag.expression, context);
-            let has_call = expr_props.has_call;
-            let has_state = expr_props.has_state;
-            let has_member = expr_props.has_member;
-            let has_await = expr_props.has_await;
-
-            // Build the expression with transforms applied
-            let mut metadata = ExpressionMetadata::default();
-            metadata.set_has_state(has_state);
-            metadata.set_has_call(has_call);
-            metadata.set_has_member_expression(has_member);
-            metadata.set_has_await(has_await);
-            let built = build_expression(context, &converted, &metadata);
-
-            // Memoize if has call
-            let value = context.state.memoizer.add_memoized(
-                built, has_call, has_await, false, // memoize_if_state
-                has_state,
-            );
-
-            (value, has_state || has_call || has_await)
-        }
+        AttributeValue::Expression(expr_tag) => build_style_attribute_expression(expr_tag, context),
 
         AttributeValue::Sequence(parts) if parts.len() == 1 => {
             // Single part - handle as simple value (avoid wrapping in template literal)
             match &parts[0] {
                 AttributeValuePart::Text(text) => (b::string(text.data.as_ref()), false),
                 AttributeValuePart::ExpressionTag(expr_tag) => {
-                    let converted = convert_expression(&expr_tag.expression, context);
-                    let expr_props =
-                        super::utils::analyze_expression_properties(&expr_tag.expression, context);
-                    let has_call = expr_props.has_call;
-                    let expr_has_state = expr_props.has_state;
-                    let has_member = expr_props.has_member;
-                    let has_await = expr_props.has_await;
-
-                    let mut metadata = ExpressionMetadata::default();
-                    metadata.set_has_state(expr_has_state);
-                    metadata.set_has_call(has_call);
-                    metadata.set_has_member_expression(has_member);
-                    metadata.set_has_await(has_await);
-                    let built = build_expression(context, &converted, &metadata);
-
-                    let value = context.state.memoizer.add_memoized(
-                        built,
-                        has_call,
-                        has_await,
-                        false, // memoize_if_state
-                        expr_has_state,
-                    );
-
-                    (value, expr_has_state || has_call || has_await)
+                    build_style_attribute_expression(expr_tag, context)
                 }
             }
         }
@@ -1254,32 +1226,8 @@ fn build_style_attribute_value_with_memoization(
                         quasis.push(b::quasi(sanitize_template_string(&current_text), false));
                         current_text.clear();
 
-                        // Convert and build the expression
-                        let converted = convert_expression(&expr_tag.expression, context);
-                        let expr_props = super::utils::analyze_expression_properties(
-                            &expr_tag.expression,
-                            context,
-                        );
-                        let has_call = expr_props.has_call;
-                        let expr_has_state = expr_props.has_state;
-                        let has_member = expr_props.has_member;
-                        let has_await = expr_props.has_await;
-
-                        let mut metadata = ExpressionMetadata::default();
-                        metadata.set_has_state(expr_has_state);
-                        metadata.set_has_call(has_call);
-                        metadata.set_has_member_expression(has_member);
-                        metadata.set_has_await(has_await);
-                        let built = build_expression(context, &converted, &metadata);
-
-                        // Memoize the expression if it has a function call
-                        let value = context.state.memoizer.add_memoized(
-                            built,
-                            has_call,
-                            has_await,
-                            false, // memoize_if_state
-                            expr_has_state,
-                        );
+                        let (value, expression_has_state) =
+                            build_style_attribute_expression(expr_tag, context);
 
                         // Add ?? '' where necessary (only if not guaranteed to be defined).
                         //
@@ -1311,7 +1259,7 @@ fn build_style_attribute_value_with_memoization(
                         };
                         expressions.push(final_value);
 
-                        if has_call || expr_has_state || has_await {
+                        if expression_has_state {
                             has_state = true;
                         }
                     }
