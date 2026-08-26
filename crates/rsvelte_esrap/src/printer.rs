@@ -865,6 +865,29 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         Some((line, offset.saturating_sub(line_start)))
     }
 
+    /// Resolve the exclusive end of a source-backed node. A linear `LocRange`
+    /// carries a copied byte run as `[start, end)`, while an AST span also uses
+    /// `end` as the token's final source-map position. Prefer the copied run
+    /// ending at `offset` over a following range starting at the same boundary;
+    /// this matches `RawMapped`'s fallback span restorer.
+    fn map_end_position(&self, offset: u32) -> Option<(u32, u32)> {
+        if !self.loc_map.is_empty() {
+            let index = self.loc_map.partition_point(|range| range.end < offset);
+            if let Some(range) = self.loc_map.get(index)
+                && range.end == offset
+                && range.linear
+                && let Some(source) = range.source
+            {
+                let mapped = source + (offset - range.start);
+                let line_starts = self.map_line_starts.as_deref().unwrap_or(&self.line_starts);
+                let line = usize_to_u32(line_starts.partition_point(|&s| s <= mapped));
+                let line_start = line_starts[(line - 1) as usize];
+                return Some((line, mapped.saturating_sub(line_start)));
+            }
+        }
+        self.map_position(offset)
+    }
+
     /// esrap's `write_source_keyword`: bracket the literal `keyword` with
     /// source-map anchors for its exact span, so breakpoints land on the keyword.
     fn write_source_keyword(ctx: &mut Context<DIRECT>, line: u32, column: u32, keyword: &str) {
@@ -926,7 +949,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             ctx.location(line, column);
         }
         ctx.write(content);
-        if let Some((line, column)) = self.map_position(span.end) {
+        if let Some((line, column)) = self.map_end_position(span.end) {
             ctx.location(line, column);
         }
     }
@@ -3850,7 +3873,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         }
         self.call_arguments(&node.arguments, node.span().end, ctx);
         if node.span.start != 0
-            && let Some((line, column)) = self.map_position(node.span.end)
+            && let Some((line, column)) = self.map_end_position(node.span.end)
         {
             ctx.location(line, column);
         }
