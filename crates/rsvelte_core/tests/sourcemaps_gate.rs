@@ -1114,10 +1114,15 @@ fn token_pass_owners_diagnostic() {
                 })
                 .collect();
             let source_matches = official_map.as_ref().is_some_and(|map| {
-                map.sources_content
+                map.sources
                     .iter()
-                    .flatten()
-                    .any(|content| content == &input)
+                    .zip(&map.sources_content)
+                    .any(|(source, content)| {
+                        source.ends_with("input.svelte")
+                            && content
+                                .as_deref()
+                                .is_some_and(|content| content.replace("\r\n", "\n") == input)
+                    })
             });
             let official_segments: Vec<(usize, i64, &Segment)> = official_map
                 .as_ref()
