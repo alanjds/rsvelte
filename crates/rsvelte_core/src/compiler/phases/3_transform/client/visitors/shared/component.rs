@@ -39,6 +39,18 @@ impl<'a> ComponentNode<'_, 'a> {
             ComponentNode::SvelteSelf(c) => c.start,
         }
     }
+
+    /// Get the source span that upstream assigns to the generated component
+    /// callee. Dynamic `<svelte:component>` nodes deliberately have no callee
+    /// location because their generated callee is synthetic.
+    fn callee_span(&self) -> Option<(u32, u32)> {
+        let loc = match self {
+            ComponentNode::Component(c) => c.name_loc.as_ref(),
+            ComponentNode::SvelteComponent(_) => None,
+            ComponentNode::SvelteSelf(c) => c.name_loc.as_ref(),
+        }?;
+        Some((loc.start.character, loc.end.character))
+    }
 }
 
 /// Props entry in the props object.
@@ -383,6 +395,7 @@ pub fn build_component(
 
     // Create the component call function
     // This follows the official Svelte pattern where a closure `fn` is progressively wrapped
+    let component_callee_span = node.callee_span();
     let build_call_for_anchor = |anchor_expr: JsExpr,
                                  props: &JsExpr,
                                  component_name: &str,
@@ -433,6 +446,13 @@ pub fn build_component(
             }
         };
 
+        // Upstream assigns `loc` to the callee after applying read transforms,
+        // lining up `Widget` in `Widget(...)` with the tag name in `<Widget>`.
+        let callee = if let Some((start, end)) = component_callee_span {
+            JsExpr::Spanned(arena.alloc_expr(callee), start, end)
+        } else {
+            callee
+        };
         let call = b::call(arena, callee, vec![anchor_expr, props.clone()]);
 
         if let Some(bind_expr) = bind {

@@ -2966,7 +2966,7 @@ mod tests {
     }
 
     #[test]
-    fn client_maps_component_bind_accessors_and_interpolation_without_text_matching() {
+    fn client_maps_component_callee_bind_accessors_and_interpolation_without_text_matching() {
         let source = "<script>\n\texport let potato;\n</script>\n\n{potato}\n<Widget bind:potato/>";
         let result = compile(
             source,
@@ -2996,6 +2996,10 @@ mod tests {
                 mappings[line]
             );
         };
+
+        let generated_callee = generated.find("Widget(").unwrap();
+        assert_mapping(generated_callee, 5, 1);
+        assert_mapping(generated_callee + "Widget".len(), 5, 7);
 
         for accessor in ["get potato", "set potato"] {
             let generated_key = generated.find(accessor).unwrap() + 4;
