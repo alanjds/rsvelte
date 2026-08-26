@@ -2088,8 +2088,8 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
 
     fn import_declaration(&mut self, node: &ImportDeclaration, ctx: &mut Context<DIRECT>) {
         if node.specifiers.as_ref().is_none_or(|v| v.is_empty()) {
-            ctx.write("import ");
-            ctx.write(Self::string_literal(&node.source));
+            self.write_keyword(ctx, node.span.start, "import", " ");
+            self.write_node(ctx, node.source.span, Self::string_literal(&node.source));
             ctx.write_ascii(b';');
             return;
         }
@@ -2107,19 +2107,23 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             }
         }
 
-        ctx.write("import ");
+        let mut kw = self.keyword_cursor(node.span.start, true);
+        kw.write(ctx, "import ");
         if import_type {
-            ctx.write("type ");
+            kw.write(ctx, "type ");
         }
         if let Some(d) = default_spec {
-            ctx.write(d.local.name.as_str());
+            self.write_node(ctx, d.span, d.local.name.as_str());
             if namespace_spec.is_some() || !named.is_empty() {
                 ctx.write_ascii_bytes(b", ");
             }
         }
         if let Some(ns) = namespace_spec {
-            ctx.write("* as ");
-            ctx.write(ns.local.name.as_str());
+            self.write_node(
+                ctx,
+                ns.span,
+                format_compact!("* as {}", ns.local.name.as_str()),
+            );
         }
         if !named.is_empty() {
             ctx.write_ascii(b'{');
@@ -2134,8 +2138,8 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
                         is_elision: false,
                     }
                 },
-                |_p, s, child| {
-                    Printer::<HAS_COMMENTS, DIRECT>::import_specifier(s, child);
+                |p, s, child| {
+                    p.import_specifier(s, child);
                 },
                 None,
                 true,
@@ -2146,7 +2150,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             ctx.write_ascii(b'}');
         }
         ctx.write(" from ");
-        ctx.write(Self::string_literal(&node.source));
+        self.write_node(ctx, node.source.span, Self::string_literal(&node.source));
         Self::import_attributes(node.with_clause.as_deref(), ctx);
         ctx.write_ascii(b';');
     }
@@ -2172,7 +2176,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         ctx.write_ascii_bytes(b" }");
     }
 
-    fn import_specifier(node: &ImportSpecifier, ctx: &mut Context<DIRECT>) {
+    fn import_specifier(&self, node: &ImportSpecifier, ctx: &mut Context<DIRECT>) {
         if matches!(node.import_kind, ImportOrExportKind::Type) {
             ctx.write("type ");
         }
@@ -2186,10 +2190,10 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         if let Some(name) = imported
             && name != node.local.name.as_str()
         {
-            ctx.write(name);
+            self.write_node(ctx, node.imported.span(), name);
             ctx.write_ascii_bytes(b" as ");
         }
-        ctx.write(node.local.name.as_str());
+        self.write_node(ctx, node.local.span, node.local.name.as_str());
     }
 
     fn export_declaration(&mut self, node: &ExportDeclaration, ctx: &mut Context<DIRECT>) {
