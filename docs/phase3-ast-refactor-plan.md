@@ -668,7 +668,7 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `effect_callback` | 8 | **0 — deleted** |
 | `token` | 80 | 23 |
 | `template_element_runtime` | 25 | **0 — deleted** |
-| `legacy_prop_read` | 16 | 16 |
+| `legacy_prop_read` | 16 | **0 — deleted** |
 | `inline_script` | 7 | 4 |
 | `bind_value` | 5 | **0 — deleted** |
 | `component_bind` | 5 | **0 — deleted** |
@@ -676,8 +676,8 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `collapsed_declaration` | 0 | 0 |
 | `rune` | 0 | 0 |
 
-`default_function_wrapper`, `effect_callback`, `template_element_runtime`, `bind_value`,
-`component_bind` and `verbatim_import` are deleted: all six are now produced by source spans,
+`default_function_wrapper`, `effect_callback`, `template_element_runtime`, `legacy_prop_read`,
+`bind_value`, `component_bind` and `verbatim_import` are deleted: all seven are now produced by source spans,
 and the before/after column is the attribution.
 For element handles, `flush_node` records the tag-name span against the component-wide unique
 generated name; both printers apply it to ordinary `Identifier` nodes only at emission time.
@@ -686,7 +686,7 @@ upstream's reuse of one located identifier for the declaration and all runtime u
 `bind:value` call similarly records a scope on its stable arena ID: only otherwise-unlocated
 copies of the expression's root identifier inherit that span while the completed accessor call
 is printed. Explicitly located children keep their own spans, and no wrapper enters the member
-chain while lowering can still inspect it. The other five passes stay, and what each still
+chain while lowering can still inspect it. The other four passes stay, and what each still
 carries is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |

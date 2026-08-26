@@ -259,16 +259,17 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         remaining_result_mappings.push(mapping);
                     }
                 }
-                let legacy_prop_read_mappings =
-                    if !map_pass_disabled("legacy_prop") && source.contains("export let ") {
-                        generate_legacy_prop_read_mappings_with_starts(
-                            &result.code,
-                            source,
-                            &mapping_starts,
-                        )
-                    } else {
-                        Vec::new()
-                    };
+                // An exact identifier span is a stronger source carrier than the
+                // token matcher below. Keep those emitter mappings ahead of the
+                // heuristic fallback; otherwise an earlier same-named source token
+                // can claim the generated position (for example the template `foo`
+                // in `$.deep_read_state(foo())` instead of its `export let foo`).
+                let (precise_result_mappings, remaining_result_mappings) =
+                    partition_precise_identifier_mappings(
+                        &result.code,
+                        source,
+                        remaining_result_mappings,
+                    );
                 let inline_script_mappings = if !map_pass_disabled("inline_script")
                     && source.contains("<script>")
                     && source.contains("export ")
@@ -329,18 +330,18 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 };
                 let mapping_capacity = wrapper_mappings.len()
                     + runtime_mappings.len()
-                    + legacy_prop_read_mappings.len()
                     + inline_script_mappings.len()
                     + template_name_mappings.len()
+                    + precise_result_mappings.len()
                     + token_mappings.len()
                     + rune_mappings.len()
                     + remaining_result_mappings.len();
                 let mut mappings = Vec::with_capacity(mapping_capacity);
                 mappings.extend(wrapper_mappings);
                 mappings.extend(runtime_mappings);
-                mappings.extend(legacy_prop_read_mappings);
                 mappings.extend(inline_script_mappings);
                 mappings.extend(template_name_mappings);
+                mappings.extend(precise_result_mappings);
                 mappings.extend(token_mappings);
                 mappings.extend(rune_mappings);
                 mappings.extend(remaining_result_mappings);
@@ -1106,6 +1107,113 @@ fn merge_preferred_mappings(
     }
     result.extend(preferred.into_iter().skip(preferred_index));
     result
+}
+
+/// Split out emitter mappings that bracket one exact identifier in both texts.
+///
+/// Generated-token matching is deliberately a fallback because it has no binding
+/// identity. A `Spanned` identifier does: esrap emits a mapping at both ends of
+/// the node, and equal generated/source slices prove that the pair is the exact
+/// carrier rather than a wider synthesized wrapper.
+fn partition_precise_identifier_mappings(
+    generated: &str,
+    source: &str,
+    mappings: Vec<js_ast::codegen::SourceMapping>,
+) -> (
+    Vec<js_ast::codegen::SourceMapping>,
+    Vec<js_ast::codegen::SourceMapping>,
+) {
+    fn identifier_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+    }
+
+    fn exact_identifier_slice<'a>(
+        text: &'a str,
+        starts: &[usize],
+        line: u32,
+        start: u32,
+        end: u32,
+    ) -> Option<&'a str> {
+        let line_start = *starts.get(line as usize)?;
+        let line_end = starts.get(line as usize + 1).copied().unwrap_or(text.len());
+        let line = text.get(line_start..line_end)?;
+        // Source-map columns are UTF-16. On an ASCII line they are byte offsets,
+        // which is enough for the identifier carriers this fallback replaces.
+        if !line.is_ascii() {
+            return None;
+        }
+        let start = start as usize;
+        let end = end as usize;
+        let bytes = line.as_bytes();
+        if start >= end
+            || end > bytes.len()
+            || !bytes[start..end].iter().copied().all(identifier_byte)
+            || bytes
+                .get(start.wrapping_sub(1))
+                .is_some_and(|byte| identifier_byte(*byte))
+            || bytes.get(end).is_some_and(|byte| identifier_byte(*byte))
+        {
+            return None;
+        }
+        line.get(start..end)
+    }
+
+    let generated_starts = js_ast::codegen::build_line_starts(generated);
+    let source_starts = js_ast::codegen::build_line_starts(source);
+    let mut precise = vec![false; mappings.len()];
+
+    for (start_index, start_mapping) in mappings.iter().enumerate() {
+        for (end_index, end_mapping) in mappings.iter().enumerate().skip(start_index + 1) {
+            if end_mapping.gen_line != start_mapping.gen_line {
+                break;
+            }
+            let generated_width = end_mapping.gen_col.saturating_sub(start_mapping.gen_col);
+            if generated_width == 0 {
+                continue;
+            }
+            if generated_width > 128 {
+                break;
+            }
+            if end_mapping.orig_line != start_mapping.orig_line
+                || end_mapping.orig_col.saturating_sub(start_mapping.orig_col) != generated_width
+            {
+                continue;
+            }
+
+            let Some(generated_identifier) = exact_identifier_slice(
+                generated,
+                &generated_starts,
+                start_mapping.gen_line,
+                start_mapping.gen_col,
+                end_mapping.gen_col,
+            ) else {
+                continue;
+            };
+            if exact_identifier_slice(
+                source,
+                &source_starts,
+                start_mapping.orig_line,
+                start_mapping.orig_col,
+                end_mapping.orig_col,
+            ) == Some(generated_identifier)
+            {
+                precise[start_index] = true;
+                precise[end_index] = true;
+                break;
+            }
+        }
+    }
+
+    let mut preferred = Vec::new();
+    let mut remaining = Vec::new();
+    for (mapping, is_precise) in mappings.into_iter().zip(precise) {
+        if is_precise {
+            preferred.push(mapping);
+        } else {
+            remaining.push(mapping);
+        }
+    }
+    (preferred, remaining)
 }
 
 /// The generated component function's braces map to the instance script tags.
@@ -1890,125 +1998,6 @@ fn generate_rune_mappings_with_starts(
     mappings
 }
 
-/// The legacy prop read inserted ahead of a template expression has two distinct
-/// source carriers: the exported binding and the expression itself.
-#[cfg(test)]
-fn generate_legacy_prop_read_mappings(
-    generated: &str,
-    source: &str,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    generate_legacy_prop_read_mappings_with_starts(
-        generated,
-        source,
-        &MappingLineStarts::new(generated, source),
-    )
-}
-
-fn generate_legacy_prop_read_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    fn identifier_after(code: &str, mut offset: usize) -> Option<(usize, &str)> {
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(u8::is_ascii_whitespace)
-        {
-            offset += 1;
-        }
-        let start = offset;
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            offset += 1;
-        }
-        (offset > start).then_some((start, &code[start..offset]))
-    }
-
-    fn push_pair(
-        mappings: &mut Vec<js_ast::codegen::SourceMapping>,
-        generated: &str,
-        source: &str,
-        generated_starts: &[usize],
-        source_starts: &[usize],
-        generated_offset: usize,
-        source_offset: usize,
-        len: usize,
-    ) {
-        for (gen_offset, orig_offset) in [
-            (generated_offset, source_offset),
-            (generated_offset + len, source_offset + len),
-        ] {
-            let (gen_line, gen_col) =
-                offset_to_line_col_utf16(generated, generated_starts, gen_offset);
-            let (orig_line, orig_col) =
-                offset_to_line_col_utf16(source, source_starts, orig_offset);
-            mappings.push(js_ast::codegen::SourceMapping {
-                gen_line: gen_line as u32,
-                gen_col: gen_col as u32,
-                source: 0,
-                orig_line: orig_line as u32,
-                orig_col: orig_col as u32,
-                name: None,
-            });
-        }
-    }
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = generated[cursor..].find("$.deep_read_state(") {
-        let read_start = cursor + relative + "$.deep_read_state(".len();
-        let Some((generated_name, name)) = identifier_after(generated, read_start) else {
-            cursor = read_start;
-            continue;
-        };
-        let binding = format!("export let {name}");
-        if let Some(binding_start) = source.find(&binding) {
-            let source_name = binding_start + "export let ".len();
-            push_pair(
-                &mut mappings,
-                generated,
-                source,
-                &generated_starts,
-                &source_starts,
-                generated_name,
-                source_name,
-                name.len(),
-            );
-        }
-
-        let mut untrack_cursor = generated_name + name.len();
-        if let Some(relative) = generated[untrack_cursor..].find("$.untrack(() =>") {
-            untrack_cursor += relative + "$.untrack(() =>".len();
-            if let Some((untrack_name, untrack_identifier)) =
-                identifier_after(generated, untrack_cursor)
-                && untrack_identifier == name
-                && let Some(source_name) = source.rfind(name)
-            {
-                push_pair(
-                    &mut mappings,
-                    generated,
-                    source,
-                    &generated_starts,
-                    &source_starts,
-                    untrack_name,
-                    source_name,
-                    name.len(),
-                );
-            }
-        }
-        cursor = generated_name + name.len();
-    }
-    mappings
-}
-
 #[cfg(test)]
 fn generate_inline_script_mappings(
     generated: &str,
@@ -2302,8 +2291,9 @@ mod tests {
 
     use super::{
         generate_default_function_wrapper_mappings, generate_inline_script_mappings,
-        generate_legacy_prop_read_mappings, generate_server_declaration_mappings,
-        generate_server_token_mappings, generate_server_wrapper_mappings, generate_token_mappings,
+        generate_server_declaration_mappings,
+        generate_server_token_mappings, generate_server_wrapper_mappings,
+        generate_token_mappings,
         generate_verbatim_import_mappings, typescript_declaration_annotation_end,
     };
 
@@ -2354,18 +2344,60 @@ mod tests {
     }
 
     #[test]
-    fn client_maps_legacy_prop_read_and_template_expression_separately() {
+    fn client_keeps_legacy_prop_read_carriers_after_merging() {
         let source = "<script>\n\texport let foo;\n</script>\n\n{foo.bar}";
-        let generated = "$.deep_read_state(foo()); $.untrack(() => foo().bar)";
-        let mappings = generate_legacy_prop_read_mappings(generated, source);
-
-        for expected in [(18, 1, 12), (21, 1, 15), (42, 4, 1), (45, 4, 4)] {
-            assert!(
-                mappings.iter().any(|mapping| {
-                    (mapping.gen_col, mapping.orig_line, mapping.orig_col) == expected
-                }),
-                "missing prop-read mapping {expected:?}: {mappings:?}"
+        let result = compile(
+            source,
+            CompileOptions {
+                generate: GenerateMode::Client,
+                filename: Some("input.svelte".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let map: serde_json::Value =
+            serde_json::from_str(result.js.map.as_deref().unwrap()).unwrap();
+        let mappings =
+            crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+                map["mappings"].as_str().unwrap(),
             );
+
+        for (needle, original_line, original_column) in [
+            ("$.deep_read_state(foo())", 1, 12),
+            ("$.untrack(() => foo().bar)", 4, 1),
+        ] {
+            let (line, generated_column) = result
+                .js
+                .code
+                .lines()
+                .enumerate()
+                .find_map(|(line, code)| {
+                    let expression = code.find(needle)?;
+                    let identifier = code[expression..].find("foo")?;
+                    Some((line, (expression + identifier) as u32))
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing {needle} in generated code:\n{}", result.js.code)
+                });
+
+            for (column, original_column) in [
+                (generated_column, original_column),
+                (generated_column + 3, original_column + 3),
+            ] {
+                assert!(
+                    mappings[line].iter().any(|segment| {
+                        segment[..4]
+                            == [
+                                column as i64,
+                                0,
+                                original_line as i64,
+                                original_column as i64,
+                            ]
+                    }),
+                    "missing merged prop-read mapping at {line}:{column}: {:?}",
+                    mappings[line]
+                );
+            }
         }
     }
 
