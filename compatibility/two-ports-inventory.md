@@ -368,10 +368,10 @@ picked.
 ### 11. Does this expression contain a call? — [S]
 
 Filed as **#3569**; recorded here so the inventory is complete rather than restated.
-`ast/template.rs` `set_has_call` has three reachable phase-2 writers, and phase 3 re-derives the same bit at
-least three more times — `shared/element.rs:518` `json_contains_call`, `shared/element.rs:452`
-`walk_metadata_flags` (which additionally sets `has_call` for a `SpreadElement`, unlike the other
-two), and `shared/utils.rs:5944` `expression_has_call`.
+`ast/template.rs` `set_has_call` has three reachable phase-2 writers. When the issue was filed,
+phase 3 re-derived the same bit in the generic element walker twice — `json_contains_call` and
+`walk_metadata_flags` (the latter additionally counted a `SpreadElement`) — and in
+`shared/utils.rs` `expression_has_call`.
 
 Upstream computes it once in phase 2 into `node.metadata.expression.has_call`; phase 3 only reads
 it. Whether the reachable copies disagree on an input: `未測定` — see #3569.
@@ -387,11 +387,12 @@ template-expression walker.
 
 The first migration slices now attach and consume that Phase 2 metadata for `AttachTag`,
 `SpreadAttribute`, `StyleDirective`, the expressions inside a regular `style=` attribute, and
-every generic attribute-value chunk and event handlers. The old generic attribute
-`walk_metadata_flags` / `json_contains_call` implementations remain in `shared/element.rs` as
-test-supported code, and the shared `expression_has_call` helper remains a separate production
-Phase 3 decision. This row therefore stays open rather than treating migration of these consumers
-as agreement of the whole port family.
+every generic attribute-value chunk and generic event attribute. The old generic attribute
+`walk_metadata_flags` / `json_contains_call` implementations and the tests that only compared
+those unused walkers were then removed. The shared `expression_has_call` helper remains a
+separate production Phase 3 decision, while `shared/events.rs` independently asks the broader
+"contains any call" question for `OnDirective`. This row therefore stays open rather than
+treating migration of the generic attribute consumers as agreement of the whole port family.
 
 ### 12. "Selector unused" and "element scoped" are two engines over two element models — [S]
 
