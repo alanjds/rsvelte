@@ -26,10 +26,10 @@ use crate::ast::span::SourceLocation;
 use crate::ast::{
     AnimateDirective, AttachTag, Attribute, AttributeNode, AttributeValue, AttributeValuePart,
     AwaitBlock, BindDirective, ClassDirective, Comment, Component, ConstTag, DebugTag, EachBlock,
-    ExpressionTag, Fragment, HtmlTag, IfBlock, KeyBlock, LetDirective, OnDirective, RegularElement,
-    RenderTag, Root, Script, SlotElement, SnippetBlock, SpreadAttribute, StyleDirective,
-    SvelteComponentElement, SvelteDynamicElement, SvelteElement, TemplateNode, Text, TitleElement,
-    TransitionDirective, UseDirective,
+    ExpressionTag, Fragment, HtmlTag, IfBlock, JsComment, KeyBlock, LetDirective, OnDirective,
+    RegularElement, RenderTag, Root, Script, SlotElement, SnippetBlock, SpreadAttribute,
+    StyleDirective, SvelteComponentElement, SvelteDynamicElement, SvelteElement, TemplateNode,
+    Text, TitleElement, TransitionDirective, UseDirective,
 };
 
 /// Insert ESTree fields into an existing `Map`, in written order.
@@ -376,6 +376,19 @@ fn estree_loc_with_character(start: usize, end: usize, positions: &Utf8ToUtf16) 
     json!({ "start": point(start), "end": point(end) })
 }
 
+fn comment_json(comment: &JsComment, positions: &Utf8ToUtf16) -> Value {
+    let mut value = serde_json::to_value(comment).unwrap_or(Value::Null);
+    if let Value::Object(object) = &mut value {
+        let loc = if comment.loc_has_character {
+            estree_loc_with_character(comment.start as usize, comment.end as usize, positions)
+        } else {
+            estree_loc(comment.start as usize, comment.end as usize, positions)
+        };
+        object.insert("loc".to_string(), loc);
+    }
+    value
+}
+
 fn insert_loc_after_end(object: &mut Map<String, Value>, loc: Value) {
     let previous = std::mem::take(object);
     for (key, child) in previous {
@@ -578,9 +591,8 @@ fn convert_to_legacy_inner(source: &str, ast: &Root) -> Value {
         let comments_value: Vec<Value> = ast
             .comments
             .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()
-            .unwrap_or_default();
+            .map(|comment| comment_json(comment, &pos_conv))
+            .collect();
         result.insert("_comments".to_string(), Value::Array(comments_value));
     }
 
