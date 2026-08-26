@@ -1147,9 +1147,14 @@ fn build_style_attribute_expression(
     use crate::compiler::phases::phase3_transform::client::visitors::expression_converter::convert_expression;
 
     let converted = convert_expression(&expr_tag.expression, context);
-    let metadata = ExpressionMetadata::from_template_metadata(&expr_tag.metadata.expression);
+    let mut metadata = ExpressionMetadata::from_template_metadata(&expr_tag.metadata.expression);
     let has_call = metadata.has_call();
-    let has_state = metadata.has_state();
+    // Phase 2's binding check is deliberately conservative, while this routing
+    // decision follows the client scope evaluator. In particular, an
+    // unmodified `$state('red')` can be known here even though its Phase 2
+    // metadata has the state bit set.
+    let has_state = super::utils::expression_has_reactive_state(&expr_tag.expression, context);
+    metadata.set_has_state(has_state);
     let has_await = metadata.has_await();
     let built = build_expression(context, &converted, &metadata);
     let value = context

@@ -1,5 +1,7 @@
 //! Issue #3569: each expression inside a regular `style=` attribute carries
-//! the Phase 2 metadata consumed by the client style transform.
+//! Phase 2 call, await, member, and dependency metadata consumed by the client
+//! style transform. State routing remains with the client scope evaluator until
+//! Phase 2 can represent its compile-time-known result exactly.
 
 use rsvelte_core::{
     CompileOptions, ParseOptions,
