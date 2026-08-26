@@ -43,9 +43,9 @@ comment carrier in `opaque-keyword` diverged on comment placement (#2990), so re
 Those entries are gone now, which is what the split was for: the family clears rather than
 carrying a key that would absorb the next regression.
 
-## Matrix known failures (`matrix-known-failures.json`, 528 entries)
+## Matrix known failures (`matrix-known-failures.json`, 588 entries)
 
-Partition of `matrix-known-failures.json` by family: `0 + 84 + 0 + 24 + 0 + 0 + 0 + 140 + 0 + 272 + 8 + 0 + 0 + 0`
+Partition of `matrix-known-failures.json` by family: `0 + 84 + 0 + 24 + 0 + 0 + 0 + 140 + 0 + 272 + 8 + 0 + 0 + 0 + 0 + 60`
 
 ### `binding-position` — 0 entries
 
@@ -360,6 +360,34 @@ divergence is the code and the position only, and matching would mean either rep
 wrong rule at a wrong offset (row 1) or hand-porting acorn-typescript's whole modifier table
 in place of OXC's — which would have to carry its bugs to be worth anything. The rows are
 generated rather than skipped so that the day upstream fixes its table, this gate says so.
+
+### `rune-statement-container` — 60 entries
+
+The family added for #3146 found three pre-existing lowering gaps while verifying the new
+module dev tag-declarator descent through labels and switch cases. None is caused by that
+walker: its two focused shapes pass, and every listed row differs in production output too.
+
+The 60 entries split into three independently actionable clusters:
+
+- 36 client rows for `compileModule`: every `var` `$state` / `$derived` read uses `$.get`
+  where official uses `$.safe_get`. The current safe-get collector reaches ordinary module
+  declarations but does not classify declarations nested in any of these nine statement
+  containers.
+- 18 server rows for `compileModule`: every nested `var` `$derived` read becomes `value()`
+  where official emits the initialization-safe `value?.()`.
+- 6 component-server rows: `$derived` under a labeled block or either switch-case form loses
+  that same optional-call rule; the brace-less switch case additionally becomes
+  `value()?.()`, showing that declaration unthunking and the later optional-call rewrite do
+  not agree on which node owns the call.
+
+Partition of `matrix-known-failures.json` entries under `rune-statement-container/` by cause:
+`compileModule safe_get reachability: 36; server optional derived call reachability: 24`
+
+These remain ratcheted rather than being folded into this coverage PR: fixing them spans the
+client and server production pipelines, while the change here is the dev-only tag annotation
+walker plus the generated axis that makes all three gaps reproducible. The keys are kept
+separate by container and target so each follow-up can shrink its own cluster without masking
+the others.
 
 ## Burn-down
 
