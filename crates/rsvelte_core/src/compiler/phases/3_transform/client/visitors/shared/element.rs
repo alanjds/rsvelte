@@ -7,7 +7,6 @@ use crate::ast::template::{
     AttributeValue, AttributeValuePart, ClassDirective, ExpressionTag,
     RegularElement as RegularElementNode, StyleDirective,
 };
-use crate::compiler::phases::phase2_analyze::BindingKind;
 use crate::compiler::phases::phase3_transform::client::types::*;
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 #[cfg(test)]
