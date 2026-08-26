@@ -1092,15 +1092,25 @@ fn token_pass_owners_diagnostic() {
                 .collect::<Vec<_>>();
             let without_line = serde_json::to_string(&without_line).unwrap();
             let generated_line = generated.lines().nth(segment[0] as usize);
-            let official_lines: Vec<usize> = official_code
+            let generated_indent = generated_line.map_or(0, |line| {
+                let trimmed = line.trim_start();
+                line[..line.len() - trimmed.len()].encode_utf16().count() as i64
+            });
+            let relative_col = segment[1].checked_sub(generated_indent);
+            let official_lines: Vec<(usize, i64)> = official_code
                 .as_deref()
                 .into_iter()
                 .flat_map(str::lines)
                 .enumerate()
                 .filter_map(|(line, text)| {
-                    generated_line
-                        .is_some_and(|generated| text.trim() == generated.trim())
-                        .then_some(line)
+                    let generated = generated_line?;
+                    if text.trim() != generated.trim() {
+                        return None;
+                    }
+                    let trimmed = text.trim_start();
+                    let official_indent =
+                        text[..text.len() - trimmed.len()].encode_utf16().count() as i64;
+                    Some((line, official_indent + relative_col?))
                 })
                 .collect();
             let source_matches = official_map.as_ref().is_some_and(|map| {
@@ -1109,18 +1119,20 @@ fn token_pass_owners_diagnostic() {
                     .flatten()
                     .any(|content| content == &input)
             });
-            let official_segments: Vec<(usize, &Segment)> = official_map
+            let official_segments: Vec<(usize, i64, &Segment)> = official_map
                 .as_ref()
                 .into_iter()
                 .flat_map(|map| {
                     official_lines
                         .iter()
-                        .filter_map(|line| map.lines.get(*line).map(|segments| (*line, segments)))
-                        .flat_map(|(line, segments)| {
-                            segments.iter().map(move |segment| (line, segment))
+                        .filter_map(|&(line, col)| {
+                            map.lines.get(line).map(|segments| (line, col, segments))
+                        })
+                        .flat_map(|(line, col, segments)| {
+                            segments.iter().map(move |segment| (line, col, segment))
                         })
                 })
-                .filter(|(_, other)| other.first() == Some(&segment[1]))
+                .filter(|(_, col, other)| other.first() == Some(col))
                 .collect();
             let oracle = if generated_line.is_none() || official_lines.is_empty() || !source_matches
             {
@@ -1129,15 +1141,15 @@ fn token_pass_owners_diagnostic() {
             } else {
                 match official_segments
                     .iter()
-                    .find(|(_, other)| other.get(2..4) == Some(&segment[3..5]))
+                    .find(|(_, _, other)| other.get(2..4) == Some(&segment[3..5]))
                 {
-                    Some((line, _)) => {
+                    Some((line, col, _)) => {
                         official_exact += 1;
-                        format!("official EXACT g{line}:{}", segment[1])
+                        format!("official EXACT g{line}:{col}")
                     }
                     None if !official_segments.is_empty() => {
                         official_wrong += 1;
-                        let other = official_segments[0].1;
+                        let other = official_segments[0].2;
                         format!(
                             "official DIFFERENT s{}:{}",
                             other.get(2).copied().unwrap_or(-1),
