@@ -370,6 +370,10 @@ pub struct VisitorContext<'a> {
     pub parent_element: Option<String>,
     /// Current function depth.
     pub function_depth: usize,
+    /// Depth inside ordinary functions while walking a template expression.
+    /// Arrow functions do not introduce their own `arguments`, but inherit one
+    /// from an enclosing ordinary function.
+    pub template_regular_function_depth: usize,
     /// Depth inside $derived(...) expressions (but not $derived.by(...)) or @const
     pub derived_function_depth: usize,
     /// Whether we have a $props() rune.
@@ -604,6 +608,7 @@ impl<'a> VisitorContext<'a> {
             bind_has_await: false,
             parent_element: None,
             function_depth: 0,
+            template_regular_function_depth: 0,
             derived_function_depth: 0,
             has_props_rune: false,
             component_slots: rustc_hash::FxHashSet::default(),
