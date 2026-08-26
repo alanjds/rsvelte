@@ -1164,7 +1164,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                     update_transform,
                     &context.arena,
                     update_op,
-                    JsExpr::Identifier(name_str.into()),
+                    source_spanned(arg_node, JsExpr::Identifier(name_str.into()), context),
                     prefix,
                 );
             }

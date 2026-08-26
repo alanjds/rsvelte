@@ -293,20 +293,23 @@ pub fn fragment(
 
             // Append to anchor
             let mut append_id = JsExpr::Spanned(context.arena.alloc_expr(id), name_start, name_end);
+            let mut comment_anchored = false;
             if let [TemplateNode::ExpressionTag(tag)] = element.fragment.nodes.as_slice()
                 && let Some(region) = CommentRegion::of(&context.state, tag, name_start)
             {
                 append_id = region.anchor(&context.arena, append_id, name_start, name_end);
+                comment_anchored = true;
             }
-            let append = b::call(
+            let mut append = b::call(
                 &context.arena,
                 b::member_path(&context.arena, "$.append"),
                 vec![b::id("$$anchor"), append_id],
             );
-            close = Some(b::stmt(
-                &context.arena,
-                JsExpr::Spanned(context.arena.alloc_expr(append), element.start, element.end),
-            ));
+            if !comment_anchored {
+                append =
+                    JsExpr::Spanned(context.arena.alloc_expr(append), element.start, element.end);
+            }
+            close = Some(b::stmt(&context.arena, append));
         }
     } else if is_single_child_not_needing_template {
         // Single child not needing template (SvelteFragment or TitleElement)

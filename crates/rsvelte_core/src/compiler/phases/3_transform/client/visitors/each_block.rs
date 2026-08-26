@@ -515,8 +515,8 @@ pub fn each_block(node: &EachBlock, context: &mut ComponentContext) {
     let key_function = build_key_function(node, context, key_uses_index, &index);
 
     // Build render arguments: ($$anchor, item, [index], [collection_id])
-    let mut render_args = build_render_args(&index, &item, uses_index, collection_id.as_ref());
-    if let Some(TemplateNode::ConstTag(tag)) = node.body.nodes.first()
+    let render_args = build_render_args(&index, &item, uses_index, collection_id.as_ref());
+    let const_comment_region = if let Some(TemplateNode::ConstTag(tag)) = node.body.nodes.first()
         && let (Some(item_start), Some(item_end), Some(comment_start), Some(comment_end)) = (
             node.context.as_ref().and_then(|e| e.start()),
             node.context.as_ref().and_then(|e| e.end()),
@@ -525,10 +525,11 @@ pub fn each_block(node: &EachBlock, context: &mut ComponentContext) {
         )
         && let Some(region) =
             CommentRegion::between(&context.state, comment_start, comment_end, node.start + 7)
-        && let Some(item) = render_args.get_mut(1)
     {
-        *item = region.anchor(&context.arena, item.clone(), item_start, item_end);
-    }
+        Some((region, item_start, item_end))
+    } else {
+        None
+    };
 
     // Combine declarations and body statements
     // This matches JS: b.arrow(render_args, b.block(declarations.concat(block.body)))
@@ -536,13 +537,20 @@ pub fn each_block(node: &EachBlock, context: &mut ComponentContext) {
     render_body.extend(body_block.body);
 
     // Build the render function
-    let render_fn = b::arrow_block(
+    let mut render_fn = b::arrow_block(
         render_args
             .iter()
             .map(|expr| convert_expr_to_pattern(expr, &context.arena))
             .collect(),
         render_body,
     );
+    if let Some((region, item_start, item_end)) = const_comment_region {
+        // The source position belongs to the callback identifier. Anchor the
+        // completed arrow so conversion can remap that parameter's existing
+        // `SpannedIdentifier`; wrapping the render argument itself changes its
+        // variant before `convert_expr_to_pattern` and loses the parameter.
+        render_fn = region.anchor_inner(&context.arena, render_fn, item_start, item_end);
+    }
 
     // Handle async expressions
     let has_await = node.metadata.expression.has_await();

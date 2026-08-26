@@ -22,15 +22,18 @@
 //!
 //! All construction patterns are lifted verbatim from the proven
 //! `js_ast::to_oxc` converter (variant-complete against oxc 0.136), so the
-//! nodes produced print byte-identically through esrap. All spans are the
-//! dummy [`oxc_span::SPAN`]: esrap formats structurally.
+//! nodes produced print byte-identically through esrap. Container spans are the
+//! dummy [`oxc_span::SPAN`]: esrap formats structurally. Identifier references
+//! and literals retain their source spans so a caller rebuilding an expression
+//! can place the comment cursor on surviving tokens rather than on a generated
+//! wrapper.
 
 use crate::ast::arena::{IdRange, JsNodeId, ParseArena};
 use crate::ast::typed_expr::{JsNode, LiteralValue};
 use oxc_allocator::{Allocator, ArenaBox, ArenaVec, GetAllocator};
 use oxc_ast::ast::*;
 use oxc_ast::builder::AstBuilder;
-use oxc_span::SPAN;
+use oxc_span::{GetSpanMut, SPAN, Span};
 use oxc_syntax::number::NumberBase;
 use oxc_syntax::operator::{
     AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator, UpdateOperator,
@@ -832,10 +835,17 @@ impl<'a, 'arena> Cx<'a, 'arena> {
 
     fn expr(&self, node: &JsNode) -> Option<Expression<'a>> {
         match node {
-            JsNode::Identifier { name, .. } => {
-                Some(Expression::new_identifier(SPAN, self.str(name), &self.ab))
-            }
-            JsNode::Literal { .. } => self.literal(node),
+            JsNode::Identifier {
+                start, end, name, ..
+            } => Some(Expression::new_identifier(
+                Span::new(*start, *end),
+                self.str(name),
+                &self.ab,
+            )),
+            JsNode::Literal { start, end, .. } => self.literal(node).map(|mut expr| {
+                *expr.span_mut() = Span::new(*start, *end);
+                expr
+            }),
             JsNode::ThisExpression { .. } => Some(Expression::ThisExpression(
                 ThisExpression::boxed(SPAN, &self.ab),
             )),
