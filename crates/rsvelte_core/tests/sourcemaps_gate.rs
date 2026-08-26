@@ -1060,8 +1060,9 @@ fn token_pass_owners_diagnostic() {
         let generated = compile_diagnostic(&input, &sample).code;
         // The repository currently tracks its sourcemap oracle at this Svelte
         // revision while the submodule has advanced. This temporary diagnostic
-        // deliberately reads that checked-in population directly: code equality
-        // below rejects any sample whose upstream output changed between them.
+        // deliberately reads that checked-in population directly. An unchanged
+        // generated line gives positions a stable local frame even when lines
+        // elsewhere in the output changed between the two compiler revisions.
         let fixture = |file: &str| {
             fs::read_to_string(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1082,21 +1083,49 @@ fn token_pass_owners_diagnostic() {
             owned += 1;
             let generated_text = snippet(&generated, segment[0] as usize, segment[1] as usize, 32);
             let source_text = snippet(&input, segment[3] as usize, segment[4] as usize, 32);
-            let oracle = if official_code.as_deref() != Some(generated.as_str()) {
+            let generated_line = generated.lines().nth(segment[0] as usize);
+            let official_lines: Vec<usize> = official_code
+                .as_deref()
+                .into_iter()
+                .flat_map(str::lines)
+                .enumerate()
+                .filter_map(|(line, text)| (Some(text) == generated_line).then_some(line))
+                .collect();
+            let source_matches = official_map.as_ref().is_some_and(|map| {
+                map.sources_content
+                    .iter()
+                    .flatten()
+                    .any(|content| content == &input)
+            });
+            let official_segments: Vec<(usize, &Segment)> = official_map
+                .as_ref()
+                .into_iter()
+                .flat_map(|map| {
+                    official_lines
+                        .iter()
+                        .filter_map(|line| map.lines.get(*line).map(|segments| (*line, segments)))
+                        .flat_map(|(line, segments)| {
+                            segments.iter().map(move |segment| (line, segment))
+                        })
+                })
+                .filter(|(_, other)| other.first() == Some(&segment[1]))
+                .collect();
+            let oracle = if generated_line.is_none() || official_lines.is_empty() || !source_matches
+            {
                 official_incomparable += 1;
                 "official INCOMPARABLE".to_string()
             } else {
-                let official = official_map
-                    .as_ref()
-                    .and_then(|map| map.lines.get(segment[0] as usize))
-                    .and_then(|line| line.iter().find(|other| other.first() == Some(&segment[1])));
-                match official {
-                    Some(other) if other.get(2..4) == Some(&segment[3..5]) => {
+                match official_segments
+                    .iter()
+                    .find(|(_, other)| other.get(2..4) == Some(&segment[3..5]))
+                {
+                    Some((line, _)) => {
                         official_exact += 1;
-                        "official EXACT".to_string()
+                        format!("official EXACT g{line}:{}", segment[1])
                     }
-                    Some(other) => {
+                    None if !official_segments.is_empty() => {
                         official_wrong += 1;
+                        let other = official_segments[0].1;
                         format!(
                             "official DIFFERENT s{}:{}",
                             other.get(2).copied().unwrap_or(-1),
