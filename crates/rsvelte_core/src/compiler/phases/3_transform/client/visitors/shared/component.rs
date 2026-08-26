@@ -1563,7 +1563,7 @@ fn process_bind_directive<'a>(
     // whose range is the complete raw directive name (`bind:name|modifiers`).
     // Parsed directives retain that exact range; the fallback only serves
     // synthetic directives whose source location was deliberately omitted.
-    let (bind_key_start, bind_key_end) = bind.name_loc.map_or_else(
+    let (bind_key_start, bind_key_end) = bind.name_loc.as_ref().map_or_else(
         || {
             (
                 bind.start,
