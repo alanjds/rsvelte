@@ -4240,12 +4240,16 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
 
     fn property_key(&mut self, key: &PropertyKey, ctx: &mut Context<DIRECT>) {
         match key {
-            PropertyKey::StaticIdentifier(id) => ctx.write(id.name.as_str()),
+            PropertyKey::StaticIdentifier(id) => {
+                self.write_node(ctx, id.span, id.name.as_str());
+            }
             PropertyKey::PrivateIdentifier(id) => {
                 ctx.write_ascii(b'#');
                 ctx.write(id.name.as_str());
             }
-            PropertyKey::StringLiteral(s) => ctx.write(Self::string_literal(s)),
+            PropertyKey::StringLiteral(s) => {
+                self.write_node(ctx, s.span, Self::string_literal(s));
+            }
             PropertyKey::NumericLiteral(n) => ctx.write(literal_raw(
                 n.raw.as_ref().map(oxc_ast::ast::Str::as_str),
                 || format_compact!("{}", n.value),
