@@ -109,7 +109,13 @@ fn compilation_rebuilds_legacy_expression_locations_at_the_json_boundary() {
     let children = ast["html"]["children"].as_array().unwrap();
 
     let each = &children[0];
-    let item_positions: Vec<_> = source.match_indices("item").map(|(i, _)| i).collect();
+    // Skip the `item` substring in the collection name `items`; the remaining
+    // matches are the context binding and its two identifier uses.
+    let item_positions: Vec<_> = source
+        .match_indices("item")
+        .skip(1)
+        .map(|(i, _)| i)
+        .collect();
     assert_loc(
         &each["context"],
         item_positions[0],
