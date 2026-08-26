@@ -198,7 +198,19 @@ fn build_test<'a>(
         state.visit_expr_claiming(&node.test)
     };
     if let (Some(start), Some(end)) = (node.test.start(), node.test.end()) {
-        state.place_template_expression_comments((node.start + 5, end), (start, end), &mut test);
+        // Upstream's cursor drops a leading line comment in an if header: the
+        // newline ends that comment before the rebuilt test is encountered.
+        let header = state
+            .source
+            .get((node.start + 5) as usize..end as usize)
+            .unwrap_or_default();
+        if !header.contains("//") {
+            state.place_template_expression_comments(
+                (node.start + 5, end),
+                (start, end),
+                &mut test,
+            );
+        }
     }
     test
 }

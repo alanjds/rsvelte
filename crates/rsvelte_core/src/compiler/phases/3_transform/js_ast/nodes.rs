@@ -468,6 +468,9 @@ pub struct JsSourceAnchor {
     /// Absolute source span this node claims as its location.
     pub at: u32,
     pub at_end: u32,
+    /// Preserve source spans carried by descendants, remapping them into the
+    /// synthetic comment region. Generated wrappers stay location-less.
+    pub preserve_inner_spans: bool,
 }
 
 /// Literal value.

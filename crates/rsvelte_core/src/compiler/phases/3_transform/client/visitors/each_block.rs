@@ -94,7 +94,7 @@ pub fn each_block(node: &EachBlock, context: &mut ComponentContext) {
         && let Some(region) =
             CommentRegion::between(&context.state, node.start + 7, end, node.start + 7)
     {
-        collection = region.anchor(&context.arena, collection, start, end);
+        collection = region.anchor_inner(&context.arena, collection, start, end);
     }
 
     // Add comment placeholder for uncontrolled blocks
@@ -515,7 +515,20 @@ pub fn each_block(node: &EachBlock, context: &mut ComponentContext) {
     let key_function = build_key_function(node, context, key_uses_index, &index);
 
     // Build render arguments: ($$anchor, item, [index], [collection_id])
-    let render_args = build_render_args(&index, &item, uses_index, collection_id.as_ref());
+    let mut render_args = build_render_args(&index, &item, uses_index, collection_id.as_ref());
+    if let Some(TemplateNode::ConstTag(tag)) = node.body.nodes.first()
+        && let (Some(item_start), Some(item_end), Some(comment_start), Some(comment_end)) = (
+            node.context.as_ref().and_then(|e| e.start()),
+            node.context.as_ref().and_then(|e| e.end()),
+            tag.declaration.start(),
+            tag.declaration.end(),
+        )
+        && let Some(region) =
+            CommentRegion::between(&context.state, comment_start, comment_end, node.start + 7)
+        && let Some(item) = render_args.get_mut(1)
+    {
+        *item = region.anchor(&context.arena, item.clone(), item_start, item_end);
+    }
 
     // Combine declarations and body statements
     // This matches JS: b.arrow(render_args, b.block(declarations.concat(block.body)))

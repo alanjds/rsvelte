@@ -187,7 +187,7 @@ pub fn visit_event_attribute(node: &AttributeNode, context: &mut ComponentContex
     if let (Some(start), Some(end)) = (expr_tag.expression.start(), expr_tag.expression.end())
         && let Some(region) = CommentRegion::of(&context.state, expr_tag, expr_tag.start + 1)
     {
-        handler = region.anchor(&context.arena, handler, start, end);
+        handler = region.anchor_inner(&context.arena, handler, start, end);
     }
 
     let statement = b::stmt(

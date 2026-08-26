@@ -10,6 +10,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use crate::ast::template::{Fragment, TemplateNode};
+use crate::compiler::phases::phase3_transform::client::source_anchor::CommentRegion;
 use crate::compiler::phases::phase3_transform::client::transform_template::{
     Namespace, Template, transform_template,
 };
@@ -291,13 +292,16 @@ pub fn fragment(
             );
 
             // Append to anchor
+            let mut append_id = JsExpr::Spanned(context.arena.alloc_expr(id), name_start, name_end);
+            if let [TemplateNode::ExpressionTag(tag)] = element.fragment.nodes.as_slice()
+                && let Some(region) = CommentRegion::of(&context.state, tag, name_start)
+            {
+                append_id = region.anchor(&context.arena, append_id, name_start, name_end);
+            }
             let append = b::call(
                 &context.arena,
                 b::member_path(&context.arena, "$.append"),
-                vec![
-                    b::id("$$anchor"),
-                    JsExpr::Spanned(context.arena.alloc_expr(id), name_start, name_end),
-                ],
+                vec![b::id("$$anchor"), append_id],
             );
             close = Some(b::stmt(
                 &context.arena,

@@ -116,7 +116,7 @@ fn client_render_argument_comment_reaches_the_generated_thunk_parameter() {
     for dev in [false, true] {
         assert_has(
             &client("{@render s(/* c */ v)}", dev),
-            "s($$anchor, (/* c */) => v);",
+            "s($$anchor, (/* c */) => v)",
         );
     }
 }

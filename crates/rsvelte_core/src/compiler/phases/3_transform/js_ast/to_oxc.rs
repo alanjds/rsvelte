@@ -1581,7 +1581,21 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             JsExpr::SourceAnchored(anchor) => {
                 let mut e = self.expr_id(anchor.inner)?;
                 if let Some(span) = self.open_source_region(anchor) {
-                    *e.span_mut() = span;
+                    if anchor.preserve_inner_spans {
+                        let base = span.start - (anchor.at - anchor.region_start);
+                        let mut remap = SourceRegionRemap {
+                            source_start: anchor.region_start,
+                            source_end: anchor.region_start + anchor.region.len() as u32,
+                            base,
+                            remapped: false,
+                        };
+                        remap.visit_expression(&mut e);
+                        if !remap.remapped {
+                            *e.span_mut() = span;
+                        }
+                    } else {
+                        *e.span_mut() = span;
+                    }
                 }
                 Some(e)
             }
@@ -2607,6 +2621,25 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             out.push(argument);
         }
         Some(out)
+    }
+}
+
+struct SourceRegionRemap {
+    source_start: u32,
+    source_end: u32,
+    base: u32,
+    remapped: bool,
+}
+
+impl<'a> VisitMut<'a> for SourceRegionRemap {
+    fn visit_span(&mut self, span: &mut Span) {
+        if span.start >= self.source_start && span.end <= self.source_end && span.start < span.end {
+            *span = Span::new(
+                self.base + span.start - self.source_start,
+                self.base + span.end - self.source_start,
+            );
+            self.remapped = true;
+        }
     }
 }
 

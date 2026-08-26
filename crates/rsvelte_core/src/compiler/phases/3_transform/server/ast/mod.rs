@@ -31,7 +31,7 @@ use crate::compiler::phases::phase3_transform::server::evaluate::EvalValue;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Comment, Expression as OxcExpression, Statement};
 use oxc_ast_visit::VisitMut;
-use oxc_span::{SPAN, Span};
+use oxc_span::{GetSpan, GetSpanMut, SPAN, Span};
 use visitors::shared::TemplateEntry;
 
 /// Mutable state threaded through the AST-based server transform.
@@ -461,11 +461,8 @@ impl<'a> ServerTransformState<'a> {
         }
         let mut comments = carried.map(|pending| pending.comments).unwrap_or_default();
         comments.extend(own);
-        comments.retain(|comment| {
-            comment.span.start >= region_start
-                && comment.span.end <= region_end
-                && (comment.span.end <= expr_start || comment.span.start >= expr_end)
-        });
+        comments
+            .retain(|comment| comment.span.start >= region_start && comment.span.end <= region_end);
         if comments.is_empty() {
             return;
         }
@@ -480,8 +477,21 @@ impl<'a> ServerTransformState<'a> {
             comment.attached_to = comment.span.end;
         }
         if let Some(base) = self.comments.register_expression(text, &comments) {
-            let mut place = comments::Place::At(base + (expr_start - region_start));
+            let mut place = comments::Place::Remap {
+                source_start: region_start,
+                source_end: region_end,
+                base,
+            };
             place.visit_expression(expr);
+            // A wholly synthesized replacement carries no original descendant
+            // span. Give its root the expression's source position so the
+            // region is still reached and preceding comments are retained.
+            if expr.span().start < base || expr.span().start >= base + (region_end - region_start) {
+                *expr.span_mut() = Span::new(
+                    base + (expr_start - region_start),
+                    base + (expr_end - region_start),
+                );
+            }
         }
     }
 

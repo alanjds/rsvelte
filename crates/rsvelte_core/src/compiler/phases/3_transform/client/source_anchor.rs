@@ -65,7 +65,11 @@ impl CommentRegion {
             oxc_span::SourceType::mjs().with_typescript(true),
         )
         .parse();
-        if !ret.diagnostics.is_empty() || ret.program.comments.is_empty() {
+        // A caller may deliberately span template punctuation between two
+        // source nodes (for example an each header and a following `{@const}`).
+        // The slice is not necessarily a valid JS program, but the lexer still
+        // reports its comments accurately.
+        if ret.program.comments.is_empty() {
             return None;
         }
         let comments = ret
@@ -101,6 +105,26 @@ impl CommentRegion {
             comments: self.comments.clone(),
             at,
             at_end,
+            preserve_inner_spans: false,
+        }))
+    }
+
+    /// As [`Self::anchor`], but retain source spans on descendants of a
+    /// generated wrapper. This is needed when upstream's cursor reaches an
+    /// original identifier inside a rebuilt array/call before it reaches the
+    /// wrapper itself.
+    pub fn anchor_inner(&self, arena: &JsArena, expr: JsExpr, at: u32, at_end: u32) -> JsExpr {
+        if at < self.start || at_end > self.end {
+            return expr;
+        }
+        JsExpr::SourceAnchored(Box::new(JsSourceAnchor {
+            inner: arena.alloc_expr(expr),
+            region_start: self.start,
+            region: self.text.clone(),
+            comments: self.comments.clone(),
+            at,
+            at_end,
+            preserve_inner_spans: true,
         }))
     }
 }

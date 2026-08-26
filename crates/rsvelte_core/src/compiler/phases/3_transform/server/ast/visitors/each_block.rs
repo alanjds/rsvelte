@@ -132,8 +132,14 @@ pub fn visit_each_block<'a>(node: &EachBlock<'a>, state: &mut ServerTransformSta
         state.visit_expr_claiming(&node.expression)
     };
     if let (Some(start), Some(end)) = (node.expression.start(), node.expression.end()) {
+        let region_end = match node.body.nodes.first() {
+            Some(crate::ast::template::TemplateNode::ConstTag(tag)) => {
+                tag.end.saturating_sub(1).max(end)
+            }
+            _ => end,
+        };
         state.place_template_expression_comments(
-            (node.start + 7, end),
+            (node.start + 7, region_end),
             (start, end),
             &mut collection,
         );
