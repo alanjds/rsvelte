@@ -80,11 +80,37 @@ pub(in crate::compiler::phases::phase2_analyze::visitors) fn binding_reference_h
     context: &VisitorContext,
 ) -> bool {
     let binding = &context.analysis.root.bindings[binding_index];
-    binding.kind != BindingKind::Static
+    let involves_state = binding.kind != BindingKind::Static
         && (matches!(
             binding.kind,
             BindingKind::Prop | BindingKind::BindableProp | BindingKind::RestProp
-        ) || !binding.is_function())
+        ) || !binding.is_function());
+
+    involves_state
+        && (!binding.kind.is_rune()
+            || !evaluate_binding_initial(
+                &AnalysisEvalScope {
+                    analysis: context.analysis,
+                    scope: context.scope,
+                },
+                binding,
+                0,
+            )
+            .is_known())
+}
+
+/// The typed template-expression walker historically only classified rune
+/// bindings as state here; props and template-local bindings are handled by
+/// their enclosing template visitors. Keep that division while adding the
+/// missing `scope.evaluate` exception for known rune values. Applying the
+/// script-identifier condition wholesale would expose the walker's
+/// scope-insensitive fallback and misclassify named-slot reads.
+fn typed_expression_binding_reference_has_state(
+    binding_index: usize,
+    context: &VisitorContext,
+) -> bool {
+    let binding = &context.analysis.root.bindings[binding_index];
+    binding.kind.is_rune()
         && !evaluate_binding_initial(
             &AnalysisEvalScope {
                 analysis: context.analysis,
@@ -1394,7 +1420,7 @@ pub fn walk_js_expression_node(
                     metadata.references.insert(binding_idx);
                 }
 
-                if binding_reference_has_state(binding_idx, context) {
+                if typed_expression_binding_reference_has_state(binding_idx, context) {
                     metadata.set_has_state(true);
                 }
 
