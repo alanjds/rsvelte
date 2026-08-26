@@ -1110,59 +1110,11 @@ fn parse_literal_text(text: &str) -> Option<EvalValue> {
         let quote = bytes[0];
         if (quote == b'\'' || quote == b'"') && bytes[t.len() - 1] == quote {
             let inner = &t[1..t.len() - 1];
-            // Reject strings with interior unescaped quotes/backslashes that we
-            // cannot faithfully unescape with a simple pass.
-            let mut out = String::with_capacity(inner.len());
-            let mut chars = inner.chars();
-            while let Some(c) = chars.next() {
-                if c == '\\' {
-                    match chars.next()? {
-                        'n' => out.push('\n'),
-                        't' => out.push('\t'),
-                        'r' => out.push('\r'),
-                        '\\' => out.push('\\'),
-                        '\'' => out.push('\''),
-                        '"' => out.push('"'),
-                        '`' => out.push('`'),
-                        '0' => out.push('\0'),
-                        // `\uXXXX` / `\u{X…}` / `\xHH` → the actual character, so
-                        // a known-const string of escapes folds to its cooked
-                        // value (e.g. bidirectional-control chars).
-                        'u' => {
-                            if chars.clone().next() == Some('{') {
-                                chars.next();
-                                let mut hex = String::new();
-                                for h in chars.by_ref() {
-                                    if h == '}' {
-                                        break;
-                                    }
-                                    hex.push(h);
-                                }
-                                out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
-                            } else {
-                                let mut hex = String::new();
-                                for _ in 0..4 {
-                                    hex.push(chars.next()?);
-                                }
-                                out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
-                            }
-                        }
-                        'x' => {
-                            let mut hex = String::new();
-                            for _ in 0..2 {
-                                hex.push(chars.next()?);
-                            }
-                            out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
-                        }
-                        _ => return None,
-                    }
-                } else if c == quote as char {
-                    return None;
-                } else {
-                    out.push(c);
-                }
-            }
-            return Some(EvalValue::Str(out));
+            return Some(EvalValue::Str(
+                crate::compiler::phases::phase3_transform::client::visitors::shared::utils::cook_string_literal(
+                    inner,
+                ),
+            ));
         }
     }
     // Numeric literals: separators, 0b/0o/0x bases, and bigint suffix.
@@ -1974,6 +1926,28 @@ pub(crate) fn evaluate_binding_initial<S: EvalScope + ?Sized>(
     match parse_literal_text(initial) {
         Some(v) => Evaluation::single(v),
         None => Evaluation::unknown(),
+    }
+}
+
+#[cfg(test)]
+mod literal_initial_tests {
+    use super::{EvalValue, parse_literal_text};
+
+    #[test]
+    fn cooks_binding_string_escapes_like_estree_literals() {
+        let cases = [
+            ("\"a\\\nb\"", "ab"),
+            ("\"a\\\r\nb\"", "ab"),
+            ("\"\\x61\\u0062\\u{63}\"", "abc"),
+            ("\"\\b\\f\\v\"", "\u{8}\u{c}\u{b}"),
+        ];
+
+        for (source, expected) in cases {
+            match parse_literal_text(source) {
+                Some(EvalValue::Str(actual)) => assert_eq!(actual, expected),
+                actual => panic!("expected a cooked string for {source:?}, got {actual:?}"),
+            }
+        }
     }
 }
 

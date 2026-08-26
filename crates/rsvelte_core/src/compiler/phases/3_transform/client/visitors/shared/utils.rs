@@ -6417,7 +6417,17 @@ impl EvalScope for ClientEvalScope<'_, '_> {
                     .scope_root
                     .binding_at_reference(name, start as u32)
             })
-            .or_else(|| self.context.state.get_binding(name));
+            .or_else(|| {
+                // A converted/synthesized identifier may have lost its source
+                // position. Name lookup is safe only when there is one binding:
+                // `get_binding` deliberately falls back across every scope and
+                // can otherwise substitute an outer constant for a `let:` or
+                // another same-named template-local binding.
+                let bindings = self.context.state.scope_root.bindings_by_name.get(name)?;
+                (bindings.len() == 1)
+                    .then(|| self.context.state.get_binding(name))
+                    .flatten()
+            });
         match binding {
             // `build_expression` converts the template expression, but an
             // initializer reached through scope resolution is still its source
