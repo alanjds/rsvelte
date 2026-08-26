@@ -383,6 +383,55 @@ fn unmapped_chunks_emit_no_source_positions() {
     );
 }
 
+#[test]
+fn linear_range_maps_a_token_end_before_a_generated_suffix() {
+    let expression = "dependency";
+    let generated = "dependency()";
+    let map_source = format!("<script>\n{expression}\n</script>\n");
+    let anchor = source_offset(
+        map_source
+            .find(expression)
+            .expect("expression in map source"),
+    );
+
+    let allocator = Allocator::default();
+    let mut a = Assembler::new(&allocator, 512);
+    let base = source_offset(a.source.len());
+    let mut padded = " ".repeat(base as usize - 1);
+    padded.push('\n');
+    padded.push_str(generated);
+    let owned = a.ab.allocator().alloc_str(&padded);
+    let program = a.parse(owned);
+    a.source.push_str(generated);
+    a.source.push('\n');
+    a.loc_map.push(LocMapEntry {
+        start: base,
+        end: base + source_offset(expression.len()),
+        source: Some(anchor),
+        linear: true,
+    });
+    a.loc_map.push(LocMapEntry {
+        start: base + source_offset(expression.len()),
+        end: base + source_offset(generated.len()),
+        source: None,
+        linear: false,
+    });
+    a.body.extend(program.body);
+
+    let mapped = a.finish().print_mapped(&map_source);
+    assert_eq!(mapped.code, "dependency();");
+    assert!(
+        mapped.mappings.iter().any(|segment| {
+            segment.gen_line == 0
+                && segment.gen_column == source_offset(expression.len())
+                && segment.source_line == 1
+                && segment.source_column == source_offset(expression.len())
+        }),
+        "missing copied token end before the generated suffix: {:?}",
+        mapped.mappings
+    );
+}
+
 /// A reassembled program's own span starts at 0 — below `loc_base` — because
 /// the `Program` node is synthesized even when its statements are not. The
 /// program-level `reset_comment_index` therefore discards the pending cursor,
