@@ -596,7 +596,7 @@ pub(crate) fn transform_client(
     // Transform the instance script once with the real reactive_import_names.
     // This also determines how many $$array names it consumes (for template generation)
     // and is used for blocker_map computation and the final output.
-    let mut instance_script_imports = Vec::new();
+    let mut instance_script_imports: Vec<HoistedImport> = Vec::new();
     let mut pre_transformed_script = if let Some(instance_script) =
         &analysis.instance_script_content
     {
@@ -691,7 +691,7 @@ pub(crate) fn transform_client(
         } else {
             composed_body_projection.as_ref()
         };
-        instance_script_imports = imports;
+        instance_script_imports = attach_hoisted_import_spans(imports, retained_instance);
         let split_top_level_declarations =
             instance_has_top_level_multi_declarator(ast, instance_raw);
         let _script_start = super::profile::timer_start();
@@ -2159,6 +2159,10 @@ pub(crate) fn transform_client(
             // the grouping parens around one have to be gone before the first runs.
             let raw = super::shared::rune_parens::strip_rune_parens(&raw).unwrap_or(raw);
             let (module_imports, rest) = extract_imports(&raw);
+            let module_imports = attach_hoisted_import_spans(
+                module_imports,
+                retained_scripts.and_then(|scripts| scripts.module.as_ref()),
+            );
             let retained_comment_stripped = if !analysis.is_typescript {
                 retained_scripts
                     .and_then(|scripts| scripts.module.as_ref())
@@ -2175,19 +2179,17 @@ pub(crate) fn transform_client(
                 None
             };
             // Add module script imports first (from module.body in official compiler)
-            for import_line in module_imports {
-                let cleaned = cleanup_import_line(&import_line);
-                if cleaned.is_empty() {
-                    continue;
+            for import in module_imports {
+                if let Some(statement) = hoisted_import_statement(
+                    import,
+                    retained_scripts
+                        .and_then(|scripts| scripts.module.as_ref())
+                        .map_or(module_content.raw.as_str(), |retained| retained.source()),
+                    module_content.start,
+                    options.enable_sourcemap,
+                ) {
+                    body.push(statement);
                 }
-                let trimmed = cleaned.trim();
-                // Ensure import statements end with semicolons, matching esrap behavior.
-                let with_semi = if !trimmed.ends_with(';') {
-                    format!("{};", trimmed)
-                } else {
-                    trimmed.to_string()
-                };
-                body.push(JsStatement::Raw(with_semi.into()));
             }
             let rest_trimmed = rest.trim();
             // A module `<script module>` whose only non-import content is comments
@@ -2216,21 +2218,18 @@ pub(crate) fn transform_client(
     // Extract and add imports from instance script
     // These are in state.hoisted after import * as $ (from analysis.instance_body.hoisted)
     if analysis.instance_script_content.is_some() {
-        for import_line in instance_script_imports {
-            let cleaned = cleanup_import_line(&import_line);
-            if cleaned.is_empty() {
-                continue;
+        let instance_content = analysis.instance_script_content.as_ref().unwrap();
+        for import in instance_script_imports {
+            if let Some(statement) = hoisted_import_statement(
+                import,
+                retained_scripts
+                    .and_then(|scripts| scripts.instance.as_ref())
+                    .map_or(instance_content.raw.as_str(), |retained| retained.source()),
+                instance_content.start,
+                options.enable_sourcemap,
+            ) {
+                body.push(statement);
             }
-            let trimmed = cleaned.trim();
-            // Ensure import statements end with semicolons, matching esrap behavior.
-            // User code may omit semicolons (ASI), but the Svelte compiler's esrap
-            // printer always adds them.
-            let with_semi = if !trimmed.ends_with(';') {
-                format!("{};", trimmed)
-            } else {
-                trimmed.to_string()
-            };
-            body.push(JsStatement::Raw(with_semi.into()));
         }
     }
 
@@ -3504,6 +3503,90 @@ impl ScanState {
             }
         }
     }
+}
+
+struct HoistedImport {
+    code: String,
+    source: Option<std::ops::Range<u32>>,
+}
+
+/// Pair the imports selected by the compatibility-preserving text extractor
+/// with the locations already held by the Phase-1 OXC program. The text check
+/// proves that both views selected the same declarations; it does not discover
+/// a location. If TypeScript erasure changed one declaration, that declaration
+/// keeps the location-free fallback while its siblings can still carry spans.
+fn attach_hoisted_import_spans(
+    imports: Vec<String>,
+    retained: Option<&crate::ast::oxc_program::RetainedProgram<'_>>,
+) -> Vec<HoistedImport> {
+    use oxc_span::GetSpan as _;
+
+    let spans = retained
+        .filter(|program| !program.panicked() && program.diagnostics().is_empty())
+        .map(|program| {
+            program
+                .program()
+                .body
+                .iter()
+                .filter_map(|statement| match statement {
+                    oxc_ast::ast::Statement::ImportDeclaration(_) => Some(statement.span()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|spans| spans.len() == imports.len());
+
+    imports
+        .into_iter()
+        .enumerate()
+        .map(|(index, code)| {
+            let source = spans.as_ref().and_then(|spans| {
+                let span = spans[index];
+                let retained = retained?;
+                let original = retained
+                    .source()
+                    .get(span.start as usize..span.end as usize)?;
+                (format_hoisted_import(&code) == format_hoisted_import(original))
+                    .then_some(span.start..span.end)
+            });
+            HoistedImport { code, source }
+        })
+        .collect()
+}
+
+fn format_hoisted_import(import: &str) -> Option<String> {
+    let cleaned = cleanup_import_line(import);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(if trimmed.ends_with(';') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed};")
+    })
+}
+
+fn hoisted_import_statement(
+    import: HoistedImport,
+    original_script: &str,
+    script_offset: u32,
+    enable_sourcemap: bool,
+) -> Option<JsStatement> {
+    let code = format_hoisted_import(&import.code)?;
+    let Some(source) = import.source.filter(|_| enable_sourcemap) else {
+        return Some(JsStatement::Raw(code.into()));
+    };
+    let Some(original) = original_script.get(source.start as usize..source.end as usize) else {
+        return Some(JsStatement::Raw(code.into()));
+    };
+    let source_offset = script_offset + source.start;
+    Some(JsStatement::RawMapped {
+        copied_spans: copied_spans_for_normalized_code(&code, original, source_offset, None),
+        code: code.into(),
+        source_offset,
+        comment_anchor: None,
+    })
 }
 
 pub(crate) fn extract_imports(script: &str) -> (Vec<String>, String) {

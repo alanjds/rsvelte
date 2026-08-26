@@ -677,8 +677,8 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `rune` | 0 | 0 |
 
 `default_function_wrapper` and `effect_callback` are deleted: both are now produced by a
-span, and the before/after column is the attribution. The other nine stay, and what each
-still carries is a named lowering, not a mystery:
+span, and the before/after column is the attribution. At this measurement the other nine
+stayed, and what each still carried was a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
 | --- | --- |
@@ -691,6 +691,17 @@ still carries is a named lowering, not a mystery:
 Every row is a `Raw` fragment or a builder call that had a span available and dropped it —
 i.e. #3015's step 1 really is the prerequisite it claims to be, and this measurement names
 which fragments to eradicate first by how many segments they hold.
+
+**2026-08-26 follow-up — `verbatim_import` is deleted from the client pipeline.** Import
+selection still uses `extract_imports` for output compatibility, but each selected import is
+paired by declaration order with the retained OXC program and accepted only when both views
+normalize to the same output. The retained declaration supplies the source range; a mismatch
+(including a TypeScript erasure the cleanup cannot prove equivalent) keeps the location-free
+fallback. `RawMapped` then restores the retained range onto the reparsed import nodes, so the
+brace in `import { name }` is emitted from its source span instead of the generated/source text
+matcher. Module- and instance-import regression cases assert that punctuation mapping after
+the client pass has been removed. The table above remains the attribution measurement that
+priced the row before this follow-up.
 
 **`collapsed_declaration` and `rune` cost 0 on both trees, and that is not evidence they
 are redundant.** They were already contributing nothing before this change, so deleting

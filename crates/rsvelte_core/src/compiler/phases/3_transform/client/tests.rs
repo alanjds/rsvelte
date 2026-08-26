@@ -15,8 +15,7 @@ fn retained_instance_statements_match_a_normalized_script_after_import_hoisting(
 
 #[test]
 fn retained_instance_script_preserves_identifier_and_literal_source_map_spans() {
-    let source =
-        "<script>\nimport dependency from 'dependency';\nconst answer = 42;\n</script>\n<p>ok</p>";
+    let source = "<script>\nimport { dependency } from 'dependency';\nconst answer = 42;\n</script>\n<p>ok</p>";
     let result = crate::compiler::compile(
         source,
         crate::compiler::CompileOptions {
@@ -36,9 +35,24 @@ fn retained_instance_script_preserves_identifier_and_literal_source_map_spans() 
         result
             .js
             .code
-            .contains("import dependency from 'dependency';"),
+            .contains("import { dependency } from 'dependency';"),
         "hoisted import must retain its normal output: {}",
         result.js.code
+    );
+    let import_line = result
+        .js
+        .code
+        .lines()
+        .position(|line| line.contains("import { dependency } from 'dependency';"))
+        .expect("hoisted import is printed") as i64;
+    let generated_import = result.js.code.lines().nth(import_line as usize).unwrap();
+    let brace_column = generated_import.find('{').unwrap() as i64;
+    assert!(
+        mappings[import_line as usize]
+            .iter()
+            .any(|segment| segment.as_slice() == [brace_column, 0, 1, 7]),
+        "hoisted import punctuation must retain its source span; generated={generated_import:?}, segments={:?}",
+        mappings[import_line as usize]
     );
     let generated_line = result
         .js
@@ -61,6 +75,43 @@ fn retained_instance_script_preserves_identifier_and_literal_source_map_spans() 
             .any(|segment| segment.as_slice() == [literal_column, 0, 2, 15]),
         "literal must retain its original token span; generated={generated:?}, segments={line:?}"
     );
+}
+
+#[test]
+fn hoisted_module_and_instance_imports_preserve_source_map_spans() {
+    let source = "<script module>\nimport { moduleDependency } from 'module-dependency';\n</script>\n<script>\nimport { instanceDependency } from 'instance-dependency';\n</script>\n<p>ok</p>";
+    let result = crate::compiler::compile(
+        source,
+        crate::compiler::CompileOptions {
+            filename: Some("hoisted-import-source-map.svelte".to_string()),
+            enable_sourcemap: true,
+            ..Default::default()
+        },
+    )
+    .expect("compiles");
+    let map: serde_json::Value =
+        serde_json::from_str(result.js.map.as_deref().expect("map")).expect("valid source map");
+    let mappings = crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+        map["mappings"].as_str().expect("VLQ mappings"),
+    );
+
+    for (identifier, original_line) in [("moduleDependency", 1), ("instanceDependency", 4)] {
+        let generated_line = result
+            .js
+            .code
+            .lines()
+            .position(|line| line.contains(&format!("import {{ {identifier} }} from")))
+            .expect("hoisted import is printed");
+        let generated = result.js.code.lines().nth(generated_line).unwrap();
+        let generated_column = generated.find('{').unwrap() as i64;
+        assert!(
+            mappings[generated_line]
+                .iter()
+                .any(|segment| segment.as_slice() == [generated_column, 0, original_line, 7]),
+            "{identifier}'s import punctuation must retain its source span; generated={generated:?}, segments={:?}",
+            mappings[generated_line]
+        );
+    }
 }
 
 #[test]

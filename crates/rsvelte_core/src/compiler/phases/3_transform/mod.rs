@@ -290,16 +290,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         &mapping_starts,
                     )
                 };
-                let import_mappings = if !map_pass_disabled("import") && source.contains("import ")
-                {
-                    generate_verbatim_import_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                } else {
-                    Vec::new()
-                };
                 let token_mappings = if map_pass_disabled("token") {
                     Vec::new()
                 } else {
@@ -344,7 +334,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + legacy_prop_read_mappings.len()
                     + template_element_mappings.len()
                     + inline_script_mappings.len()
-                    + import_mappings.len()
                     + template_name_mappings.len()
                     + token_mappings.len()
                     + rune_mappings.len()
@@ -357,7 +346,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings.extend(legacy_prop_read_mappings);
                 mappings.extend(template_element_mappings);
                 mappings.extend(inline_script_mappings);
-                mappings.extend(import_mappings);
                 mappings.extend(template_name_mappings);
                 mappings.extend(token_mappings);
                 mappings.extend(rune_mappings);

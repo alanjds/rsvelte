@@ -2031,6 +2031,11 @@ the gate separates them. Deleting a pass on a 0 therefore needs a population tha
 the passes deleted in #3015 (`default_function_wrapper` 84 → 0, `effect_callback` 8 → 0)
 carry a *movement*, which is the reading a 0 cannot give.
 
+The later `verbatim_import` deletion has a separate positive discriminator: module- and
+instance-script tests assert the source coordinate of the `{` in `import { name }` after the
+client import matcher is absent. That punctuation is the shape the matcher supplied, rather
+than a zero-count inference; the server still retains its independent import matcher.
+
  There is no corpus-wide source-map gate to fall back on: `verify.mjs` compares generated
  code, and the svelte2tsx map gate (§ 12) covers a different artifact.
 
