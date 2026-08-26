@@ -142,6 +142,7 @@ jobs:
         run: |
           git -C submodules/svelte fetch --depth 1 origin 44a7813730579b94004e182e5a67aab27aa9d2a6
           git -C submodules/svelte checkout --detach 44a7813730579b94004e182e5a67aab27aa9d2a6
+          node -e 'const fs = require("fs"); const p = "submodules/svelte/packages/svelte/package.json"; const v = fs.readFileSync("crates/rsvelte_core/svelte-version.txt", "utf8").trim(); const s = fs.readFileSync(p, "utf8"); fs.writeFileSync(p, s.replace(/("version"\s*:\s*")[^"]+/, `$1${v}`));'
 
       - name: Diagnose client token-pass mapping owners
         if: runner.os == 'macOS' && (github.head_ref == 'diagnose/3015-token-map-owners' || github.ref_name == 'diagnose/3015-token-map-owners')
