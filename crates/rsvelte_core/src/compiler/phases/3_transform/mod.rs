@@ -281,15 +281,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 } else {
                     Vec::new()
                 };
-                let collapsed_declaration_mappings = if map_pass_disabled("collapsed") {
-                    Vec::new()
-                } else {
-                    generate_collapsed_declaration_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                };
                 let import_mappings = if !map_pass_disabled("import") && source.contains("import ")
                 {
                     generate_verbatim_import_mappings_with_starts(
@@ -365,9 +356,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                 mappings
                     .sort_by(|a, b| a.gen_line.cmp(&b.gen_line).then(a.gen_col.cmp(&b.gen_col)));
                 mappings.dedup_by(|a, b| a.gen_line == b.gen_line && a.gen_col == b.gen_col);
-                if !collapsed_declaration_mappings.is_empty() {
-                    mappings = merge_preferred_mappings(mappings, collapsed_declaration_mappings);
-                }
                 (result.code, mappings)
             } else {
                 (result.code, Vec::new())
@@ -416,11 +404,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         &mapping_starts,
                     ));
                 }
-                mappings.extend(generate_collapsed_declaration_mappings_with_starts(
-                    &code,
-                    source,
-                    &mapping_starts,
-                ));
                 mappings.extend(generate_token_mappings_inner(
                     &code,
                     source,
@@ -1413,75 +1396,6 @@ fn generate_server_declaration_mappings_with_starts(
                 orig_col: orig_col as u32,
                 name: None,
             });
-        }
-    }
-    mappings
-}
-
-fn generate_collapsed_declaration_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    for keyword in ["let", "const", "var"] {
-        let mut cursor = 0;
-        while let Some(relative) = source[cursor..].find(keyword) {
-            let start = cursor + relative;
-            let end = start + keyword.len();
-            let valid = !source
-                .as_bytes()
-                .get(start.wrapping_sub(1))
-                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-                && source
-                    .as_bytes()
-                    .get(end)
-                    .is_some_and(u8::is_ascii_whitespace);
-            if !valid {
-                cursor = end;
-                continue;
-            }
-            let Some(name_start) = source[end..]
-                .find(|character: char| !character.is_whitespace())
-                .map(|offset| end + offset)
-            else {
-                break;
-            };
-            if !source[end..name_start].contains('\n') {
-                cursor = end;
-                continue;
-            }
-            let name_len = source[name_start..]
-                .bytes()
-                .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-                .count();
-            if name_len == 0 {
-                cursor = name_start;
-                continue;
-            }
-            let name = &source[name_start..name_start + name_len];
-            let pattern = format!("{keyword} {name}");
-            let (orig_line, orig_col) = offset_to_line_col_utf16(source, &source_starts, start);
-            let mut generated_cursor = 0;
-            while let Some(relative) = generated[generated_cursor..].find(&pattern) {
-                let generated_name = generated_cursor + relative + keyword.len() + 1;
-                let (gen_line, gen_col) =
-                    offset_to_line_col_utf16(generated, &generated_starts, generated_name);
-                mappings.push(js_ast::codegen::SourceMapping {
-                    gen_line: gen_line as u32,
-                    gen_col: gen_col as u32,
-                    source: 0,
-                    orig_line: orig_line as u32,
-                    orig_col: (orig_col + keyword.len() + 1) as u32,
-                    name: None,
-                });
-                generated_cursor = generated_name + name_len;
-            }
-            cursor = name_start + name_len;
         }
     }
     mappings
@@ -2804,6 +2718,51 @@ mod tests {
         generate_token_mappings, generate_verbatim_import_mappings,
         typescript_declaration_annotation_end,
     };
+
+    #[test]
+    fn maps_collapsed_declarations_without_a_text_matching_pass() {
+        let source = "<script>\n\tlet\n\t\tvalue = 1;\n</script>\n<p>{value}</p>";
+        for generate in [GenerateMode::Client, GenerateMode::Server] {
+            let result = compile(
+                source,
+                CompileOptions {
+                    generate,
+                    filename: Some("input.svelte".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let generated_line = result
+                .js
+                .code
+                .lines()
+                .position(|line| line.contains("let value = 1"))
+                .unwrap();
+            let generated_column = result
+                .js
+                .code
+                .lines()
+                .nth(generated_line)
+                .unwrap()
+                .find("value")
+                .unwrap();
+            let map: serde_json::Value =
+                serde_json::from_str(result.js.map.as_deref().unwrap()).unwrap();
+            let mappings =
+                crate::compiler::phases::phase3_transform::js_ast::codegen::decode_vlq_mappings(
+                    map["mappings"].as_str().unwrap(),
+                );
+
+            assert!(
+                mappings[generated_line]
+                    .iter()
+                    .any(|segment| { segment[..4] == [generated_column as i64, 0, 2, 2] }),
+                "{}: {:?}",
+                result.js.code,
+                mappings[generated_line]
+            );
+        }
+    }
 
     #[test]
     fn maps_binding_end_past_erased_typescript_annotation() {
