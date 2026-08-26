@@ -2770,7 +2770,8 @@ mod tests {
     use crate::{CompileOptions, GenerateMode, compile};
 
     use super::{
-        generate_bind_value_mappings, generate_default_function_wrapper_mappings,
+        MappingLineStarts, generate_bind_value_mappings,
+        generate_component_bind_mappings_with_starts, generate_default_function_wrapper_mappings,
         generate_inline_script_mappings, generate_legacy_prop_read_mappings,
         generate_server_declaration_mappings, generate_server_token_mappings,
         generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
