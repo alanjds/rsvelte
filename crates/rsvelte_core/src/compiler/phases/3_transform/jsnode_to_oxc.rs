@@ -867,6 +867,7 @@ impl<'a, 'arena> Cx<'a, 'arena> {
                 callee,
                 arguments,
                 optional,
+                loc: _,
             } => {
                 let callee = self.expr_id(*callee)?;
                 let args = self.arguments(*arguments)?;
