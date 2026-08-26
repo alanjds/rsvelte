@@ -2029,7 +2029,8 @@ same reading is produced by "these samples contain no `$state`/`$derived`/`$prop
 whose position the pass would have supplied" and by "a span now supplies it", and nothing in
 the gate separates them. Deleting a pass on a 0 therefore needs a population that fires it;
 the passes deleted in #3015 (`default_function_wrapper` 84 → 0, `effect_callback` 8 → 0,
-`template_element_runtime` 25 → 0, `legacy_prop_read` 16 → 0, `bind_value` 5 → 0,
+`template_element_runtime` 25 → 0, `legacy_prop_read` 16 → 0, `inline_script` 7 → 0,
+`bind_value` 5 → 0,
 `component_bind` 5 → 0, and `verbatim_import` 4 → 0)
 carry a *movement*, which is the reading a 0 cannot give.
 The last row also exposed a second blind spot in that measurement: counting generated segment
