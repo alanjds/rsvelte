@@ -673,11 +673,12 @@ Segments lost when exactly one client pass is disabled, everything else on:
 | `bind_value` | 5 | **0 — deleted** |
 | `component_bind` | 5 | **0 — deleted** |
 | `verbatim_import` | 4 | **0 — deleted** |
-| `collapsed_declaration` | 0 | 0 |
-| `rune` | 0 | 0 |
+| `collapsed_declaration` | 0 | **0 — deleted** |
+| `rune` | 0 | **0 — deleted** |
 
 `default_function_wrapper`, `effect_callback`, `template_element_runtime`, `legacy_prop_read`,
-`inline_script`, `bind_value`, `component_bind` and `verbatim_import` are deleted: all eight are now produced by source spans,
+`inline_script`, `bind_value`, `component_bind`, `verbatim_import`, `collapsed_declaration` and
+`rune` are deleted: all ten are now produced by source spans,
 and the before/after column is the attribution.
 For element handles, `flush_node` records the tag-name span against the component-wide unique
 generated name; both printers apply it to ordinary `Identifier` nodes only at emission time.
@@ -686,8 +687,8 @@ upstream's reuse of one located identifier for the declaration and all runtime u
 `bind:value` call similarly records a scope on its stable arena ID: only otherwise-unlocated
 copies of the expression's root identifier inherit that span while the completed accessor call
 is printed. Explicitly located children keep their own spans, and no wrapper enters the member
-chain while lowering can still inspect it. The other three passes stay, and what each still
-carries is a named lowering, not a mystery:
+chain while lowering can still inspect it. Only the token pass stays, and what it still carries
+is a named lowering, not a mystery:
 
 | still carried by a pass | why the position is lost |
 | --- | --- |
@@ -703,11 +704,15 @@ it. TypeScript erasure and import cleanup are applied only to prove the pair; th
 declaration range supplies `RawMapped` token spans, so no generated-output/source line match is
 needed.
 
-**`collapsed_declaration` and `rune` cost 0 on both trees, and that is not evidence they
-are redundant.** They were already contributing nothing before this change, so deleting
-them cannot be attributed to it, and the gate is 29 samples — a pass that never fires in
-those samples is indistinguishable from a pass whose output is now produced elsewhere. Both
-stay, and the distinction is recorded as gate-coverage 14f.
+**`rune` costs 0 on both trees, and that alone is not evidence it is redundant.** It was already
+contributing nothing before this change, so deleting it cannot be attributed to the span work,
+and the gate is 29 samples — a pass that never fires in those samples is indistinguishable from
+a pass whose output is now produced elsewhere. The pass is deleted only after a separate
+compile-level population fires all eight source/runtime pairs and pins both endpoints of every
+generated runtime name to its rune. `collapsed_declaration` is likewise deleted only after a
+compile-level regression deliberately fires its multiline-declaration predicate and pins the
+generated client and server names to the source name. The distinction is recorded as
+gate-coverage 14g.
 
 ### Two hazards the change created and paid for
 

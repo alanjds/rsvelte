@@ -2030,13 +2030,17 @@ whose position the pass would have supplied" and by "a span now supplies it", an
 the gate separates them. Deleting a pass on a 0 therefore needs a population that fires it;
 the passes deleted in #3015 (`default_function_wrapper` 84 → 0, `effect_callback` 8 → 0,
 `template_element_runtime` 25 → 0, `legacy_prop_read` 16 → 0, `inline_script` 7 → 0,
-`bind_value` 5 → 0,
-`component_bind` 5 → 0, and `verbatim_import` 4 → 0)
+`bind_value` 5 → 0, `component_bind` 5 → 0, and `verbatim_import` 4 → 0)
 carry a *movement*, which is the reading a 0 cannot give.
 The last row also exposed a second blind spot in that measurement: counting generated segment
 positions alone reported 0 after the span landed even while the token fallback won the same
 position with the wrong original `foo`. Its compile-level regression therefore pins both ends
 of each carrier, not merely the presence of a generated segment.
+Both passes now have independent populations before deletion. The `collapsed_declaration`
+regression uses `let` and its name on separate source lines, verifies that both client and server
+code generation collapse them, and pins the generated name to the original name. The `rune`
+regression constructs all eight source/runtime pairs — including the two pairs each sharing
+`$.state` and `$.derived` — and pins both generated endpoints to the corresponding rune endpoints.
 
  There is no corpus-wide source-map gate to fall back on: `verify.mjs` compares generated
  code, and the svelte2tsx map gate (§ 12) covers a different artifact.
