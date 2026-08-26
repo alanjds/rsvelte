@@ -666,8 +666,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             let base = synth.cursor();
             synth.source.push_str(region);
             synth.source.push('\n');
-            let region_start = anchor.region_start;
-            for &(source_start, source_end, line) in &anchor.comments {
+            for &(source_start, source_end, line) in comments {
                 if !synth.source_comments.insert((source_start, source_end)) {
                     continue;
                 }
@@ -675,9 +674,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 let end = base + (source_end - region_start);
                 let kind = if line {
                     CommentKind::Line
-                } else if anchor.region[(start - base) as usize..(end - base) as usize]
-                    .contains('\n')
-                {
+                } else if region[(start - base) as usize..(end - base) as usize].contains('\n') {
                     CommentKind::MultiLineBlock
                 } else {
                     CommentKind::SingleLineBlock
@@ -686,7 +683,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 comment.attached_to = end;
                 synth.comments.push(comment);
             }
-            synth.open_source_region = Some(anchor.region_start);
+            synth.open_source_region = Some(region_start);
             synth.open_source_base = base;
         }
         Some(Span::new(

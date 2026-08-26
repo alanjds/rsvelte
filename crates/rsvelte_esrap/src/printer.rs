@@ -3841,7 +3841,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             .span()
             .start
             .checked_sub(crate::COMMENT_ARGUMENT_CALLEE_BASE)
-            .filter(|index| *index < 256)
+            // Index 255 is `COMPONENT_BODY_MARKER` (`u32::MAX - 1`),
+            // which is visited on ordinary component output as well.
+            .filter(|index| *index < 255)
             .map(|index| index as usize);
         // Builder-created calls carry `SPAN` (zero); a nonzero span is an
         // explicit source-backed call such as a lowered directive runtime call.
@@ -4318,9 +4320,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         }
         let trailing_end = if owns_comments {
             arg.as_expression()
-                .and_then(|expression| match expression {
-                    Expression::ArrowFunctionExpression(arrow) => Some(arrow.body.span().end),
-                    other => Some(other.span().end),
+                .map(|expression| match expression {
+                    Expression::ArrowFunctionExpression(arrow) => arrow.body.span().end,
+                    other => other.span().end,
                 })
                 .unwrap_or_else(|| arg.span().end)
         } else {

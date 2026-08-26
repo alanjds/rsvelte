@@ -30,9 +30,7 @@ use crate::compiler::phases::phase3_transform::jsnode_to_oxc::jsnode_to_oxc_expr
 use crate::compiler::phases::phase3_transform::server::evaluate::EvalValue;
 use crate::compiler::phases::phase3_transform::shared::js_scan;
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{
-    BindingPattern, Comment, CommentKind, Expression as OxcExpression, Statement,
-};
+use oxc_ast::ast::{BindingPattern, Comment, CommentKind, Expression as OxcExpression, Statement};
 use oxc_ast_visit::VisitMut;
 use oxc_span::{GetSpan, GetSpanMut, SPAN, Span};
 use visitors::shared::TemplateEntry;
