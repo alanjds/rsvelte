@@ -951,6 +951,113 @@ fn sourcemap_gate_measure() {
     }
 }
 
+/// Temporary CI diagnostic for #3015. The parent starts this test binary twice
+/// so `RSVELTE_NO_MAP_PASSES` is fixed before the transform module's lazy
+/// environment lookup: once normally and once without the client token pass.
+/// It then prints the exact generated positions that only the pass supplied.
+#[test]
+fn token_pass_owners_diagnostic() {
+    const CHILD: &str = "RSVELTE_TOKEN_MAP_DIAGNOSTIC_CHILD";
+    const PREFIX: &str = "TOKEN_MAP\t";
+
+    if std::env::var_os(CHILD).is_some() {
+        ensure_fixtures_exist();
+        for sample in sample_names() {
+            let Some(input) = load_input(&sample) else {
+                continue;
+            };
+            let Some(compiled) = compile_sample(&input, &sample, Target::Client) else {
+                continue;
+            };
+            let Some(map) = compiled.map.as_deref().and_then(decode_map) else {
+                continue;
+            };
+            let segments: Vec<[i64; 5]> = map
+                .lines
+                .iter()
+                .enumerate()
+                .flat_map(|(line, segments)| {
+                    segments.iter().filter_map(move |segment| {
+                        (segment.len() >= 4)
+                            .then(|| [line as i64, segment[0], segment[1], segment[2], segment[3]])
+                    })
+                })
+                .collect();
+            println!(
+                "{PREFIX}{sample}\t{}",
+                serde_json::to_string(&segments).unwrap()
+            );
+        }
+        return;
+    }
+
+    fn inventory(disable_token: bool) -> BTreeMap<String, Vec<[i64; 5]>> {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "token_pass_owners_diagnostic", "--nocapture"])
+            .env(CHILD, "1");
+        if disable_token {
+            command.env("RSVELTE_NO_MAP_PASSES", "token");
+        }
+        let output = command.output().expect("diagnostic child must start");
+        assert!(
+            output.status.success(),
+            "diagnostic child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix(PREFIX))
+            .map(|line| {
+                let (sample, json) = line.split_once('\t').unwrap();
+                (
+                    sample.to_string(),
+                    serde_json::from_str(json).expect("child mapping inventory must be JSON"),
+                )
+            })
+            .collect()
+    }
+
+    let full = inventory(false);
+    let without = inventory(true);
+    let mut owned = 0usize;
+    println!("\n=== client token-pass mapping owners ===");
+    for (sample, full_segments) in full {
+        let without_by_generated: BTreeMap<(i64, i64), &[i64; 5]> = without
+            .get(&sample)
+            .into_iter()
+            .flatten()
+            .map(|segment| ((segment[0], segment[1]), segment))
+            .collect();
+        let input = load_input(&sample).unwrap();
+        let generated = compile_sample(&input, &sample, Target::Client)
+            .unwrap()
+            .code;
+        for segment in full_segments {
+            let generated_position = (segment[0], segment[1]);
+            let replacement = without_by_generated.get(&generated_position);
+            if replacement.is_some_and(|other| other[2..5] == segment[2..5]) {
+                continue;
+            }
+            owned += 1;
+            let generated_text = snippet(&generated, segment[0] as usize, segment[1] as usize, 32);
+            let source_text = snippet(&input, segment[3] as usize, segment[4] as usize, 32);
+            match replacement {
+                Some(other) => println!(
+                    "  {sample} REPLACED g{}:{} {generated_text:?} -> s{}:{} {source_text:?}; without token s{}:{}",
+                    segment[0], segment[1], segment[3], segment[4], other[3], other[4]
+                ),
+                None => println!(
+                    "  {sample} MISSING  g{}:{} {generated_text:?} -> s{}:{} {source_text:?}",
+                    segment[0], segment[1], segment[3], segment[4]
+                ),
+            }
+        }
+    }
+    panic!("intentional #3015 diagnostic: token pass owns {owned} client mappings");
+}
+
 fn summary(report: &Report) -> String {
     let bad: usize = report.out_of_range.values().sum();
     let total: usize = report.totals.values().sum();
