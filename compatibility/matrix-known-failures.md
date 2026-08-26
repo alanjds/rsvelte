@@ -43,9 +43,9 @@ comment carrier in `opaque-keyword` diverged on comment placement (#2990), so re
 Those entries are gone now, which is what the split was for: the family clears rather than
 carrying a key that would absorb the next regression.
 
-## Matrix known failures (`matrix-known-failures.json`, 336 entries)
+## Matrix known failures (`matrix-known-failures.json`, 298 entries)
 
-Partition of `matrix-known-failures.json` by family: `0 + 84 + 0 + 24 + 0 + 0 + 0 + 140 + 0 + 80 + 8 + 0 + 0 + 0`
+Partition of `matrix-known-failures.json` by family: `0 + 84 + 0 + 24 + 0 + 0 + 0 + 140 + 0 + 42 + 8 + 0 + 0 + 0`
 
 ### `binding-position` — 0 entries
 
@@ -173,7 +173,7 @@ until their issues are fixed.
 
 Partition of `matrix-known-failures.json` entries under `async-derived/` by cause: `0`
 
-### `async-attribute-slot` — 80 entries
+### `async-attribute-slot` — 42 entries
 
 10 value shapes × 6 attribute slots × 4 hosts = 200 cases / 792 comparisons. The subject is
 which lowering an async attribute value reaches: `Memoizer` hoists a call or an `await` out
@@ -189,25 +189,20 @@ The family reported **310** divergences on its first run. #3621's fix — the cl
 attribute value, whose memoizer call hardcoded `has_await: false` in all three arms of
 `build_style_attribute_value_with_memoization` — clears 28 of them (16 `output-unparseable`
 + 12 `js-mismatch`, both hosts × all four literal-`await` values × `client`/`client-dev`)
-with zero regressions elsewhere in the matrix's 25,836 comparisons. The remaining **80**
-are three causes, none of which is a formatting difference:
+with zero regressions elsewhere in the matrix's 25,836 comparisons. #3764 then routed server
+attribute and directive values through the per-host promise optimiser; its object-expression
+await scan also covers spread values and distinguishes a nested async-IIFE await. That clears
+all 38 server spread rows. The remaining **42** are two causes, neither of which is a formatting
+difference:
 
 | cause | issue | entries | verdicts |
 |---|---|---:|---|
-| the server does not yet hoist an awaited spread value | [#3648](https://github.com/baseballyama/rsvelte/issues/3648) | 38 | `js-mismatch` |
 | an `await` that is not the last-evaluated expression is not pickled through `$.save` | [#3649](https://github.com/baseballyama/rsvelte/issues/3649) | 36 | `js-mismatch` (client) |
 | `<svelte:element class:x={…}>` emits an unbound `$0` | [#3650](https://github.com/baseballyama/rsvelte/issues/3650) | 6 | `js-mismatch` (client) |
 
-Partition of `matrix-known-failures.json` entries under `async-attribute-slot/` by cause: `38 + 36 + 6`
+Partition of `matrix-known-failures.json` entries under `async-attribute-slot/` by cause: `36 + 6`
 
-**Cause 1 — server spread values still do not hoist.** The attribute, `class:`, and `style:`
-paths now share the element's promise optimiser, clearing 192 entries (including all 80
-`output-unparseable` verdicts). The 38 remaining server rows are all spread values, whose
-lowering still bypasses that optimiser. They parse because the enclosing spread machinery
-already provides an async context, but the required `$.save` wrapper and hoisted temporary
-are missing.
-
-**Cause 2 — `$.save` pickling.** `2-analyze/visitors/AwaitExpression.js` adds an `await` to
+**Cause 1 — `$.save` pickling.** `2-analyze/visitors/AwaitExpression.js` adds an `await` to
 `analysis.pickled_awaits` when it is *not* the last-evaluated expression of a reactive
 expression, and the client transform then emits `(await $.save(x))()` so the surrounding
 reads are re-taken after the suspension. rsvelte emits a bare `await x`. Only the
@@ -215,7 +210,7 @@ reads are re-taken after the suspension. rsvelte emits a bare `await x`. Only th
 paying for itself: the same slot with a bare `await` is correct, so a family carrying one
 `await` shape per slot would have called the whole area fixed.
 
-**Cause 3 — an unbound `$0`.** `<svelte:element class:x={f()}>` memoizes the directive
+**Cause 2 — an unbound `$0`.** `<svelte:element class:x={f()}>` memoizes the directive
 object into the `template_effect` `sync` array but builds the arrow with **no parameter
 list**, so the body references a `$0` that is never bound. It parses and throws at run time,
 The remaining six rows are `await-plus-state`, `derived-await-read`, and
