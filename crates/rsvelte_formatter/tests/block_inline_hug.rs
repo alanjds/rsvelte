@@ -1,10 +1,17 @@
-use rsvelte_formatter::{FormatOptions, format};
+use rsvelte_formatter::{FormatOptions, LineWidth, format};
 
 fn assert_fmt(src: &str, expected: &str) {
-    let out = format(src, &FormatOptions::default()).expect("format ok");
+    let options = FormatOptions {
+        js: rsvelte_formatter::JsFormatOptions {
+            line_width: LineWidth::try_from(80u16).expect("valid line width"),
+            ..rsvelte_formatter::JsFormatOptions::default()
+        },
+        ..FormatOptions::default()
+    };
+    let out = format(src, &options).expect("format ok");
     assert_eq!(out, expected, "got:\n{out}");
     assert_eq!(
-        format(&out, &FormatOptions::default()).expect("second format ok"),
+        format(&out, &options).expect("second format ok"),
         out,
         "formatter output must be a fixed point"
     );

@@ -5,8 +5,8 @@ The formatter-parity corpus formats every `.svelte` component with both
 Svelte structure + oxc for embedded JS/CSS — rsvelte-fmt's exact layering) and
 requires **byte-identical** output. The ratchet may only shrink.
 
-**Current baseline: `fmt-known-failures.json`, 796 entries** — 22 from before the
-wave-2 corpus enrolment and 774 in the current expanded-corpus population.
+**Current baseline: `fmt-known-failures.json`, 793 entries** — 22 from before the
+wave-2 corpus enrolment and 771 in the current expanded-corpus population.
 Oracle-bug / invalid-input / migrate cases are NOT here — those are permanently
 excluded in `fmt-oracle-excluded.json` (see `fmt-oracle-excluded.md`).
 
@@ -26,15 +26,15 @@ An id that carries two clusters' divergences at once is filed under its dominant
 one (see *Multiple clusters per id*), so the per-cluster counts below remain a
 partition of the ratchet rather than an over-count:
 
-Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 2 + 388 + 239 + 85 + 45 + 14 + 0 + 2 + 1`
+Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 2 + 385 + 239 + 85 + 45 + 14 + 0 + 2 + 1`
 
 ## Wave-2 enrolment (#3130) — Clusters 20-27
 
 The corpus went from 37 to 104 corpus sources, and the formatter-parity set
-with it. The current run has **33,446 included components, 32,624 matched, 796
+with it. The current run has **33,446 included components, 32,627 matched, 793
 failing** (26 excluded, 239 skipped). The original enrolment added 764 entries
 from the 67 new repositories; later submodule and pattern-corpus updates moved
-that expanded-population residue to 774. At enrolment time 51 repositories
+that expanded-population residue to 771. At enrolment time 51 repositories
 contributed at least one; sparrow-app
 (104), open-webui (93), carbon-components-svelte (80) and svelte-commerce (73) are
 46% of the new half between them.
@@ -58,7 +58,7 @@ that fix they would all have landed in `indent-only` below.
 Eighteen stale ids left the ratchet after the branch was rebased onto `main`.
 Because the *first differing line* of an entry that still fails can move whenever
 the formatter changes, the buckets moved with them: the current expanded population
-of 774 entries classifies as shown below. Read that as the property of this table it has always
+of 771 entries classifies as shown below. Read that as the property of this table it has always
 had — **it is keyed on the first differing line, so it re-partitions whenever the
 formatter changes, with or without a change in what fails.** The counts below are
 the rule below applied to the current Linux report; the previous ones were the
@@ -73,7 +73,7 @@ whitespace → **intra-line-ws**; anything else → **other**.
 
 | n | cluster | what the first differing line looks like |
 |---|---|---|
-| 388 | **20 — breaks-later** | rsvelte keeps on one line what the oracle has already broken (`{#each …sort( (a,b) => {` vs a wrapped form) |
+| 385 | **20 — breaks-later** | rsvelte keeps on one line what the oracle has already broken (`{#each …sort( (a,b) => {` vs a wrapped form) |
 | 239 | **21 — breaks-earlier** | the mirror image: rsvelte breaks where the oracle keeps going (`selected_category.id ===` vs `… === category.id}`) |
 | 45 | **23 — indent-only** | same trimmed text at a different indent, typically a member-chain continuation inside `<script>` or a nested element's body |
 | 85 | **22 — intra-line-ws** | same tokens, different interior spacing — most of it a sole arrow argument the oracle hugs (`sort((a, b) =>`) and rsvelte pads (`sort( (a, b) =>`) |
@@ -82,7 +82,7 @@ whitespace → **intra-line-ws**; anything else → **other**.
 | 2 | **26 — missing-line** | the reverse; both are CRLF sources where rsvelte leaves a bare `\r` |
 | 1 | **27 — quote-style** | an import specifier printed with single quotes where the oracle uses double |
 
-**627 of 774 (81%) are cluster 20 or 21 — one question, where a line breaks** —
+**624 of 771 (81%) are cluster 20 or 21 — one question, where a line breaks** —
 and that is the burndown target, not the tail. Nothing here is an oracle bug: the
 `oracle-invalid` classification already carries those and is a pass, not a ratchet
 entry.
