@@ -1,5 +1,7 @@
-//! Issue #3569: `StyleDirective` owns the aggregate expression metadata that
-//! Phase 3 uses for memoisation and update routing.
+//! Issue #3569: `StyleDirective` owns aggregate call, await, dependency, and
+//! shorthand-state metadata that Phase 3 uses for memoisation and update
+//! routing. Explicit-expression state remains with the client scope evaluator
+//! until Phase 2 can represent its compile-time-known result exactly.
 
 use rsvelte_core::{
     CompileOptions, ParseOptions,
@@ -34,7 +36,10 @@ fn style_flags(source: &str) -> (bool, bool, bool) {
         TemplateNode::SvelteDocument(element) => &element.attributes,
         other => panic!("expected an element host, got {other:?}"),
     };
-    let Some(Attribute::StyleDirective(directive)) = attributes.last() else {
+    let Some(Attribute::StyleDirective(directive)) = attributes
+        .iter()
+        .find(|attribute| matches!(attribute, Attribute::StyleDirective(_)))
+    else {
         panic!("expected style directive");
     };
 

@@ -702,7 +702,16 @@ pub fn build_style_directives_object_with_memoizer(
     for directive in style_directives {
         let metadata = &directive.metadata.expression;
         has_call |= metadata.has_call();
-        has_state |= metadata.has_state();
+        has_state |= if matches!(&directive.value, AttributeValue::True(_)) {
+            metadata.has_state()
+        } else {
+            get_directive_expressions(directive)
+                .iter()
+                .any(|expr| super::utils::expression_has_reactive_state(expr, context))
+        };
+        // Upstream treats a call as stateful for style memoization even when
+        // its callee is otherwise pure.
+        has_state |= metadata.has_call();
         has_await |= metadata.has_await();
 
         // Build the expression for this directive
@@ -1045,8 +1054,14 @@ pub fn build_set_style(
 
         has_state |= style_directives.iter().any(|directive| {
             let metadata = &directive.metadata.expression;
-            metadata.has_state()
-                || metadata.has_await()
+            (if matches!(&directive.value, AttributeValue::True(_)) {
+                metadata.has_state()
+            } else {
+                metadata.has_call()
+                    || get_directive_expressions(directive)
+                        .iter()
+                        .any(|expr| super::utils::expression_has_reactive_state(expr, context))
+            }) || metadata.has_await()
                 || metadata.dependencies.iter().any(|binding_idx| {
                     context.state.scope_root.bindings[*binding_idx]
                         .blocker
@@ -1318,6 +1333,34 @@ fn build_style_attribute_value_with_memoization(
             });
             (value, has_state)
         }
+    }
+}
+
+/// Return the expression chunks whose compile-time-known status still needs
+/// the client scope evaluator.
+///
+/// Phase 2 owns call/await/dependency metadata, but its conservative binding
+/// check cannot yet reproduce `scope.evaluate` for values such as an
+/// unmodified `$state('red')`. Keep this one state-only lookup until that
+/// evaluator is shared; treating the conservative bit as exact changes whether
+/// `$.set_style` runs during init or in a template effect.
+fn get_directive_expressions<'a>(
+    directive: &StyleDirective<'a>,
+) -> Vec<crate::ast::js::Expression<'a>> {
+    use crate::ast::js::Expression;
+
+    match &directive.value {
+        AttributeValue::Expression(expr_tag) => vec![expr_tag.expression.clone()],
+        AttributeValue::True(_) => Vec::new(),
+        AttributeValue::Sequence(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                crate::ast::template::AttributeValuePart::ExpressionTag(expr_tag) => {
+                    Some(expr_tag.expression.clone())
+                }
+                _ => None,
+            })
+            .collect(),
     }
 }
 
