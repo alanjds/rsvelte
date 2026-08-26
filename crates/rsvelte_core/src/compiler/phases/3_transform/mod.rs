@@ -269,15 +269,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     } else {
                         Vec::new()
                     };
-                let template_element_mappings = if map_pass_disabled("template_element") {
-                    Vec::new()
-                } else {
-                    generate_template_element_runtime_mappings_with_starts(
-                        &result.code,
-                        source,
-                        &mapping_starts,
-                    )
-                };
                 let inline_script_mappings = if !map_pass_disabled("inline_script")
                     && source.contains("<script>")
                     && source.contains("export ")
@@ -287,13 +278,6 @@ pub(crate) fn transform_component_with_scripts<'source>(
                         source,
                         &mapping_starts,
                     )
-                } else {
-                    Vec::new()
-                };
-                let bind_value_mappings = if !map_pass_disabled("bind_value")
-                    && source.contains("bind:value={")
-                {
-                    generate_bind_value_mappings_with_starts(&result.code, source, &mapping_starts)
                 } else {
                     Vec::new()
                 };
@@ -344,10 +328,8 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     })
                 };
                 let mapping_capacity = wrapper_mappings.len()
-                    + bind_value_mappings.len()
                     + runtime_mappings.len()
                     + legacy_prop_read_mappings.len()
-                    + template_element_mappings.len()
                     + inline_script_mappings.len()
                     + template_name_mappings.len()
                     + token_mappings.len()
@@ -355,10 +337,8 @@ pub(crate) fn transform_component_with_scripts<'source>(
                     + remaining_result_mappings.len();
                 let mut mappings = Vec::with_capacity(mapping_capacity);
                 mappings.extend(wrapper_mappings);
-                mappings.extend(bind_value_mappings);
                 mappings.extend(runtime_mappings);
                 mappings.extend(legacy_prop_read_mappings);
-                mappings.extend(template_element_mappings);
                 mappings.extend(inline_script_mappings);
                 mappings.extend(template_name_mappings);
                 mappings.extend(token_mappings);
@@ -2029,394 +2009,6 @@ fn generate_legacy_prop_read_mappings_with_starts(
     mappings
 }
 
-/// Runtime element handles retain the source span of the corresponding template tag.
-#[cfg(test)]
-fn generate_template_element_runtime_mappings(
-    generated: &str,
-    source: &str,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    generate_template_element_runtime_mappings_with_starts(
-        generated,
-        source,
-        &MappingLineStarts::new(generated, source),
-    )
-}
-
-fn generate_template_element_runtime_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    fn identifier_after(code: &str, mut offset: usize) -> Option<(usize, &str)> {
-        loop {
-            while code
-                .as_bytes()
-                .get(offset)
-                .is_some_and(u8::is_ascii_whitespace)
-            {
-                offset += 1;
-            }
-            if code[offset..].starts_with("//") {
-                offset += 2;
-                while code
-                    .as_bytes()
-                    .get(offset)
-                    .is_some_and(|byte| *byte != b'\n')
-                {
-                    offset += 1;
-                }
-                continue;
-            }
-            break;
-        }
-        let start = offset;
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            offset += 1;
-        }
-        (offset > start).then_some((start, &code[start..offset]))
-    }
-
-    fn template_elements(source: &str) -> Vec<(usize, &str)> {
-        let mut elements = Vec::new();
-        let mut cursor = 0;
-        let mut opaque_until = None;
-        while let Some(relative) = source[cursor..].find('<') {
-            let start = cursor + relative;
-            if let Some(end) = opaque_until {
-                if start < end {
-                    cursor = end;
-                    opaque_until = None;
-                    continue;
-                }
-                opaque_until = None;
-            }
-            let Some((name_start, name)) = identifier_after(source, start + 1) else {
-                cursor = start + 1;
-                continue;
-            };
-            if name == "script" || name == "style" {
-                if let Some(relative_end) =
-                    source[name_start + name.len()..].find(if name == "script" {
-                        "</script"
-                    } else {
-                        "</style"
-                    })
-                {
-                    opaque_until = Some(name_start + name.len() + relative_end + name.len() + 2);
-                }
-            } else if name.as_bytes().first().is_some_and(u8::is_ascii_lowercase) {
-                elements.push((name_start, name));
-            }
-            cursor = name_start + name.len();
-        }
-        elements
-    }
-
-    fn push_pair(
-        mappings: &mut Vec<js_ast::codegen::SourceMapping>,
-        generated: &str,
-        source: &str,
-        generated_starts: &[usize],
-        source_starts: &[usize],
-        generated_offset: usize,
-        source_offset: usize,
-        len: usize,
-    ) {
-        for (gen_offset, orig_offset) in [
-            (generated_offset, source_offset),
-            (generated_offset + len, source_offset + len),
-        ] {
-            let (gen_line, gen_col) =
-                offset_to_line_col_utf16(generated, generated_starts, gen_offset);
-            let (orig_line, orig_col) =
-                offset_to_line_col_utf16(source, source_starts, orig_offset);
-            mappings.push(js_ast::codegen::SourceMapping {
-                gen_line: gen_line as u32,
-                gen_col: gen_col as u32,
-                source: 0,
-                orig_line: orig_line as u32,
-                orig_col: orig_col as u32,
-                name: None,
-            });
-        }
-    }
-
-    let elements = template_elements(source);
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut known = rustc_hash::FxHashMap::default();
-    let mut next_element = 0;
-    let mut mappings = Vec::new();
-
-    let mut cursor = 0;
-    while let Some(relative) = generated[cursor..].find("var ") {
-        let declaration = cursor + relative + "var ".len();
-        let Some((variable_offset, variable)) = identifier_after(generated, declaration) else {
-            cursor = declaration;
-            continue;
-        };
-        let Some((element_offset, element)) = elements.get(next_element).copied() else {
-            break;
-        };
-        let tail = &generated[variable_offset + variable.len()..];
-        let is_handle = tail.trim_start().starts_with("= root()")
-            || tail.trim_start().starts_with("= $.child(")
-            || tail.trim_start().starts_with("= $.sibling(");
-        if is_handle && variable == element {
-            push_pair(
-                &mut mappings,
-                generated,
-                source,
-                &generated_starts,
-                &source_starts,
-                variable_offset,
-                element_offset,
-                variable.len(),
-            );
-            known.insert(variable, (element_offset, element.len()));
-            next_element += 1;
-        } else if tail.trim_start().starts_with("= root()") {
-            // A fragment handle owns the leading static root element without
-            // itself having a source tag name.
-            next_element += 1;
-        }
-        cursor = variable_offset + variable.len();
-    }
-
-    let hits = collect_runtime_use_sites(generated, &known);
-    for (variable, &(element_offset, len)) in &known {
-        let Some(sites) = hits.get(variable) else {
-            continue;
-        };
-        for offsets in sites {
-            for &start in offsets {
-                push_pair(
-                    &mut mappings,
-                    generated,
-                    source,
-                    &generated_starts,
-                    &source_starts,
-                    start,
-                    element_offset,
-                    len,
-                );
-            }
-        }
-    }
-    mappings
-}
-
-/// The seven runtime call shapes that name an element handle, in the order the
-/// mapping list expects them.
-const RUNTIME_USE_PATTERNS: [(&str, bool); 7] = [
-    ("$.reset(", true),
-    ("$.remove_input_defaults(", true),
-    ("$.bind_value(", false),
-    (".textContent", false),
-    ("$.child(", false),
-    ("$.sibling(", false),
-    ("$.append($$anchor, ", true),
-];
-
-/// Locate every runtime use of a known element handle in one scan per call
-/// shape. Scanning per `(variable, shape)` instead re-walks the whole output
-/// 7×K times.
-fn collect_runtime_use_sites<'code>(
-    generated: &'code str,
-    known: &rustc_hash::FxHashMap<&'code str, (usize, usize)>,
-) -> rustc_hash::FxHashMap<&'code str, [Vec<usize>; 7]> {
-    fn identifier_run(code: &str, start: usize) -> &str {
-        let bytes = code.as_bytes();
-        let mut end = start;
-        while bytes
-            .get(end)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            end += 1;
-        }
-        &code[start..end]
-    }
-
-    let mut sites: rustc_hash::FxHashMap<&str, [Vec<usize>; 7]> = rustc_hash::FxHashMap::default();
-    let mut record = |name: &'code str, kind: usize, offset: usize| {
-        sites
-            .entry(name)
-            .or_default()
-            .get_mut(kind)
-            .expect("kind is within the pattern table")
-            .push(offset);
-    };
-    for (kind, (needle, closed)) in RUNTIME_USE_PATTERNS.iter().enumerate() {
-        for hit in memmem::find_iter(generated.as_bytes(), needle) {
-            if kind == 3 {
-                // `{variable}.textContent`: the name ends where the needle starts,
-                // and the source pattern was unanchored on its left.
-                let bytes = generated.as_bytes();
-                let mut start = hit;
-                while start > 0
-                    && bytes[start - 1].is_ascii_alphanumeric()
-                        | (bytes[start - 1] == b'_')
-                        | (bytes[start - 1] == b'$')
-                {
-                    start -= 1;
-                }
-                for offset in start..hit {
-                    if known.contains_key(&generated[offset..hit]) {
-                        record(&generated[offset..hit], kind, offset);
-                    }
-                }
-                continue;
-            }
-            let start = hit + needle.len();
-            let run = identifier_run(generated, start);
-            if *closed {
-                if generated.as_bytes().get(start + run.len()) == Some(&b')')
-                    && known.contains_key(&run)
-                {
-                    record(&generated[start..start + run.len()], kind, start);
-                }
-                continue;
-            }
-            // An unterminated pattern matched any prefix of the identifier.
-            for end in 1..=run.len() {
-                if known.contains_key(&&run[..end]) {
-                    record(&generated[start..start + end], kind, start);
-                }
-            }
-        }
-    }
-    for offsets in sites.values_mut() {
-        for kind in offsets.iter_mut() {
-            kind.sort_unstable();
-        }
-    }
-    sites
-}
-
-#[cfg(test)]
-fn generate_bind_value_mappings(
-    generated: &str,
-    source: &str,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    generate_bind_value_mappings_with_starts(
-        generated,
-        source,
-        &MappingLineStarts::new(generated, source),
-    )
-}
-
-fn generate_bind_value_mappings_with_starts(
-    generated: &str,
-    source: &str,
-    starts: &MappingLineStarts,
-) -> Vec<js_ast::codegen::SourceMapping> {
-    use js_ast::codegen::offset_to_line_col_utf16;
-
-    fn identifier_after(code: &str, mut offset: usize) -> Option<(usize, &str)> {
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(u8::is_ascii_whitespace)
-        {
-            offset += 1;
-        }
-        let start = offset;
-        while code
-            .as_bytes()
-            .get(offset)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'$')
-        {
-            offset += 1;
-        }
-        (offset > start).then_some((start, &code[start..offset]))
-    }
-
-    let generated_starts = starts.generated.clone();
-    let source_starts = starts.source.clone();
-    let mut mappings = Vec::new();
-    let mut source_cursor = 0;
-    while let Some(relative) = source[source_cursor..].find("bind:value={") {
-        let expression_start = source_cursor + relative + "bind:value={".len();
-        let Some((source_name, name)) = identifier_after(source, expression_start) else {
-            source_cursor = expression_start;
-            continue;
-        };
-        let mut generated_cursor = 0;
-        while let Some(relative) = generated[generated_cursor..].find("$.bind_value(") {
-            let call_start = generated_cursor + relative;
-            let call_end = generated[call_start..]
-                .find('\n')
-                .map_or(generated.len(), |offset| call_start + offset);
-            let argument_start = call_start + "$.bind_value(".len();
-            if let Some((argument_offset, argument)) = identifier_after(generated, argument_start)
-                && let Some(element_start) = source.find(&format!("<{argument}"))
-            {
-                let source_offset = element_start + 1;
-                for (generated_offset, original_offset) in [
-                    (argument_offset, source_offset),
-                    (
-                        argument_offset + argument.len(),
-                        source_offset + argument.len(),
-                    ),
-                ] {
-                    let (gen_line, gen_col) =
-                        offset_to_line_col_utf16(generated, &generated_starts, generated_offset);
-                    let (orig_line, orig_col) =
-                        offset_to_line_col_utf16(source, &source_starts, original_offset);
-                    mappings.push(js_ast::codegen::SourceMapping {
-                        gen_line: gen_line as u32,
-                        gen_col: gen_col as u32,
-                        source: 0,
-                        orig_line: orig_line as u32,
-                        orig_col: orig_col as u32,
-                        name: None,
-                    });
-                }
-            }
-            let mut offset = call_start;
-            while let Some(relative) = generated[offset..call_end].find(name) {
-                let start = offset + relative;
-                let end = start + name.len();
-                let before = generated.as_bytes().get(start.wrapping_sub(1));
-                let after = generated.as_bytes().get(end);
-                if !before.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-                    && !after.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-                {
-                    for (generated_offset, original_offset) in
-                        [(start, source_name), (end, source_name + name.len())]
-                    {
-                        let (gen_line, gen_col) = offset_to_line_col_utf16(
-                            generated,
-                            &generated_starts,
-                            generated_offset,
-                        );
-                        let (orig_line, orig_col) =
-                            offset_to_line_col_utf16(source, &source_starts, original_offset);
-                        mappings.push(js_ast::codegen::SourceMapping {
-                            gen_line: gen_line as u32,
-                            gen_col: gen_col as u32,
-                            source: 0,
-                            orig_line: orig_line as u32,
-                            orig_col: orig_col as u32,
-                            name: None,
-                        });
-                    }
-                }
-                offset = end;
-            }
-            generated_cursor = call_end;
-        }
-        source_cursor = source_name + name.len();
-    }
-    mappings
-}
-
 #[cfg(test)]
 fn generate_inline_script_mappings(
     generated: &str,
@@ -2709,13 +2301,10 @@ mod tests {
     use crate::{CompileOptions, GenerateMode, compile};
 
     use super::{
-        MappingLineStarts, generate_bind_value_mappings,
-        generate_component_bind_mappings_with_starts, generate_default_function_wrapper_mappings,
-        generate_inline_script_mappings, generate_legacy_prop_read_mappings,
-        generate_server_declaration_mappings, generate_server_token_mappings,
-        generate_server_wrapper_mappings, generate_template_element_runtime_mappings,
-        generate_token_mappings, generate_verbatim_import_mappings,
-        typescript_declaration_annotation_end,
+        generate_default_function_wrapper_mappings, generate_inline_script_mappings,
+        generate_legacy_prop_read_mappings, generate_server_declaration_mappings,
+        generate_server_token_mappings, generate_server_wrapper_mappings, generate_token_mappings,
+        generate_verbatim_import_mappings, typescript_declaration_annotation_end,
     };
 
     #[test]
@@ -2781,56 +2370,6 @@ mod tests {
     }
 
     #[test]
-    fn client_maps_template_handles_to_element_tags() {
-        let source = "<main><div>{name}</div></main>";
-        let generated = "var main = root();\nvar div = $.child(main);\nvar text = $.child(div, true);\n$.reset(div);\n$.reset(main);\n$.remove_input_defaults(div);\n$.bind_value(div, () => value, set);";
-        let mappings = generate_template_element_runtime_mappings(generated, source);
-
-        for expected in [
-            (0, 4, 0, 1),
-            (1, 4, 0, 7),
-            (3, 8, 0, 7),
-            (4, 8, 0, 1),
-            (5, 24, 0, 7),
-            (6, 13, 0, 7),
-        ] {
-            assert!(
-                mappings.iter().any(|mapping| {
-                    (
-                        mapping.gen_line,
-                        mapping.gen_col,
-                        mapping.orig_line,
-                        mapping.orig_col,
-                    ) == expected
-                }),
-                "missing element-handle mapping {expected:?}: {mappings:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn client_maps_handle_after_preserved_script_comment() {
-        let source =
-            "<script>\n// retained\n</script>\n<style>div { color: red; }</style>\n<div />";
-        let generated = "var // retained\ndiv = root();";
-        let mappings = generate_template_element_runtime_mappings(generated, source);
-
-        for expected in [(1, 0, 4, 1), (1, 3, 4, 4)] {
-            assert!(
-                mappings.iter().any(|mapping| {
-                    (
-                        mapping.gen_line,
-                        mapping.gen_col,
-                        mapping.orig_line,
-                        mapping.orig_col,
-                    ) == expected
-                }),
-                "missing comment-separated handle mapping {expected:?}: {mappings:?}"
-            );
-        }
-    }
-
-    #[test]
     fn client_maps_inline_export_declaration_after_lowering() {
         let source = "<script>export const b = 2;</script>";
         let generated = "\tconst b = 2;";
@@ -2852,28 +2391,7 @@ mod tests {
     }
 
     #[test]
-    fn client_maps_every_bind_value_expression_copy_to_the_template() {
-        let source = "<input bind:value={foo.bar}>";
-        let generated =
-            "$.bind_value(input, () => foo().bar, ($$value) => foo(foo().bar = $$value));";
-        let mappings = generate_bind_value_mappings(generated, source);
-        let starts = generated
-            .match_indices("foo")
-            .map(|(offset, _)| offset)
-            .collect::<Vec<_>>();
-
-        for start in starts {
-            assert!(
-                mappings.iter().any(|mapping| {
-                    (mapping.gen_col, mapping.orig_line, mapping.orig_col) == (start as u32, 0, 19)
-                }),
-                "missing bind expression mapping at {start}: {mappings:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn client_keeps_bind_value_runtime_carriers_after_merging() {
+    fn client_carries_bind_value_runtime_mappings_from_ast_spans() {
         let source = "<script>\n\texport let foo;\n</script>\n\n<input bind:value={foo.bar.baz}>";
         let result = compile(
             source,
@@ -2891,7 +2409,7 @@ mod tests {
                 map["mappings"].as_str().unwrap(),
             );
         for (line, column, original_line, original_column) in [
-            (16, 14, 4, 1),
+            (16, 14, 4, 0),
             (16, 19, 4, 6),
             (16, 27, 4, 19),
             (16, 30, 4, 22),

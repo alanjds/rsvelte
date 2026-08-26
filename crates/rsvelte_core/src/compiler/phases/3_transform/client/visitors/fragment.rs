@@ -253,6 +253,13 @@ pub fn fragment(
             let id = b::id(&id_name);
             let name_start = element.start.saturating_add(1);
             let name_end = name_start.saturating_add(element.name.len() as u32);
+            // Upstream reuses this located Identifier for the declaration and
+            // every runtime use. The shared-fragment path registers the same
+            // identity in `flush_node`; do it here as well for the root path,
+            // which bypasses `process_children` entirely.
+            context
+                .arena
+                .note_identifier_span(&id_name, name_start, name_end);
 
             // Visit the element with the id as the node
             let saved_node = std::mem::replace(&mut context.state.node, id.clone());
