@@ -2762,7 +2762,13 @@ mod tests {
             ] {
                 assert!(
                     mappings[line].iter().any(|segment| {
-                        segment[..4] == [column, 0, original_line, original_column]
+                        segment[..4]
+                            == [
+                                column as i64,
+                                0,
+                                original_line as i64,
+                                original_column as i64,
+                            ]
                     }),
                     "missing merged prop-read mapping at {line}:{column}: {:?}",
                     mappings[line]
