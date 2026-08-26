@@ -101,6 +101,27 @@ impl<'a> Assembler<'a> {
         self.body.extend(program.body);
     }
 
+    /// A verbatim-copied chunk whose individual byte positions map back to the
+    /// corresponding bytes in the original source.
+    fn push_linear_chunk(&mut self, text: &str, maps_to: u32) {
+        let base = source_offset(self.source.len());
+        let mut padded = " ".repeat(base as usize - 1);
+        padded.push('\n');
+        padded.push_str(text);
+        let owned = self.ab.allocator().alloc_str(&padded);
+        let program = self.parse(owned);
+        self.source.push_str(text);
+        self.source.push('\n');
+        self.comments.extend(program.comments.iter().copied());
+        self.loc_map.push(LocMapEntry {
+            start: base,
+            end: base + source_offset(text.len()),
+            source: Some(maps_to),
+            linear: true,
+        });
+        self.body.extend(program.body);
+    }
+
     fn wrap_body(&mut self, span: Span) {
         let body = ArenaVec::from_iter_in(std::mem::take(&mut self.body), &self.ab);
         self.body
@@ -316,6 +337,31 @@ fn loc_map_resolves_chunk_positions_back_into_the_source() {
             "every chunk offset maps to the anchor line: {seg:?}"
         );
     }
+}
+
+#[test]
+fn named_import_brace_uses_source_space_after_linear_mapping() {
+    let import = "import { dependency } from 'dependency';";
+    let map_source = format!("<script>\n{import}\n</script>\n");
+    let anchor = source_offset(map_source.find(import).expect("import in map source"));
+
+    let allocator = Allocator::default();
+    let mut a = Assembler::new(&allocator, 512);
+    a.push_linear_chunk(import, anchor);
+    let mapped = a.finish().print_mapped(&map_source);
+    let brace_column = source_offset(mapped.code.find('{').expect("brace in generated import"));
+
+    assert!(
+        mapped.mappings.iter().any(|segment| {
+            segment.gen_line == 0
+                && segment.gen_column == brace_column
+                && segment.source_line == 1
+                && segment.source_column == 7
+        }),
+        "named import brace must resolve in source space: code={:?}, mappings={:?}",
+        mapped.code,
+        mapped.mappings
+    );
 }
 
 #[test]

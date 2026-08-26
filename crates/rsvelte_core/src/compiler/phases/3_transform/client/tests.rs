@@ -46,12 +46,12 @@ fn retained_instance_script_preserves_identifier_and_literal_source_map_spans() 
         .position(|line| line.contains("import { dependency } from 'dependency';"))
         .expect("hoisted import is printed") as i64;
     let generated_import = result.js.code.lines().nth(import_line as usize).unwrap();
-    let brace_column = generated_import.find('{').unwrap() as i64;
+    let dependency_column = generated_import.find("dependency").unwrap() as i64;
     assert!(
         mappings[import_line as usize]
             .iter()
-            .any(|segment| segment.as_slice() == [brace_column, 0, 1, 7]),
-        "hoisted import punctuation must retain its source span; generated={generated_import:?}, segments={:?}",
+            .any(|segment| segment.as_slice() == [dependency_column, 0, 1, 9]),
+        "hoisted import identifier must retain its source span; generated={generated_import:?}, segments={:?}",
         mappings[import_line as usize]
     );
     let generated_line = result
@@ -103,12 +103,12 @@ fn hoisted_module_and_instance_imports_preserve_source_map_spans() {
             .position(|line| line.contains(&format!("import {{ {identifier} }} from")))
             .expect("hoisted import is printed");
         let generated = result.js.code.lines().nth(generated_line).unwrap();
-        let generated_column = generated.find('{').unwrap() as i64;
+        let generated_column = generated.find(identifier).unwrap() as i64;
         assert!(
             mappings[generated_line]
                 .iter()
-                .any(|segment| segment.as_slice() == [generated_column, 0, original_line, 7]),
-            "{identifier}'s import punctuation must retain its source span; generated={generated:?}, segments={:?}",
+                .any(|segment| segment.as_slice() == [generated_column, 0, original_line, 9]),
+            "{identifier} must retain its source span; generated={generated:?}, segments={:?}",
             mappings[generated_line]
         );
     }

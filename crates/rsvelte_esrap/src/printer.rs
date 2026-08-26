@@ -866,16 +866,19 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         }
     }
 
-    fn map_position(&self, offset: u32) -> Option<(u32, u32)> {
+    fn source_position(&self, offset: u32) -> Option<(u32, u32)> {
         let map_line_starts = self.map_line_starts.as_deref().unwrap_or(&self.line_starts);
         if map_line_starts.is_empty() {
             return None;
         }
-        let offset = self.mapped_offset(offset)?;
         let line = usize_to_u32(map_line_starts.partition_point(|&s| s <= offset));
         // `line` is 1-based; its start offset lives at index `line - 1`.
         let line_start = map_line_starts[(line - 1) as usize];
         Some((line, offset.saturating_sub(line_start)))
+    }
+
+    fn map_position(&self, offset: u32) -> Option<(u32, u32)> {
+        self.source_position(self.mapped_offset(offset)?)
     }
 
     /// esrap's `write_source_keyword`: bracket the literal `keyword` with
@@ -2119,7 +2122,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
                 && let Some(relative) = source
                     .get(start as usize..end as usize)
                     .and_then(|prefix| prefix.rfind('{'))
-                && let Some((line, column)) = self.map_position(start + relative as u32)
+                && let Some((line, column)) = self.source_position(start + relative as u32)
             {
                 ctx.location(line, column);
             }
