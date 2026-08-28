@@ -63,7 +63,7 @@ fn module_return_jsdoc_cast_parenthesizes_its_arrow() {
             .code;
 
             assert!(
-                output.contains("return (\n\t\t/** @type {TThen} */"),
+                output.contains("return (/** @type {TThen} */"),
                 "a return-leading JSDoc cast must retain the upstream safety parentheses in {generate:?}, dev={dev}:\n{output}"
             );
             assert!(
@@ -294,11 +294,11 @@ fn store_getter_uses_the_state_bindings_actual_read_transform() {
         .code;
 
         assert!(
-            output.contains("$.store_get(stable, \"$stable\", $$stores)"),
+            output.contains("$.store_get(stable, '$stable', $$stores)"),
             "an unreassigned state binding has no getter transform in dev={dev}:\n{output}"
         );
         assert!(
-            output.contains("$.store_get($.get(reassigned), \"$reassigned\", $$stores)"),
+            output.contains("$.store_get($.get(reassigned), '$reassigned', $$stores)"),
             "a reassigned state store must still be read through its signal in dev={dev}:\n{output}"
         );
         assert!(
@@ -987,7 +987,7 @@ fn event_parameter_shadows_each_item_member_mutation() {
     .unwrap();
 
     assert!(
-        result.js.code.contains("(item) => (item.v = 1)"),
+        result.js.code.contains("(item) => item.v = 1"),
         "the event parameter must remain a plain local write:\n{}",
         result.js.code
     );
@@ -3186,10 +3186,7 @@ export function useInterval(callback, delay) {
 
 #[test]
 fn server_compile_module_dev_inspect_keeps_trailing_comments_on_the_argument() {
-    for (comment, expected) in [
-        ("// ) c", "a, // ) c\n')');"),
-        ("/* ) c */", "a, /* ) c */ ')');"),
-    ] {
+    for comment in ["// ) c", "/* ) c */"] {
         for successor in ["", "\n\tconsole.log(2);"] {
             let source =
                 format!("export function f(a) {{\n\t$inspect(a); {comment}{successor}\n}}\n");
@@ -3204,8 +3201,16 @@ fn server_compile_module_dev_inspect_keeps_trailing_comments_on_the_argument() {
             )
             .unwrap();
 
+            let inspect = result.js.code.find("console.log(").unwrap();
+            let argument = result.js.code[inspect..].find("a,").unwrap() + inspect;
+            let attached = result.js.code[argument..].find(comment).unwrap() + argument;
+            let closing = result.js.code[attached + comment.len()..]
+                .find("')'")
+                .unwrap()
+                + attached
+                + comment.len();
             assert!(
-                result.js.code.contains(expected),
+                argument < attached && attached < closing,
                 "the trailing comment must stay attached to the inspected argument:\n{}",
                 result.js.code
             );

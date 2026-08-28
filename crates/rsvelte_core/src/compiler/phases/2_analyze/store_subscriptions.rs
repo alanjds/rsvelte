@@ -710,6 +710,35 @@ fn dollar_function_param_body_range(
         return None;
     }
 
+    // A `$name` after the current parameter's default `=` is a reference in
+    // the initializer, not a declaration slot (`page = $search_params.page`).
+    // Track only the outer parameter-list level so defaults nested inside a
+    // destructuring pattern remain part of that same parameter.
+    let mut nested = 0usize;
+    let mut default_before_reference = false;
+    let mut i = open + 1;
+    while i < ident_start {
+        match chars[i] {
+            '(' | '[' | '{' => nested += 1,
+            ')' | ']' | '}' => nested = nested.saturating_sub(1),
+            ',' if nested == 0 => default_before_reference = false,
+            '=' if chars.get(i.wrapping_sub(1)) != Some(&'=')
+                && chars.get(i.wrapping_sub(1)) != Some(&'!')
+                && chars.get(i.wrapping_sub(1)) != Some(&'<')
+                && chars.get(i.wrapping_sub(1)) != Some(&'>')
+                && chars.get(i + 1) != Some(&'=')
+                && chars.get(i + 1) != Some(&'>') =>
+            {
+                default_before_reference = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if default_before_reference {
+        return None;
+    }
+
     let mut paren_depth = 0usize;
     let mut close = None;
     for (m, c) in chars.iter().enumerate().skip(open) {

@@ -173,6 +173,28 @@ fn record_first_error(
     }
 }
 
+/// Record a missing declaration terminator over the selector error produced
+/// while speculatively deciding whether the same text began a nested rule.
+/// Upstream commits to the declaration parse at this point, so its `;` error
+/// is the observable one; unrelated earlier errors still retain precedence.
+fn record_declaration_terminator_error(
+    cell: &std::cell::Cell<Option<crate::error::ParseError>>,
+    err: crate::error::ParseError,
+) {
+    let existing = cell.take();
+    if matches!(
+        &existing,
+        Some(crate::error::ParseError::SvelteError { code, .. })
+            if code.as_str() == "css_expected_identifier"
+    ) {
+        cell.set(Some(err));
+    } else if existing.is_some() {
+        cell.set(existing);
+    } else {
+        cell.set(Some(err));
+    }
+}
+
 /// Length of the leading JS-whitespace run of `text`.
 fn leading_ws_len(text: &str) -> usize {
     text.len() - text.trim_start_ws().len()
@@ -1868,7 +1890,7 @@ impl<'a> CssParser<'a> {
         // End position is before the semicolon
         let end = self.offset + self.index;
         if self.current_char() != '}' && !self.eat_optional(";") {
-            record_first_error(
+            record_declaration_terminator_error(
                 &self.error,
                 crate::error::ParseError::expected_token(";", self.offset + self.index),
             );

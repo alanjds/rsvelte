@@ -4007,7 +4007,8 @@ impl PropMutationSites {
             {
                 continue;
             }
-            if let Some((after, chain)) = scan_prop_mutation_target(source, start, end)
+            if let Some((after, chain, location_start)) =
+                scan_prop_mutation_target(source, start, end)
                 && let Some(value_start) = mutation_value_start(source, after).or_else(|| {
                     // A PREFIX update (`--p.deep.c`) has its operator before
                     // the identifier; the site's position stays the identifier.
@@ -4017,7 +4018,8 @@ impl PropMutationSites {
             {
                 let (line, column) =
                     crate::compiler::phases::phase3_transform::utils::locate_in_source(
-                        source, start,
+                        source,
+                        location_start,
                     );
                 sites.push(PropMutationSite {
                     line,
@@ -4208,7 +4210,7 @@ fn scan_prop_mutation_target(
     source: &str,
     root_start: usize,
     root_end: usize,
-) -> Option<(usize, Option<Vec<String>>)> {
+) -> Option<(usize, Option<Vec<String>>, usize)> {
     let bytes = source.as_bytes();
     let chain_start = skip_non_null_assertions(bytes, root_end);
     let (mut after, mut chain, mut saw_member) = if starts_member_access(bytes, chain_start) {
@@ -4218,7 +4220,11 @@ fn scan_prop_mutation_target(
         (chain_start, Some(Vec::new()), false)
     };
 
-    if let Some(assertion_end) = parenthesized_ts_assertion_end(source, root_start, after) {
+    let mut location_start = root_start;
+    if let Some((assertion_start, assertion_end)) =
+        parenthesized_ts_assertion_range(source, root_start, after)
+    {
+        location_start = assertion_start;
         after = skip_whitespace_chars(source, assertion_end);
         if starts_member_access(bytes, after) {
             let (tail_end, tail_chain) = scan_member_chain_names(source, after)?;
@@ -4234,16 +4240,16 @@ fn scan_prop_mutation_target(
         }
     }
 
-    saw_member.then_some((after, chain))
+    saw_member.then_some((after, chain, location_start))
 }
 
-/// Return the byte after the closing parenthesis when `root_start..expression_end`
-/// is wrapped in a TypeScript `as` or `satisfies` assertion.
-fn parenthesized_ts_assertion_end(
+/// Return the wrapper range when `root_start..expression_end` is parenthesized
+/// around a TypeScript `as` or `satisfies` assertion.
+fn parenthesized_ts_assertion_range(
     source: &str,
     root_start: usize,
     expression_end: usize,
-) -> Option<usize> {
+) -> Option<(usize, usize)> {
     let (open, ch) = source[..root_start]
         .char_indices()
         .rev()
@@ -4264,7 +4270,7 @@ fn parenthesized_ts_assertion_end(
                 .is_some_and(|ch| ch.is_whitespace() && !tail.trim().is_empty())
         })
     });
-    has_keyword.then_some(close + 1)
+    has_keyword.then_some((open, close + 1))
 }
 
 /// Whether a member access — plain, computed or optional — starts at `pos`.

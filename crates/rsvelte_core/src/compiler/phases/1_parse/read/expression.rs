@@ -1774,6 +1774,31 @@ pub fn check_js_parse_error_with_pos(content: &str, ts: bool) -> Option<(String,
     if head.trim_end_ws().is_empty() || head.starts_with("...") {
         return Some(("Unexpected token".to_string(), leading_ws));
     }
+    // OXC may recover a string literal with a forbidden legacy escape without
+    // retaining the literal node that the strict-mode visitor needs. Acorn
+    // reports that lexical restriction before the generic recovery error.
+    if let Some(&quote @ (b'\'' | b'"')) = head.as_bytes().first() {
+        let bytes = head.as_bytes();
+        let mut i = 1;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2;
+                continue;
+            }
+            if bytes[i] == quote {
+                if let Some((relative, octal)) = super::strict_mode::find_bad_escape(&head[..=i]) {
+                    let message = if octal {
+                        "Octal literal in strict mode"
+                    } else {
+                        "Invalid escape sequence"
+                    };
+                    return Some((message.to_string(), leading_ws + relative));
+                }
+                break;
+            }
+            i += 1;
+        }
+    }
     // Acorn's `parseExpressionAt` consumes a dangling optional-chain marker
     // and reports the delimiter after it. OXC labels the `?` token instead.
     // The template delimiter is outside `content`, so its relative position is

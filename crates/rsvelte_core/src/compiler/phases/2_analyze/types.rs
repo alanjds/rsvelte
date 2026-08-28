@@ -192,7 +192,7 @@ impl ScriptContent {
                         && retained_matches_source
                 })
                 .map_or_else(
-                    || (strip_typescript(raw_source), None),
+                    || strip_typescript_with_projection(raw_source),
                     |program| {
                         strip_typescript_from_program_with_projection(raw_source, program.program())
                     },
@@ -592,6 +592,21 @@ fn extract_import_source(import_line: &str) -> Option<String> {
 /// Uses OXC parser to parse TypeScript, then walks the AST to find
 /// TypeScript-specific source regions to remove.
 pub fn strip_typescript(source: &str) -> String {
+    strip_typescript_parsed(source, false).0
+}
+
+/// Strip TypeScript while retaining the source/output projection needed by
+/// Phase 3. This is the fallback for a script whose Phase-1 program cannot be
+/// reused; dropping the projection here would make comments copied out
+/// of erased module declarations indistinguishable from live JS comments.
+fn strip_typescript_with_projection(source: &str) -> (String, Option<ScriptProjection>) {
+    strip_typescript_parsed(source, true)
+}
+
+fn strip_typescript_parsed(
+    source: &str,
+    include_projection: bool,
+) -> (String, Option<ScriptProjection>) {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -606,10 +621,11 @@ pub fn strip_typescript(source: &str) -> String {
 
     if result.panicked {
         // The AST is a stub; nothing can be stripped from it.
-        return source.to_string();
+        return (source.to_string(), None);
     }
 
-    let stripped = strip_typescript_from_program(source, &result.program);
+    let (stripped, projection) =
+        strip_typescript_from_program_impl(source, &result.program, include_projection);
 
     // OXC reports rules the official parser does not enforce (a required
     // parameter after an optional one, say) as parse errors even though it
@@ -620,11 +636,11 @@ pub fn strip_typescript(source: &str) -> String {
         let allocator = Allocator::default();
         let check = Parser::new(&allocator, &stripped, SourceType::mjs()).parse();
         if check.panicked || !check.diagnostics.is_empty() {
-            return source.to_string();
+            return (source.to_string(), None);
         }
     }
 
-    stripped
+    (stripped, projection)
 }
 
 pub(crate) fn strip_typescript_from_program(
