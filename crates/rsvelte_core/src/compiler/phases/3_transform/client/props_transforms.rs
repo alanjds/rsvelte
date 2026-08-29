@@ -4146,6 +4146,18 @@ impl PropMutationSites {
         Self { sites }
     }
 
+    /// Whether the source writes through a member of this prop at all.
+    ///
+    /// Upstream reaches `validate_mutation` from an `AssignmentExpression` whose
+    /// `left` is a `MemberExpression`; a destructuring pattern holding the same
+    /// member (`[items[i], items[s]] = …`) is not one, so its leaves — which
+    /// rsvelte lowers to the same setter calls a plain write produces — must not
+    /// be validated. The scan below already declines to record those as sites,
+    /// which makes "this prop has no site" the answer to that question.
+    pub(super) fn is_empty(&self) -> bool {
+        self.sites.is_empty()
+    }
+
     /// The source position of the mutation that assigned `value`. Matching on
     /// the member names and on the words of the assigned value rather than on
     /// position is what keeps a moved statement — a `$:` body becomes a

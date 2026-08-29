@@ -174,6 +174,17 @@ impl<'a> Collector<'a> {
         }
     }
 
+    /// Whether the source has any member write through this prop. A generated
+    /// setter call for a prop the source never writes through a member of came
+    /// from a destructuring pattern, which upstream's `left.type !==
+    /// 'MemberExpression'` bail leaves unvalidated.
+    fn source_writes_a_member(&self, name: &str) -> bool {
+        self.sites
+            .iter()
+            .find(|(candidate, _, _)| candidate == name)
+            .is_none_or(|(_, _, sites)| !sites.is_empty())
+    }
+
     fn location(&mut self, name: &str, path: &[String], value: &str) -> (usize, usize) {
         let static_path = path
             .iter()
@@ -203,6 +214,9 @@ impl<'a> Collector<'a> {
         let Some(alias) = self.prop(&name).cloned() else {
             return;
         };
+        if !self.source_writes_a_member(&name) {
+            return;
+        }
         // The right-hand side alone: `span` is the whole setter call, whose
         // `, true)` tail would otherwise be matched against the source value.
         let generated = self.generated;
@@ -386,6 +400,41 @@ mod tests {
                 source,
             ),
             Some("$$ownership_validator.mutation('item', ['item', 'name'], item(item().name = /[,)]/.test(`x${key}`), true), 3, 0);".to_string()),
+        );
+    }
+
+    /// Upstream calls `validate_mutation` on the source `AssignmentExpression`,
+    /// whose `left` is the pattern — not on the per-leaf writes the destructure
+    /// lowers to — so a prop the source never writes through a member of gets
+    /// no wrap however its generated setters look.
+    #[test]
+    fn a_destructuring_target_is_not_a_member_mutation() {
+        let props = vec![("items".to_string(), None)];
+        for source in [
+            "<script>\nexport let items;\n[items[0], items[1]] = [items[1], items[0]];\n</script>",
+            "<script>\nexport let items;\n({ a: items[0] } = src);\n</script>",
+        ] {
+            let generated = "items(items()[0] = $$array[0], true);";
+            assert_eq!(
+                wrap_prop_mutation_validation_ast(generated, &props, source).as_deref(),
+                Some(generated),
+                "{source}"
+            );
+        }
+    }
+
+    /// The control: one plain member write in the source and the same generated
+    /// setter is wrapped again.
+    #[test]
+    fn a_plain_member_write_in_the_source_still_wraps() {
+        let source = "<script>\nexport let items;\nitems[0] = 1;\n</script>";
+        let props = vec![("items".to_string(), None)];
+        let output =
+            wrap_prop_mutation_validation_ast("items(items()[0] = 1, true);", &props, source)
+                .unwrap();
+        assert!(
+            output.starts_with("$$ownership_validator.mutation(null, ['items', 0]"),
+            "{output}"
         );
     }
 
