@@ -655,8 +655,14 @@ impl<'a> Parser<'a> {
                     if !trimmed.contains('{') && !trimmed.contains(';') && !trimmed.starts_with('@')
                     {
                         // Non-empty CSS content with no blocks and no at-rules - invalid
-                        let err_pos =
-                            first_line_comment.unwrap_or(content_start + style_content.len());
+                        // In indented Sass, upstream reads the first line as a
+                        // declaration property and stops at the first property
+                        // colon on the following line. Its point diagnostic is
+                        // immediately after that colon, rather than at </style>.
+                        let colon_pos = style_content.find(':').map(|pos| content_start + pos + 1);
+                        let err_pos = first_line_comment
+                            .or(colon_pos)
+                            .unwrap_or(content_start + style_content.len());
                         return Err(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
@@ -1894,6 +1900,11 @@ impl<'a> CssParser<'a> {
                 '[' if is_custom_property => bracket_depth += 1,
                 ']' if is_custom_property && bracket_depth > 0 => bracket_depth -= 1,
                 '{' if is_custom_property => brace_depth += 1,
+                // Upstream's `read_value` terminates at a block opener. This is
+                // observable for unprocessed SCSS interpolation: the first `#{`
+                // is mistaken for the at-rule block and the real opener then
+                // terminates the declaration value.
+                '{' if paren_depth == 0 => break,
                 '}' if is_custom_property && brace_depth > 0 => brace_depth -= 1,
                 '}' if paren_depth == 0
                     && (!is_custom_property || (bracket_depth == 0 && brace_depth == 0)) =>

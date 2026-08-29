@@ -1774,6 +1774,13 @@ pub fn check_js_parse_error_with_pos(content: &str, ts: bool) -> Option<(String,
     if head.trim_end_ws().is_empty() || head.starts_with("...") {
         return Some(("Unexpected token".to_string(), leading_ws));
     }
+    // Acorn consumes comments while looking for the first expression token and
+    // reports the closing Svelte delimiter when none remains. Detect that on
+    // the unwrapped program: the later bare retry can otherwise replace this
+    // answer with OXC's final comment byte.
+    if is_code_empty(content, ts) {
+        return Some(("Unexpected token".to_string(), content.len()));
+    }
     // OXC may recover a string literal with a forbidden legacy escape without
     // retaining the literal node that the strict-mode visitor needs. Acorn
     // reports that lexical restriction before the generic recovery error.
