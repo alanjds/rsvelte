@@ -4152,130 +4152,36 @@ pub(crate) fn is_js_expr_defined(
     }
 }
 
-/// Resolve a bare identifier to its binding and decide whether upstream's
-/// `scope.evaluate(<identifier>).is_defined` would hold. Shared by the
-/// original-expression path (`is_expression_defined_json`) and the
-/// transformed-value path (`is_js_expr_defined`): upstream's `scope.evaluate`
-/// resolves identifiers through the scope in BOTH cases, so a non-reactive
-/// binding that survives transformation as a bare identifier (e.g. a legacy
-/// `let iconAsc = "↑"` inside a `cond ? iconAsc : iconDesc`) must resolve the
-/// same way whether it appears at the top level or nested in a built expression.
+/// Upstream's `scope.evaluate(<identifier>).is_defined`, for an identifier that
+/// survived transformation bare. The walk is the shared one, so the built-value
+/// path and the source-expression path cannot answer this differently.
 fn identifier_is_defined(name: &str, context: &ComponentContext) -> bool {
-    use crate::compiler::phases::phase2_analyze::scope::BindingKind;
-
-    // Special identifiers
     if name == "undefined" {
         return false;
     }
 
-    // First, check if there's a transform with is_defined flag
-    // This is how we track EachIndex within each block scope
+    // A transform carries template-local knowledge the component scope does not
+    // — an each index inside its own block — so it wins where it is set.
     if let Some(transform) = context.state.transform.get(name)
         && transform.is_defined
     {
         return true;
     }
 
-    // `const uid = $props.id()` always evaluates to a string.
-    // Upstream's scope.evaluate resolves the const binding's initial
-    // `$props.id()` to STRING (scope.js `case '$props.id'`), so
-    // `is_defined` is true and no `?? ''` is appended.
-    if context.state.analysis.props_id.as_deref() == Some(name) {
-        return true;
-    }
-
-    // Check the binding
-    if let Some(binding) = context.state.get_binding(name) {
-        // EachIndex is always a number, never null/undefined
-        if matches!(binding.kind, BindingKind::EachIndex) {
-            return true;
-        }
-        // A template-scoped DeclarationTag / ConstTag binding
-        // (`{const after_async = number + 1}`) is defined when its
-        // initializer is a statically-non-nullish shape. Upstream's
-        // `is_defined` walks `binding.initial`; mirror that with the
-        // recorded `initial_node_type` so e.g. `after_async`
-        // (BinaryExpression) reads bare while `number`
-        // (AwaitExpression) keeps `?? ''`.
-        if matches!(binding.kind, BindingKind::Template)
-            && binding.initial_is_defined
-            && let Some(ref ity) = binding.initial_node_type
-            && matches!(
-                ity.as_str(),
-                "BinaryExpression"
-                    | "UpdateExpression"
-                    | "ArrayExpression"
-                    | "ObjectExpression"
-                    | "TemplateLiteral"
-            )
-        {
-            return true;
-        }
-        // For Normal const bindings with defined initial value
-        if matches!(binding.kind, BindingKind::Normal)
-            && !binding.reassigned
-            && matches!(
-                binding.declaration_kind,
-                crate::compiler::phases::phase2_analyze::scope::DeclarationKind::Const
-            )
-            && binding.initial_is_defined
-        {
-            return true;
-        }
-
-        // For a Normal binding (any `let`/`var`/`const`) whose
-        // initializer is a `BinaryExpression` (`a + b`) or a
-        // `TemplateLiteral` — the only two non-mutable shapes upstream
-        // `scope.evaluate` types as a definite STRING/NUMBER (never
-        // null/undefined), so `is_defined` holds and no `?? ''` is
-        // added. (Notably NOT `UpdateExpression`: upstream's evaluate
-        // has no case for it, so `x++` falls through to UNKNOWN and
-        // keeps its `?? ''`.) A primitive result cannot be turned
-        // nullish by a later in-place mutation, so only reassignment
-        // (`!reassigned`) can invalidate it. Uses the recorded init
-        // node TYPE directly rather than the `initial_is_defined`
-        // flag, which is not populated for legacy (non-runes) `let`
-        // bindings. Fixes e.g. `let key = a.charAt(0) + a.slice(1)`
-        // reading bare.
-        if matches!(binding.kind, BindingKind::Normal)
-            && !binding.reassigned
-            && binding
-                .initial_node_type
-                .as_deref()
-                .is_some_and(|t| matches!(t, "BinaryExpression" | "TemplateLiteral"))
-        {
-            return true;
-        }
-
-        // A function declaration's binding carries the declaration itself as
-        // its initial, which upstream's evaluate types as FUNCTION — never
-        // null/undefined, so the interpolation reads bare.
-        if matches!(binding.kind, BindingKind::Normal)
-            && !binding.is_updated()
-            && matches!(
-                binding.declaration_kind,
-                crate::compiler::phases::phase2_analyze::scope::DeclarationKind::Function
-            )
-        {
-            return true;
-        }
-
-        // A non-updated `let`/`var`/`const x = <primitive literal>`
-        // (e.g. legacy `let iconAsc = "↑"`): upstream's scope.evaluate
-        // resolves the binding's Literal initial to a defined primitive
-        // (`!binding.updated && binding.initial !== null && !is_prop`),
-        // so a template `${x}` reads bare. Only a `null` literal is
-        // undefined (`undefined` is an Identifier, handled above).
-        if matches!(binding.kind, BindingKind::Normal)
-            && !binding.is_updated()
-            && binding.initial_node_type.as_deref() == Some("Literal")
-            && binding.initial.as_deref() != Some("null")
-            && binding.initial.is_some()
-        {
-            return true;
-        }
-    }
-    false
+    // Everything else is upstream's `scope.evaluate(<identifier>)`, which
+    // recurses into the binding's initializer. Answering it here from a table of
+    // binding shapes made this the second, weaker port of that walk.
+    context.state.get_binding(name).is_some_and(|binding| {
+        evaluate_binding_initial(
+            &ClientEvalScope {
+                context,
+                converted: false,
+            },
+            binding,
+            0,
+        )
+        .is_defined()
+    })
 }
 
 /// Check if an expression is guaranteed to be defined (non-null/undefined).

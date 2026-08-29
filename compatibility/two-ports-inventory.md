@@ -373,6 +373,32 @@ row [13](#13-what-does-a-call-to-one-of-upstreams-globals-keypaths-evaluate-to--
 and it is the one instance in this file where the two ports were shown to render different text
 from the same source.
 
+**Two of these ports are closed as of 2026-08-29, and the divergence they carried ran in BOTH
+directions — which is what makes the row worth re-reading rather than ticking off.** The
+`?? ''` guard on a template hole, on `$.document.title` and on `option.value` is one upstream
+decision, `scope.evaluate(value).is_defined`, read at three sites. rsvelte answered it with the
+shared estree walk in some places and with `identifier_is_defined`, a hand-written table of
+binding shapes, in others. The table admitted no function binding and no `$state` binding that is
+never written, so `{fn}`, `{arrow}` and `<option value={n || 'a'}>` were guarded where upstream
+leaves them bare; and `<title>` graded the **source** expression rather than the value it had
+just built, so a legacy `$.untrack(…)` wrapper never made the chunk unknown and the guard was
+omitted where upstream adds it. `identifier_is_defined` now delegates to `evaluate_binding_initial`
+and `title_element` grades the built value, so both sites read the one walk; the walk itself
+gained upstream's FUNCTION case, which no port had.
+
+The measurement is the reason to state the directions separately. Over a 5,041-component
+population (a deterministic 4,000-file sample of the 33,792 corpus components plus every one of
+the 1,210 holding a `<title>`, `<option>` or `<select>`), the change moved **12 client outputs and
+12 client-dev outputs and 0 server outputs**; graded against the official compiler, 11 of the 12
+go divergent → byte-identical on each target and **none** move the other way, the twelfth
+shrinking from 15 to 11 divergent lines with the residue in comment placement. A fix measured on
+one direction's population would have scored a one-directional patch green.
+
+Still open in this row: `is_expression_known_json`, `is_initial_value_literal_or_known` (the
+`memmem::find(json, b"Literal")` one), `is_value_known_defined` and `is_expression_defined_typed`
+— four `is_known` ports, untouched here, and `is_js_expr_defined` remains a structural second
+walk over the built `JsExpr` whose leaves now call the shared one.
+
 ### 10. Which line and column is byte offset N on? — [D]
 
 **Upstream:** `state.js:57` — one `getLocator(source)` stored on `state.locator` and read
