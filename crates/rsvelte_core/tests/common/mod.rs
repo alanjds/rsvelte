@@ -529,23 +529,19 @@ pub fn compare_js(actual: &str, expected: &str) -> bool {
     canonicalize_js(actual) == canonicalize_js(expected)
 }
 
-/// Same as [`compare_js`] but emits debug output via env vars when comparison
-/// fails. Recognized env vars:
-///   * `DEBUG_TEST=<name>` — print canonical expected/actual for the named test
-///   * `DEBUG_ALL=1` — print canonical expected/actual for any failing test
-///   * `DEBUG_RAW=<name>` — also write raw + canonical inputs to /tmp/debug_*
+/// Same as [`compare_js`] but emits a canonical diff when comparison fails.
+/// `DEBUG_RAW=<name>` additionally writes raw + canonical inputs to
+/// `/tmp/debug_*` for the named test.
 pub fn compare_js_with_debug(actual: &str, expected: &str, test_name: &str) -> bool {
     let canonical_actual = canonicalize_js(actual);
     let canonical_expected = canonicalize_js(expected);
     let passed = canonical_actual == canonical_expected;
 
     if !passed {
-        let target_match = std::env::var("DEBUG_TEST").ok().as_deref() == Some(test_name);
-        let debug_all = std::env::var("DEBUG_ALL").is_ok();
-        if target_match || debug_all {
-            eprintln!("=== {test_name} canonical diff ===");
-            eprintln!("{}", format_diff(&canonical_expected, &canonical_actual));
-        }
+        // CI must make compatibility failures actionable without requiring a
+        // second, environment-specific reproduction run.
+        eprintln!("=== {test_name} canonical diff ===");
+        eprintln!("{}", format_diff(&canonical_expected, &canonical_actual));
 
         if std::env::var("DEBUG_RAW").ok().as_deref() == Some(test_name) {
             let _ = fs::write("/tmp/debug_raw_exp.js", expected);

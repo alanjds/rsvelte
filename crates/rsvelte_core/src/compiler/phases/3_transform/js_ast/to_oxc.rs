@@ -280,6 +280,16 @@ impl<'a> VisitMut<'a> for RestoreRawMappedSpans<'_> {
         let Some(end) = self.source_offset(span.end) else {
             return;
         };
+        // A generated node may enclose several independently copied runs whose
+        // source order is no longer monotonic after lowering (for example a
+        // `$.rest_props($$props, [...])` call assembled from `$props` and a
+        // destructuring binding). Its children can still carry useful source
+        // locations, but the enclosing parser span cannot be represented as a
+        // single original-source range. Keep that node in chunk coordinates
+        // instead of constructing an invalid OXC span.
+        if start > end {
+            return;
+        }
         *span = Span::new(start, end);
     }
 }
