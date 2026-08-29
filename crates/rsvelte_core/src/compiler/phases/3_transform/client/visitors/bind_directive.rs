@@ -1896,11 +1896,12 @@ fn build_getter_setter_with_primitive(
         //   $obj.a = $$value -> $.store_mutate(obj, $.untrack($obj).a = $$value, $.untrack($obj))
         // Also applies prop mutation transforms in legacy mode:
         //   selected[0] = $$value -> selected(selected()[0] = $$value, true)
-        let original_root_name = get_ast_root_identifier(original_expr);
+        let original_root = get_ast_root_identifier_span(original_expr);
         let transformed_set = super::expression_converter::transform_synthesized_assignment(
             expr,
             &b::id("$$value"),
-            original_root_name.as_deref(),
+            original_root.as_ref().map(|(name, _, _)| name.as_str()),
+            original_root.as_ref().map(|(_, start, _)| *start),
             context,
         );
 

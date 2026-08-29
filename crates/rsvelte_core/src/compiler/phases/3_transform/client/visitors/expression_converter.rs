@@ -1128,6 +1128,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
 
             // Extract root identifier from original JsNode (before transforms)
             let original_root_name = extract_root_identifier_from_jsnode(left_node, pa);
+            let original_root_start = extract_root_identifier_start_from_jsnode(left_node, pa);
 
             // Mirror the official EachBlock `assign`/`mutate` transforms: assigning
             // to / mutating an each-item identifier sets `uses_index = true` on the
@@ -1156,6 +1157,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                 &conv_right,
                 should_proxy,
                 original_root_name.as_deref(),
+                original_root_start,
                 context,
             ) {
                 transformed
@@ -1595,6 +1597,20 @@ fn extract_root_identifier_from_jsnode(node: &JsNode, pa: &ParseArena) -> Option
         }
         JsNode::ChainExpression { expression, .. } => {
             extract_root_identifier_from_jsnode(pa.get_js_node(*expression), pa)
+        }
+        _ => None,
+    }
+}
+
+/// Extract the root identifier's source start before conversion applies read transforms.
+fn extract_root_identifier_start_from_jsnode(node: &JsNode, pa: &ParseArena) -> Option<u32> {
+    match node {
+        JsNode::Identifier { start, .. } => Some(*start),
+        JsNode::MemberExpression { object, .. } => {
+            extract_root_identifier_start_from_jsnode(pa.get_js_node(*object), pa)
+        }
+        JsNode::ChainExpression { expression, .. } => {
+            extract_root_identifier_start_from_jsnode(pa.get_js_node(*expression), pa)
         }
         _ => None,
     }
@@ -4786,6 +4802,9 @@ fn convert_assignment_expression(
     // This is necessary because convert_json_value applies read transforms that turn
     // `rows` into `rows()`, making it impossible to identify the root identifier later.
     let original_root_name = obj.get("left").and_then(extract_root_identifier_from_json);
+    let original_root_start = obj
+        .get("left")
+        .and_then(extract_root_identifier_start_from_json);
 
     // Mirror the official EachBlock `assign`/`mutate` transforms (EachBlock.js
     // lines 229-243): assigning to or mutating an each-block item identifier sets
@@ -4829,6 +4848,7 @@ fn convert_assignment_expression(
         &right_expr,
         should_proxy_rhs,
         original_root_name.as_deref(),
+        original_root_start,
         context,
     ) {
         transformed
@@ -5196,6 +5216,7 @@ fn try_transform_assignment(
     right: &JsExpr,
     should_proxy_rhs: Option<bool>,
     original_root_name: Option<&str>,
+    original_root_start: Option<u32>,
     context: &mut ComponentContext,
 ) -> Option<JsExpr> {
     use crate::compiler::phases::phase3_transform::client::visitors::shared::assignment_helpers::build_assignment_value;
@@ -5293,9 +5314,13 @@ fn try_transform_assignment(
         // store_sub_mutate handles replacing the store reference with $.untrack($store).
         let is_prop_binding = {
             use crate::compiler::phases::phase2_analyze::scope::BindingKind;
-            context
-                .state
-                .get_binding(&root_name)
+            original_root_start
+                .and_then(|start| {
+                    context
+                        .state
+                        .get_prop_binding_at_reference(&root_name, start)
+                })
+                .or_else(|| context.state.get_binding(&root_name))
                 .map(|b| matches!(b.kind, BindingKind::Prop | BindingKind::BindableProp))
                 .unwrap_or(false)
         };
@@ -5308,13 +5333,8 @@ fn try_transform_assignment(
 
         let mutation_expr = b::assign_op(&context.arena, operator, visited_left, visited_right);
 
-        let mutate_fn = context
-            .state
-            .get_binding(&root_name)
-            .filter(|binding| {
-                !context.state.analysis.runes
-                    && matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
-            })
+        let mutate_fn = (!context.state.analysis.runes && is_prop_binding)
+            .then_some(())
             .map_or(mutate_fn, |_| {
                 super::shared::declarations::prop_bindable_mutate
             });
@@ -5344,14 +5364,23 @@ pub(crate) fn transform_synthesized_assignment(
     left: &JsExpr,
     right: &JsExpr,
     original_root_name: Option<&str>,
+    original_root_start: Option<u32>,
     context: &mut ComponentContext,
 ) -> JsExpr {
     use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 
     use super::shared::utils::apply_transforms_to_expression;
 
-    let assignment = try_transform_assignment("=", left, right, None, original_root_name, context)
-        .unwrap_or_else(|| b::assign(&context.arena, left.clone(), right.clone()));
+    let assignment = try_transform_assignment(
+        "=",
+        left,
+        right,
+        None,
+        original_root_name,
+        original_root_start,
+        context,
+    )
+    .unwrap_or_else(|| b::assign(&context.arena, left.clone(), right.clone()));
 
     // The normal expression path recursively visits the expression returned by the assignment
     // visitor. Preserve that step for nested reads in both transformed and plain assignments.
@@ -6333,6 +6362,25 @@ fn extract_root_identifier_from_json(value: &Value) -> Option<String> {
         "TSAsExpression" | "TSNonNullExpression" | "TSSatisfiesExpression" => obj
             .get("expression")
             .and_then(extract_root_identifier_from_json),
+        _ => None,
+    }
+}
+
+/// Extract the root identifier's source start from a JSON AST node.
+fn extract_root_identifier_start_from_json(value: &Value) -> Option<u32> {
+    let obj = value.as_object()?;
+    match obj.get("type").and_then(|node_type| node_type.as_str())? {
+        "Identifier" => obj
+            .get("start")
+            .and_then(Value::as_u64)
+            .and_then(|start| u32::try_from(start).ok()),
+        "MemberExpression" => obj
+            .get("object")
+            .and_then(extract_root_identifier_start_from_json),
+        "ChainExpression" | "TSAsExpression" | "TSNonNullExpression" | "TSSatisfiesExpression" => {
+            obj.get("expression")
+                .and_then(extract_root_identifier_start_from_json)
+        }
         _ => None,
     }
 }
