@@ -2045,8 +2045,11 @@ fn is_parent_chain_unused(ctx: &CssContext) -> bool {
                             // Other pseudo-classes like :hover, :focus don't constrain matching
                         }
                         Some("NestingSelector") => {
-                            // & - matches whatever the parent matches, can't determine unused
-                            return true;
+                            // `&` adds the parent's constraints, but the compound
+                            // around it adds its own: an element matching
+                            // `&.dragging` still has to carry `dragging`. Bailing
+                            // here threw that away — and a compound that is only
+                            // `&` falls out through the no-constraints check below.
                         }
                         _ => {}
                     }
