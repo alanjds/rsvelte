@@ -15,6 +15,38 @@ use rsvelte_core::compiler::preprocess::types::{
 use crate::filter::{FilterOptions, matches};
 use crate::sass_fs::RecordingFs;
 
+/// Grass rejects (and currently panics after an initial blank line on) an
+/// indented-Sass document whose whole body has a common indentation prefix.
+/// Dart Sass treats that prefix as the document's base indentation, which is
+/// the usual shape of a `<style lang="sass">` block inside a Svelte file.
+/// Remove only the prefix shared by every non-blank line, preserving all
+/// relative indentation.
+pub(crate) fn remove_indented_base(source: &str) -> String {
+    let common = source
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start_matches([' ', '\t']).len())
+        .min()
+        .unwrap_or(0);
+    if common == 0 {
+        return source.to_string();
+    }
+
+    let mut output = String::with_capacity(source.len());
+    for chunk in source.split_inclusive('\n') {
+        let (line, newline) = chunk
+            .strip_suffix('\n')
+            .map_or((chunk, ""), |line| (line, "\n"));
+        if line.trim().is_empty() {
+            output.push_str(line);
+        } else {
+            output.push_str(&line[common..]);
+        }
+        output.push_str(newline);
+    }
+    output
+}
+
 /// Options forwarded to the Sass compiler (subset of the dart-sass options
 /// object the JS package accepts).
 #[derive(Debug, Clone, Default)]
@@ -86,7 +118,12 @@ pub fn preprocess_sass(
         options = options.load_path(path);
     }
 
-    let mut css = grass::from_string(content.to_string(), &options).map_err(|e| e.to_string())?;
+    let source = if indented {
+        remove_indented_base(content)
+    } else {
+        content.to_string()
+    };
+    let mut css = grass::from_string(source, &options).map_err(|e| e.to_string())?;
 
     // dart-sass's legacy `render` (which the JS package wraps) emits expanded CSS
     // without a trailing newline; `grass` appends one, so drop it to match.
