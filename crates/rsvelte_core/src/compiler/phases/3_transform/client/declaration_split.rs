@@ -57,6 +57,19 @@ fn collect_edits(script: &str, program: &Program<'_>) -> Vec<Edit> {
         .iter()
         .map(|comment| comment.span)
         .collect();
+    // `ExportNamedDeclaration` is the specifier-only `export { … }` in this AST
+    // (`export let` is `ExportDeclaration`, `export … from` is
+    // `ExportFromDeclaration`). In an instance script it IS the prop
+    // declaration and never reaches the output, so upstream's cursor sees no
+    // node there and a comment before it flushes with the next statement's.
+    let removed: Vec<Span> = program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::ExportNamedDeclaration(export) => Some(export.span),
+            _ => None,
+        })
+        .collect();
     let mut edits = Vec::new();
     for statement in &program.body {
         let (exported, declaration) = match statement {
@@ -73,6 +86,7 @@ fn collect_edits(script: &str, program: &Program<'_>) -> Vec<Edit> {
             exported,
             declaration,
             comments.as_slice(),
+            removed.as_slice(),
         ) {
             edits.push(edit);
         }
@@ -86,6 +100,7 @@ fn split_declaration(
     exported: bool,
     declaration: &VariableDeclaration<'_>,
     comments: &[Span],
+    removed: &[Span],
 ) -> Option<Edit> {
     if declaration.declarations.len() < 2 || declaration.declare {
         return None;
@@ -104,7 +119,8 @@ fn split_declaration(
     // and esrap flushes its leading comments at the first located node inside
     // it — the declarator, which prints after the keyword. A comment trailing
     // the previous statement's line belongs to that statement and stays put.
-    let (leading_start, leading_comments) = leading_own_line_comments(script, start, comments);
+    let (leading_start, leading_comments) =
+        leading_own_line_comments(script, start, comments, removed);
     let keyword_start = declaration.span.start as usize;
     if !script[keyword_start..].starts_with(keyword) {
         return None;
@@ -202,6 +218,7 @@ fn leading_own_line_comments(
     script: &str,
     start: usize,
     comments: &[Span],
+    removed: &[Span],
 ) -> (usize, Vec<String>) {
     let mut run_start = start;
     let mut texts = Vec::new();
@@ -213,7 +230,26 @@ fn leading_own_line_comments(
         .skip_while(|comment| comment.end as usize > start)
     {
         let (from, to) = (comment.start as usize, comment.end as usize);
-        if to > run_start || !script[to..run_start].trim().is_empty() {
+        if to > run_start {
+            break;
+        }
+        let mut gap_start = run_start;
+        // A statement the transform deletes leaves no node for the cursor to
+        // stop at, so the run reaches across it.
+        for span in removed.iter().rev() {
+            let (s, e) = (span.start as usize, span.end as usize);
+            if e <= gap_start
+                && s >= to
+                && script[e..gap_start]
+                    .trim_start()
+                    .trim_start_matches(';')
+                    .trim()
+                    .is_empty()
+            {
+                gap_start = s;
+            }
+        }
+        if !script[to..gap_start].trim().is_empty() {
             break;
         }
         let line_start = script[..from].rfind('\n').map_or(0, |at| at + 1);
