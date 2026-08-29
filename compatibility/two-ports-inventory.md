@@ -702,6 +702,25 @@ they key on. And the flag site is **not** an `*_ast.rs` pass — it is in the ex
 so the "44 passes" denominator this row keeps quoting is not the population. Grep for the
 question, not for the file naming convention.
 
+**Crossing the entry point multiplied the yield.** A generated matrix — 6 binding kinds x 6 entry
+points x 5 shadow shapes, 165 inputs x 4 targets — reported **72** divergences on its first run,
+against 1 for the ten hand-written probes that varied only the binding kind. Three causes, and the
+first is closed: the expression converter's shadow set held a bare `let` and a function parameter
+and nothing else. Its registrar said so — *"destructuring patterns are ignored (they rarely shadow
+a prop name and the code is cleaner without the extra complexity)"* — and a `catch` clause and a
+`for…of` head bound nothing at all. **A comment recording a deliberate simplification is the same
+hiding place as a comment asserting fidelity.** Closing it took 72 to 48, and the reusable part is
+that all three constructs bind for their body only and must hide **both** the read transform and
+`shadowed_prop_names`: the pre-existing `for…of` code removed the transform and not the second, so
+a prop read inside the loop still became `$$props.v`.
+
+The 48 that remain are two causes, both **outside phase 3**. A write through a `catch` parameter
+or a `for…of` binding is recorded on the *component's* binding by phase 2, which shows up as a
+different `$.prop` flag word (24 vs 28), a `$$ownership_validator` upstream does not emit, and a
+store declared as `$.mutable_source(writable(…))`; and a local `let v = {…}` inside a function that
+shadows a legacy promoted state variable is itself lowered to `$.mutable_source`. Both are
+recorded here rather than fixed.
+
 The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available here and is the right
 shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
 property, not a comparison, so the corpus becomes the detector at whatever size it is.

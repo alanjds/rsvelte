@@ -12,7 +12,9 @@ use crate::ast::typed_expr::{JsNode, LiteralValue};
 use crate::compiler::phases::phase2_analyze::scope::BindingKind;
 use crate::compiler::phases::phase3_transform::client::console_wrap;
 use crate::compiler::phases::phase3_transform::client::destructure_transforms::string_expr_has_toplevel_await;
-use crate::compiler::phases::phase3_transform::client::types::ComponentContext;
+use crate::compiler::phases::phase3_transform::client::types::{
+    ComponentContext, IdentifierTransform,
+};
 use crate::compiler::phases::phase3_transform::js_ast::ExprId;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::*;
 use compact_str::CompactString;
@@ -4294,11 +4296,19 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                     .get("param")
                     .filter(|p| !p.is_null())
                     .and_then(|p| convert_param_pattern(p, context));
+                // A catch parameter binds like a function parameter, so it shadows
+                // the same transforms one does — for the body only.
+                let mut names: Vec<String> = Vec::new();
+                if let Some(param_val) = h_obj.get("param").filter(|p| !p.is_null()) {
+                    collect_param_names(param_val, &mut names);
+                }
+                let restore = enter_shadowed_names(&names, context);
                 let body = h_obj
                     .get("body")
                     .and_then(|b| b.as_object())
                     .map(|b| convert_block_statement(b, context))
                     .unwrap_or_else(JsBlockStatement::new);
+                leave_shadowed_names(restore, context);
                 Some(JsCatchClause { param, body })
             });
             let finalizer = obj
@@ -4433,13 +4443,8 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                 && let Some(decls) = left_obj.get("declarations").and_then(|d| d.as_array())
             {
                 for decl in decls {
-                    if let Some(id_obj) = decl
-                        .as_object()
-                        .and_then(|d| d.get("id"))
-                        .and_then(|id| id.as_object())
-                        && let Some(name) = id_obj.get("name").and_then(|n| n.as_str())
-                    {
-                        left_var_names.push(name.to_string());
+                    if let Some(id_val) = decl.as_object().and_then(|d| d.get("id")) {
+                        collect_param_names(id_val, &mut left_var_names);
                     }
                 }
             }
@@ -4497,16 +4502,7 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                         .alloc_expr(JsExpr::Literal(JsLiteral::Undefined))
                 });
 
-            // Save transforms for loop variables
-            let saved_transform = if !left_var_names.is_empty() {
-                let saved = context.state.transform.clone();
-                for name in &left_var_names {
-                    context.state.transform.remove(name);
-                }
-                Some(saved)
-            } else {
-                None
-            };
+            let restore = enter_shadowed_names(&left_var_names, context);
 
             let body = obj
                 .get("body")
@@ -4514,9 +4510,7 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                 .map(|s| context.arena.alloc_stmt(s))
                 .unwrap_or_else(|| context.arena.alloc_stmt(JsStatement::Empty));
 
-            if let Some(saved) = saved_transform {
-                context.state.transform = saved;
-            }
+            leave_shadowed_names(restore, context);
 
             let is_await = obj.get("await").and_then(|a| a.as_bool()).unwrap_or(false);
             // `for...in` and `for...of` share `JsForOfStatement`; the `is_for_in`
@@ -6805,29 +6799,26 @@ fn convert_block_statement_from_jsnode(
     JsBlockStatement::with_body(body)
 }
 
-/// Add the top-level variable-declaration names from a JsNode statement to
-/// `shadowed_prop_names`.  Only simple `Identifier` lhs patterns are handled;
-/// destructuring patterns are ignored (they rarely shadow a prop name and the
-/// code is cleaner without the extra complexity).
+/// Add the names a statement's variable declarations bind to
+/// `shadowed_prop_names`.
+///
+/// A destructuring pattern binds names like any other declaration —
+/// `const { a: v } = …` shadows a prop `v` exactly as `const v = …` does — so
+/// the whole pattern is walked. Reading only a bare `Identifier` here left the
+/// prop's getter on a read the local owns.
 fn register_block_decl_names_jsnode(
     node: &JsNode,
     pa: &ParseArena,
     context: &mut ComponentContext,
 ) {
-    let names: Vec<String> = match node {
-        JsNode::VariableDeclaration { declarations, .. } => pa
-            .get_js_children(*declarations)
-            .iter()
-            .filter_map(|d| match d {
-                JsNode::VariableDeclarator { id, .. } => match pa.get_js_node(*id) {
-                    JsNode::Identifier { name, .. } => Some(name.to_string()),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect(),
-        _ => vec![],
-    };
+    let mut names: Vec<String> = Vec::new();
+    if let JsNode::VariableDeclaration { declarations, .. } = node {
+        for declarator in pa.get_js_children(*declarations) {
+            if let JsNode::VariableDeclarator { id, .. } = declarator {
+                collect_param_names_from_jsnode(pa.get_js_node(*id), &mut names);
+            }
+        }
+    }
     for name in names {
         context.state.shadowed_prop_names.insert(name);
     }
@@ -6985,6 +6976,61 @@ fn convert_statement_from_jsnode(
 }
 
 /// Collect parameter names from a JsNode, avoiding JSON serialization for simple identifiers.
+/// What `names` displaced while a binding construct's body is converted.
+///
+/// A parameter, a `catch` clause and a `for…of` head all bind names for their
+/// body only, and every one of them has to hide the same two things: the read
+/// transform, and `shadowed_prop_names`, which is what the non-source-prop
+/// rewrite gates on. Removing only the transform leaves `$$props.v` on a local.
+type SavedTransforms = (
+    im::HashMap<String, IdentifierTransform>,
+    im::HashMap<String, ()>,
+);
+
+struct ShadowedNames {
+    transform: Option<SavedTransforms>,
+    newly_shadowed: Vec<String>,
+}
+
+fn enter_shadowed_names(names: &[String], context: &mut ComponentContext) -> ShadowedNames {
+    if names.is_empty() {
+        return ShadowedNames {
+            transform: None,
+            newly_shadowed: Vec::new(),
+        };
+    }
+    let saved = (
+        context.state.transform.clone(),
+        context.state.transform_deep_read.clone(),
+    );
+    let newly_shadowed: Vec<String> = names
+        .iter()
+        .filter(|n| !context.state.shadowed_prop_names.contains(n.as_str()))
+        .cloned()
+        .collect();
+    for name in names {
+        context.state.transform.remove(name);
+        context.state.transform_deep_read.remove(name);
+    }
+    for name in &newly_shadowed {
+        context.state.shadowed_prop_names.insert(name.clone());
+    }
+    ShadowedNames {
+        transform: Some(saved),
+        newly_shadowed,
+    }
+}
+
+fn leave_shadowed_names(restore: ShadowedNames, context: &mut ComponentContext) {
+    for name in &restore.newly_shadowed {
+        context.state.shadowed_prop_names.remove(name);
+    }
+    if let Some((transform, deep_read)) = restore.transform {
+        context.state.transform = transform;
+        context.state.transform_deep_read = deep_read;
+    }
+}
+
 fn collect_param_names_from_jsnode(node: &JsNode, names: &mut Vec<String>) {
     match node {
         JsNode::Identifier { name, .. } => {
