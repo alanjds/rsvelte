@@ -49,3 +49,15 @@ fn a_block_comment_before_the_member_keeps_lowering_the_assignment() {
         "{out}"
     );
 }
+
+/// A template literal's interior lines are not members either, and here the
+/// split is not a parse failure but a *value* change: the member blocks are
+/// re-emitted with esrap's margins, so a blank line landed inside the string.
+#[test]
+fn a_multiline_template_literal_keeps_its_own_line_breaks() {
+    let out = module(&format!(
+        "export class Q {{\n{BODY}\n\tmsg = `a ${{ 1 }} b\nc ${{ 2 }} d`;\n}}\n"
+    ));
+    assert!(!out.contains("COMPILE_ERROR"), "{out}");
+    assert!(out.contains("`a ${1} b\nc ${2} d`"), "{out}");
+}
