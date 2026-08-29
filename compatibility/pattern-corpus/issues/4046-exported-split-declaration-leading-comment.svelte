@@ -1,0 +1,28 @@
+<!--
+  esrap flushes a rebuilt statement's leading comments at the first LOCATED node
+  inside it, and only a SPLIT declaration is rebuilt. `a` (two declarators) must
+  therefore print its comment AFTER the keyword, while `solo` (one declarator)
+  keeps the source statement's own `loc` and prints it BEFORE. Both halves have
+  to hold: a fix that moves every prop declaration's comment breaks the second,
+  and it is the prop lowering — which rebuilds the declaration from its own text
+  — that has to carry the moved comment through.
+-->
+<script>
+	// lead line
+	export let a = [],
+		b = 2;
+
+	/* lead block */
+	export let c = 3,
+		d = 4;
+
+	// one
+	// two
+	export let e = 5,
+		f = 6;
+
+	// solo stays put
+	export let solo = 7;
+</script>
+
+{a}{b}{c}{d}{e}{f}{solo}

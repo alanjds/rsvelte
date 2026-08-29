@@ -535,6 +535,10 @@ pub(super) fn transform_let_with_reexported_props(
     let leading_ws: &str = &line[..line.len() - line.trim_start().len()];
 
     let rest_raw = trimmed[4..].trim();
+    // Same as `transform_export_let`: `declaration_split` puts a comment the
+    // declaration carried between the keyword and the declarator, and this
+    // function rebuilds the declaration from its own text.
+    let (declaration_comments, rest_raw) = split_own_line_leading_comments(rest_raw);
     // Strip trailing JS comments (// and /* */) before splitting declarators so that
     //   `let name; // comment`
     // does not produce `name; // comment` as the declarator name.
@@ -748,7 +752,36 @@ pub(super) fn transform_let_with_reexported_props(
         }
     }
 
+    reprint_declaration_comments(&mut results, &declaration_comments, leading_ws, kw);
+
     Some(results.join("\n"))
+}
+
+/// Print the comments a rebuilt declaration carried back between its keyword and
+/// its first declarator, which is where esrap flushes them.
+fn reprint_declaration_comments(
+    results: &mut [String],
+    comments: &[String],
+    leading_ws: &str,
+    kw: &str,
+) {
+    if comments.is_empty() {
+        return;
+    }
+    let Some(first) = results.first_mut() else {
+        return;
+    };
+    let Some(tail) = first.strip_prefix(&format!("{leading_ws}{kw} ")) else {
+        return;
+    };
+    let mut rebuilt = format!("{leading_ws}{kw} ");
+    for comment in comments {
+        rebuilt.push_str(comment);
+        rebuilt.push('\n');
+        rebuilt.push_str(leading_ws);
+    }
+    rebuilt.push_str(tail);
+    *first = rebuilt;
 }
 
 /// Apply prop source read transformations inside the default value of $.prop() calls.
@@ -1124,6 +1157,13 @@ pub(super) fn transform_export_let(line: &str, analysis: &ComponentAnalysis) -> 
     // `trimmed` already points past any leading block comment.
     let rest_raw = trimmed[declarator_at..].trim();
 
+    // `declaration_split` moves a comment that led the source declaration to
+    // between the keyword and the declarator, because upstream rebuilds a split
+    // declaration and esrap flushes its comments at the first located node
+    // inside it. Keep it while the declarators are parsed, and print it back
+    // there rather than losing it to `strip_js_comments` below.
+    let (declaration_comments, rest_raw) = split_own_line_leading_comments(rest_raw);
+
     // esrap flushes a same-line comment after the source declaration on the
     // initializer node. Once that initializer becomes the final `$.prop`
     // argument, the comment therefore belongs inside the generated call. Keep
@@ -1339,11 +1379,47 @@ pub(super) fn transform_export_let(line: &str, analysis: &ComponentAnalysis) -> 
         last.insert_str(close, &format!(" {}\n", comment));
     }
 
+    reprint_declaration_comments(&mut results, &declaration_comments, leading_ws, kw);
+
     if comment_prefix.is_empty() {
         results.join("\n")
     } else {
         format!("{}{}", comment_prefix, results.join("\n"))
     }
+}
+
+/// Peel the comments `declaration_split` moved between the keyword and the
+/// declarator. Only a comment that ends its line is one of those; a comment
+/// sharing the declarator's line was written there and stays put.
+fn split_own_line_leading_comments(text: &str) -> (Vec<String>, &str) {
+    let mut comments = Vec::new();
+    let mut rest = text;
+    loop {
+        let trimmed = rest.trim_start();
+        let end = if trimmed.starts_with("//") {
+            match trimmed.find('\n') {
+                Some(at) => at,
+                None => break,
+            }
+        } else if trimmed.starts_with("/*") {
+            match trimmed.find("*/") {
+                Some(at) => at + 2,
+                None => break,
+            }
+        } else {
+            break;
+        };
+        let after = &trimmed[end..];
+        if !after
+            .trim_start_matches([' ', '\t', '\r'])
+            .starts_with('\n')
+        {
+            break;
+        }
+        comments.push(trimmed[..end].trim_end().to_string());
+        rest = after;
+    }
+    (comments, rest.trim())
 }
 
 /// Return the leading comment trivia of an initializer, including the spacing
