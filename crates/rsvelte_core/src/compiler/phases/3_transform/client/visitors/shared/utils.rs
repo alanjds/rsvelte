@@ -3559,7 +3559,7 @@ fn push_folded_tag_comments(tag_start: u32, tag_end: u32, context: &mut Componen
     }
 }
 
-/// Drop the opaque chunks [`push_folded_tag_comments`] emitted for the tag in
+/// Drop the opaque chunks `push_folded_tag_comments` emitted for the tag in
 /// `[tag_start, tag_end)`. A generated node anchored on the same source region
 /// carries those comments itself, and keeping both prints each one twice.
 pub fn drop_folded_tag_comments(
