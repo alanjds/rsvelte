@@ -1964,7 +1964,9 @@ pub(crate) fn is_code_empty(content: &str, ts: bool) -> bool {
     }
     with_oxc_allocator(|allocator| {
         let result = OxcParser::new(allocator, content, expression_source_type(ts)).parse();
-        result.program.body.is_empty() && result.diagnostics.is_empty()
+        result.program.body.is_empty()
+            && result.program.directives.is_empty()
+            && result.diagnostics.is_empty()
     })
 }
 
@@ -2121,17 +2123,18 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
             return Some(vec![at as usize]);
         }
         let first_error = result.diagnostics.first()?;
-        let mut positions = Vec::with_capacity(first_error.labels.len() * 2);
+        let mut positions = Vec::with_capacity(first_error.labels.len());
         for label in &first_error.labels {
             // OXC diagnostics do not consistently put the offending token in
             // the first label. In particular, adjacent literals separated by
             // a comment label the recovered expression first and the second
-            // literal later. Both label edges are parser-provided token
-            // boundaries; the complete-prefix check below decides which edge
-            // is where acorn stopped.
+            // literal later. Label ends, however, also expose recovery ranges
+            // inside invalid assignments and enclosing calls; those are not
+            // tokens where acorn returned an expression.
             let start = label.offset() as usize;
-            let end = start + label.len() as usize;
-            positions.extend([start, end].into_iter().filter_map(|at| at.checked_sub(1)));
+            if let Some(at) = start.checked_sub(1) {
+                positions.push(at);
+            }
         }
         positions.sort_unstable();
         positions.dedup();
@@ -2142,6 +2145,9 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
         // A trailing-token error has leftover input *before* the synthetic
         // closing `)`; an incomplete expression errors at/after the end.
         content_pos < content.len()
+            // A diagnostic range ending after a recovered expression can start
+            // on the separating space. Acorn stops at the following token.
+            && !content.as_bytes()[content_pos].is_ascii_whitespace()
             // A comma continues the expression (as a SequenceExpression).
             && content.as_bytes().get(content_pos) != Some(&b',')
             // Acorn returns only after consuming one complete expression.
@@ -13781,6 +13787,15 @@ fn convert_export_named_as_node(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn code_empty_ignores_comments_but_not_string_directives() {
+        assert!(is_code_empty(" /* comment */ // tail", false));
+        assert!(!is_code_empty("'/*'", false));
+        assert!(!is_code_empty("\"//\"", true));
+    }
+
     /// Upstream reaches `eat(close)` only when acorn RETURNED an expression, so
     /// leftover input is a missing close token and anything else is a
     /// `js_parse_error`. OXC labels a construct it consumed and then rejected
@@ -13826,8 +13841,6 @@ mod tests {
         // close-token check.
         assert_eq!(trailing_token_offset("src: string;", false), Some(3));
     }
-
-    use super::*;
 
     #[test]
     fn recovered_expression_uses_acorns_strict_mode_error() {
