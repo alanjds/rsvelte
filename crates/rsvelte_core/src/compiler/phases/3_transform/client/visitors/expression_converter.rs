@@ -756,8 +756,14 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                     JsExpr::Spanned(inner, _, _)
                         if matches!(context.arena.get_expr(*inner), JsExpr::Identifier(_))
                 );
+                // `get_binding` resolves by name from the root scope, so a
+                // parameter shadowing a prop still answers with the prop's
+                // binding — the identifier arm and the rest-prop branch above
+                // both consult `shadowed_prop_names` for exactly that reason,
+                // and an each key function's parameter is the case that needs it.
                 if is_spanned_identifier
                     && let Some(name) = get_jsnode_identifier_name(object_node)
+                    && !context.state.shadowed_prop_names.contains(name.as_str())
                     && let Some(binding) = context.state.get_binding(&name)
                     && matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
                     && let Some(read) = context.state.transform.get(&name).and_then(|t| t.read)
