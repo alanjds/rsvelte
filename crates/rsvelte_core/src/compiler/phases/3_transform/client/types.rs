@@ -2232,6 +2232,31 @@ impl<'a> ComponentClientTransformState<'a> {
             )
     }
 
+    /// Whether the reference at `start` uniquely belongs to a plain `let`/`const`
+    /// /`var` declaration, so a same-named entry in the transform map belongs to
+    /// some other binding and must not claim this write.
+    ///
+    /// `reference_is_shadowed_non_prop` answers a different question — it is true
+    /// of a top-level `$state` too, because every kind but a prop counts there.
+    pub fn reference_is_plain_local(&self, name: &str, start: u32) -> bool {
+        let Some(indices) = self.scope_root.bindings_by_name.get(name) else {
+            return false;
+        };
+        let mut owners = indices
+            .iter()
+            .filter_map(|&index| self.scope_root.bindings.get(index as usize))
+            .filter(|binding| {
+                binding
+                    .references
+                    .iter()
+                    .any(|reference| reference.start == start)
+            });
+        let Some(owner) = owners.next() else {
+            return false;
+        };
+        owners.next().is_none() && matches!(owner.kind, BindingKind::Normal)
+    }
+
     /// Whether `scope_index` is the current scope (`self.scope`) or one of its
     /// ancestors. Used to restrict constant-folding of snippet-scoped template
     /// declarations to lexically reachable references (upstream resolves these

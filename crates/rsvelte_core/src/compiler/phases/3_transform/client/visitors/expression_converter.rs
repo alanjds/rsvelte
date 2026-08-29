@@ -1216,9 +1216,15 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
 
             let arg_node = pa.get_js_node(*argument);
             let original_root_name = extract_root_identifier_from_jsnode(arg_node, pa);
+            let original_root_start = extract_root_identifier_start_from_jsnode(arg_node, pa);
+            let root_is_shadow = original_root_name.as_deref().is_some_and(|name| {
+                original_root_start
+                    .is_some_and(|start| context.state.reference_is_plain_local(name, start))
+            });
 
             // Check if the argument is a simple identifier with an update transform
             if let Some(name_str) = get_jsnode_identifier_name(arg_node)
+                && !root_is_shadow
                 && let Some(update_transform) = context.state.transform.get(&name_str)
                 && let Some(update_fn) = update_transform.update
             {
@@ -1253,6 +1259,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                 prefix,
                 context.arena.get_expr(conv_argument),
                 original_root_name.as_deref(),
+                original_root_start,
                 context,
             ) {
                 transformed
@@ -5250,6 +5257,17 @@ fn try_transform_assignment(
     let root_name = extract_root_identifier_from_expr(&context.arena, left)
         .or_else(|| original_root_name.map(|s| s.to_string()))?;
 
+    // Upstream resolves the write target once, through `scope.get(name)`; phase 3's
+    // current scope here is the template's, so a name lookup alone reaches the prop
+    // and a shadow's member write is lowered as a prop write. The dev-mode mutation
+    // validator already asks this question — the two must agree or the same source
+    // is judged a prop mutation on one path and not the other.
+    if original_root_start
+        .is_some_and(|start| context.state.reference_is_plain_local(&root_name, start))
+    {
+        return None;
+    }
+
     // Check if there's a transform for this identifier
     let transform = context.state.transform.get(&root_name)?;
 
@@ -7077,6 +7095,7 @@ fn convert_update_expression(
         prefix,
         context.arena.get_expr(argument),
         original_root_name.as_deref(),
+        argument_value.and_then(get_root_start_position),
         context,
     ) {
         transformed
@@ -7141,6 +7160,7 @@ fn try_transform_update(
     prefix: bool,
     argument: &JsExpr,
     original_root_name: Option<&str>,
+    original_root_start: Option<u32>,
     context: &ComponentContext,
 ) -> Option<JsExpr> {
     use crate::compiler::phases::phase3_transform::js_ast::builders as b;
@@ -7151,6 +7171,12 @@ fn try_transform_update(
     let root_name = original_root_name
         .map(str::to_owned)
         .or_else(|| extract_root_identifier_from_expr(&context.arena, argument))?;
+
+    if original_root_start
+        .is_some_and(|start| context.state.reference_is_plain_local(&root_name, start))
+    {
+        return None;
+    }
 
     // Check if there's a transform for this identifier
     let transform = context.state.transform.get(&root_name)?;

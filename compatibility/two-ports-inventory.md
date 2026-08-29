@@ -686,6 +686,56 @@ The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available her
 shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
 property, not a comparison, so the corpus becomes the detector at whatever size it is.
 
+**That gate now exists — `RSVELTE_ASSERT_SIGNAL_DISCIPLINE`
+(`3_transform/client/signal_discipline.rs`) — and what it cost to make it discriminate is worth
+more than the gate.** The first formulation asserted that no signal sink's first argument may
+resolve to a symbol the same program declares as a plain value. It reported 9 violations on the
+corpus, of which 4 components are byte-identical to official; narrowing it until the corpus
+reported 0 took two rules — a `const` cannot be judged, because upstream emits `const st = 1`
+beside a `$.set(st, …)` in the accessor generated for `export const st = $state(1)`, and an
+initialiser that is an identifier cannot, because `let i = $$index_4` receives a signal. **A
+property gate that reads 0 on the corpus is exactly what a property gate that sees nothing reads,
+and this one saw nothing**: ablating the five shadow guards above and recompiling this row's own
+repro produced `$.mutate(stats, …)` / `$.set(count, 1)` / `$.update(count)` with the gate armed
+and silent, because `stats` and `count` are *parameters* of a user callback and the rule skipped
+every parameter as unknown provenance. The defect's own container was inside the exclusion.
+
+Two changes make it discriminate, and each is a distinction the first version collapsed. A
+parameter is unjudgeable only when its function is **passed directly to a runtime helper** —
+`$.each(…, ($$anchor, item, $$index) => …)` really does hand over signals — and that is not
+answerable by nesting depth, because `$.set(s, xs.reduce((acc) => …))` puts a user callback inside
+a runtime call's argument. And a prop write has its own sink: the generated shape is
+`name(name().x = v, true)`, so that callee must be a `$.prop` / `$.rest_props` accessor. Ablated,
+the gate now reports all six wrong writes across the two repros; restored, it is silent on all
+three.
+
+**Its first clean run found a live defect, in a file no output gate could have reported it from.**
+`sparrow-app/…/TeamSidePanel.svelte` has `export let data` shadowed by a `let data = await …`
+inside a template event handler, and rsvelte emitted `data(data().isNewInvite = false, true)`
+where official emits `data.isNewInvite = false`. That id is already a listed entry on
+`known-failures.{client,client-dev,server}.json` for two unrelated divergences (a scoping class
+argument, a lost comment), so the output ratchet suppressed this one — the
+"a ratchet entry suppresses everything its key cannot tell apart" rule, observed from the other
+side. The fix is the same shadow question one entry point over: an event handler's body is
+lowered by the expression converter, whose scope is the *template's*, so the name lookup reaches
+the prop. It is **two** lowerings — `try_transform_assignment` and `try_transform_update` — and
+fixing only the first left `data.count++` wrapped, which the gate then reported against the
+repro written for the first half.
+
+**The predicate is the part to copy carefully.** `reference_is_shadowed_non_prop` reads like the
+right question and is not: it is true of a top-level `$state` too, because every kind but a prop
+counts as "not a prop" there. Using it as the bail changed **736** corpus outputs, 724 of them
+files that were passing, turning `$.set(layout, "…")` into `$.set(layout, "…", true)` across the
+corpus. `reference_is_plain_local` — the reference uniquely belongs to a `BindingKind::Normal`
+declaration — changes exactly **1**, the file the gate flagged, with 0 violations over 34,728
+entries × client + client-dev.
+
+What the gate still cannot see is the **read** side, and that is measured rather than assumed: in
+the same handler `items.selected = data` emits `items(items().selected = data(), true)` where
+official emits `data`, because the RHS is transformed eagerly with an empty `LocalScope`. A read
+has no sink, so no signal-discipline violation exists to report; it is a separate cause and is
+open.
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the
