@@ -1143,6 +1143,8 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
             // the typed path (taken for event-handler bodies) was missing it, so a
             // nested handler mutating an outer item dropped the outer block's index.
             if let Some(root) = original_root_name.as_deref()
+                && !original_root_start
+                    .is_some_and(|start| context.state.reference_is_plain_local(root, start))
                 && let Some((_, flag)) = context
                     .state
                     .each_item_name_flags
@@ -4839,8 +4841,12 @@ fn convert_assignment_expression(
     // `uses_index = true` on the OWNING each block, forcing the `$$index` callback
     // parameter to be emitted even when the produced code does not reference it.
     // We look the name up in `each_item_name_flags` (most-recent first) so a nested
-    // each body that mutates an outer item still sets the outer block's flag.
+    // each body that mutates an outer item still sets the outer block's flag — and
+    // skip a reference a local declaration owns, which upstream's `scope.get` never
+    // reaches the item for.
     if let Some(root) = original_root_name.as_deref()
+        && !original_root_start
+            .is_some_and(|start| context.state.reference_is_plain_local(root, start))
         && let Some((_, flag)) = context
             .state
             .each_item_name_flags

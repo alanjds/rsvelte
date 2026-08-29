@@ -682,6 +682,26 @@ hatch for exactly this — `ambiguous_state_names` (`client/mod.rs:5429`) re-ask
 `state_call_ast::is_non_reactive` consumes it — while the component pipeline neither computes it
 nor reaches that lowering, which makes the `$state(…)` lowering itself a second pair.
 
+**A battery of ten shadow probes then measured what the gate cannot.** One input per binding kind
+— a store, a store subscription, a rest prop, `$state.raw`, `$state.snapshot`, an arrow parameter
+over a `$state`, a `$derived`, an each item, a prop called as a function, a `$`-prefixed local —
+each shadowing the component's binding inside a nested scope, compared to official on all four
+targets. **Nine of ten were already correct; the tenth was live.** Upstream's `EachBlock`
+`assign` / `mutate` transforms set `uses_index` on the owning block, forcing the `$$index`
+callback parameter even where nothing reads it, and they reach the item through `scope.get`;
+rsvelte looked the root up in `each_item_name_flags` by NAME, at two sites (the typed and the JSON
+assignment paths), so a handler declaring `let row = …` over the item emitted a `$$index`
+parameter official does not. That divergence is **client-only** — the server emits no such
+parameter — so a probe run on one target would have scored it clean.
+
+Two things the battery is worth for beyond the one defect. **The nine passes are now a measured
+`[D]`, not an assumption**: `store_assign_ast`, `store_update_ast`, `store_member_mutate_ast` and
+`store_unsub_wrap_ast` carry 37 `&[String]` parameters between them and answer correctly anyway,
+because a `$`-prefixed name cannot be redeclared in Svelte and the plain store name is not what
+they key on. And the flag site is **not** an `*_ast.rs` pass — it is in the expression converter —
+so the "44 passes" denominator this row keeps quoting is not the population. Grep for the
+question, not for the file naming convention.
+
 The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available here and is the right
 shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
 property, not a comparison, so the corpus becomes the detector at whatever size it is.
