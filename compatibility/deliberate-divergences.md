@@ -508,3 +508,53 @@ compiler diagnostic — which is not a `svelte/…` rule id — is outside the c
 The exit code is not a finding, and until gate 36 nothing compared it. Four entries that *were*
 rsvelte over-rejections hid in this same bucket until then (#3127, #3128); they are fixed and no
 longer listed, which is why the count reads 56 and not 60.
+
+---
+
+## The default lint preset carries three rules upstream does not, and drops two
+
+**Ratchet** `compatibility/lint-preset-known-failures.json`, all 5 entries.
+**Pinned by** `crates/rsvelte_lint/tests/comment_directive.rs` (9 tests),
+`crates/rsvelte_lint/src/rules/no_undef.rs` (6), `no_unused_vars.rs` (23) and
+`no_companion_module.rs` (5), plus `pnpm run test:type-aware-lint` (9).
+
+### Input
+
+Any project linted with no configuration at all. The gate compares
+`eslint-plugin-svelte`'s `flat/recommended` against `rsvelte-lint`'s `recommended`.
+
+### Both outputs, measured by `scripts/compat-corpus/lint-preset.mjs`
+
+Every rule both sides ship now agrees on its default severity — the 21 that did not were
+an incomplete transcription and were fixed, not listed. What remains is membership:
+
+| entry | upstream | rsvelte |
+|---|---|---|
+| `svelte/system` | a rule id | not a rule — the same behaviour is `suppression.rs` |
+| `svelte/@typescript-eslint/no-unnecessary-condition` | a rule id | absent from the native registry |
+| `svelte/no-undef` | not shipped | shipped |
+| `svelte/no-unused-vars` | not shipped | shipped |
+| `svelte/no-companion-module-shadow` | not shipped | shipped |
+
+### Why upstream produces it
+
+`eslint-plugin-svelte` runs *inside* ESLint. Comment directives are ESLint's own job, so the
+plugin models them as an internal rule id; the core `no-undef` / `no-unused-vars` come from
+ESLint itself with the plugin's parser feeding them; and a type-aware wrapper can assume
+`typescript-eslint` is present.
+
+### Why rsvelte's form is the correct one
+
+`rsvelte-lint` is a single binary with no ESLint underneath it. It must carry the core checks
+or leave them unavailable, and it implements directives as a mechanism rather than a rule
+because there is no rule pipeline to hang them on. The type-aware wrapper's counterpart lives
+in the out-of-workspace `rsvelte_lint_types` crate, which needs a running `tsgo` — a scope
+boundary, not a missing feature.
+
+### Why no gate sees it
+
+`scripts/compat-corpus/lint-universe.mjs` **intersects** the two rule lists before any
+finding-level comparison, so a rule only one side ships is never enabled during a comparison.
+All five are invisible to the other eight lint gates by construction, which is why this gate
+keys on membership at all. The first version keyed on membership *alone* and reported 29
+differences; adding severity to the key took it to 50 and surfaced the 21 real ones.
