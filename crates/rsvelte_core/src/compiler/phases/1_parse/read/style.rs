@@ -653,14 +653,14 @@ impl<'a> Parser<'a> {
             })
             .collect();
 
-        // Validate CSS content before parsing.
         // If the content has non-whitespace, non-comment text but no '{' character,
-        // it cannot be valid CSS (no rules can be formed).
-        // This corresponds to CSS-Tree's error when encountering invalid CSS in the
-        // official Svelte compiler.
+        // it cannot be valid CSS (no rules can be formed). Upstream has no such
+        // check: it reports wherever its recursive CSS parse first fails, so this
+        // raw-text approximation is consulted only once that parse is silent.
         //
         // Skipped only for a non-CSS `lang` block in lenient (lint) mode (see
         // the string-quote check above).
+        let mut no_rule_error = None;
         if !lenient_non_css {
             let trimmed = style_content.trim_ws();
             if !trimmed.is_empty() {
@@ -678,7 +678,7 @@ impl<'a> Parser<'a> {
                         let err_pos = first_line_comment
                             .or(colon_pos)
                             .unwrap_or(content_start + style_content.len());
-                        return Err(crate::error::ParseError::svelte(
+                        no_rule_error = Some(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
                             (err_pos, err_pos),
@@ -723,7 +723,7 @@ impl<'a> Parser<'a> {
                         // Non-empty CSS content with no blocks and no at-rules - invalid
                         let err_pos =
                             first_line_comment.unwrap_or(content_start + style_content.len());
-                        return Err(crate::error::ParseError::svelte(
+                        no_rule_error = Some(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
                             (err_pos, err_pos),
@@ -739,6 +739,9 @@ impl<'a> Parser<'a> {
         // tokens like `$blue`) propagate to the user instead of being
         // silently dropped.
         let css_children = if self.should_defer_template_parse() {
+            if let Some(err) = no_rule_error {
+                return Err(err);
+            }
             Vec::new() // Will be resolved by ensure_css_parsed() before analysis
         } else if lenient_non_css {
             // Non-CSS `lang` block in lint mode: the body is sass/scss/stylus/…,
@@ -747,7 +750,11 @@ impl<'a> Parser<'a> {
             // children, so the surrounding template still lints normally.
             Vec::new()
         } else {
-            parse_css_strict(style_content, content_start, self.content_end)?
+            let children = parse_css_strict(style_content, content_start, self.content_end)?;
+            if let Some(err) = no_rule_error {
+                return Err(err);
+            }
+            children
         };
 
         // Capture the preceding HTML comment for svelte-ignore support.
