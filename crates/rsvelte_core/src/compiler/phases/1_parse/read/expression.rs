@@ -5317,9 +5317,16 @@ fn create_function_expression<'a>(
         let body_start = offset + body.span.start as usize - 1;
         let body_end = offset + body.span.end as usize - 1;
         let statements: Vec<JsNode> = body
-            .statements
+            .directives
             .iter()
-            .filter_map(|stmt| convert_statement(arena, stmt, offset, line_offsets))
+            .map(|directive| {
+                convert_function_body_directive(arena, directive, offset, 1, line_offsets, false)
+            })
+            .chain(
+                body.statements
+                    .iter()
+                    .filter_map(|stmt| convert_statement(arena, stmt, offset, line_offsets)),
+            )
             .collect();
         arena.alloc_js_node(JsNode::BlockStatement {
             start: body_start as u32,

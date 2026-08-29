@@ -362,11 +362,13 @@ impl<'a> Parser<'a> {
         let mut quote: Option<u8> = None;
         let mut in_url = false;
         let mut escaped = false;
-        // Upstream tests `</style` only between rules, so a `<` inside a block or
-        // a parenthesised value is CSS text: `.a { color: red; </style> }` is a
-        // `css_empty_declaration` and `calc(</style>)` a declaration value.
+        // Upstream tests `</style` only between rules, so a `<` inside a block is
+        // CSS text: `.a { color: red; </style> }` is a `css_empty_declaration`.
+        // Parenthesis depth is deliberately NOT tracked — upstream's readers do
+        // not balance `(` either, so an unclosed one (an SCSS `// (` comment, or
+        // `x: (;`) would otherwise swallow the real closing tag and turn the rest
+        // of the component into CSS.
         let mut brace_depth = 0usize;
-        let mut paren_depth = 0usize;
         let mut i = self.index;
 
         if !tokenise {
@@ -396,18 +398,12 @@ impl<'a> Parser<'a> {
                 quote = None;
             } else if ch == b')' {
                 in_url = false;
-                if quote.is_none() {
-                    paren_depth = paren_depth.saturating_sub(1);
-                }
             } else if quote.is_none() && (ch == b'"' || ch == b'\'') {
                 quote = Some(ch);
             } else if ch == b'(' && i >= content_start + 3 && &bytes[i - 3..i] == b"url" {
                 in_url = true;
-                paren_depth += 1;
             } else if quote.is_none() && !in_url {
-                if ch == b'(' {
-                    paren_depth += 1;
-                } else if ch == b'{' {
+                if ch == b'{' {
                     brace_depth += 1;
                 } else if ch == b'}' {
                     brace_depth = brace_depth.saturating_sub(1);
@@ -427,7 +423,7 @@ impl<'a> Parser<'a> {
                         i += 4 + off + 3;
                         continue;
                     }
-                    if brace_depth == 0 && paren_depth == 0 {
+                    if brace_depth == 0 {
                         self.index = i;
                         if self.is_valid_closing_tag("</style") {
                             return (first_invalid_lt, false, first_line_comment);
@@ -1895,7 +1891,16 @@ impl<'a> CssParser<'a> {
         // the value after those blocks close.
         let is_custom_property = property.starts_with("--");
         let value_start = self.index;
-        let mut paren_depth = 0;
+        // Upstream's `read_value` tracks exactly one bracket, `url(`: every other
+        // `(` is ordinary text, so a `;`/`{`/`}` inside one still ends the value.
+        let mut in_url = false;
+        // The last three bytes `value` would hold, for upstream's `url(` test.
+        let mut tail = [0u8; 3];
+        let push_tail = |tail: &mut [u8; 3], c: char| {
+            tail[0] = tail[1];
+            tail[1] = tail[2];
+            tail[2] = if c.is_ascii() { c as u8 } else { 0 };
+        };
         let mut bracket_depth = 0;
         let mut brace_depth = 0;
         let mut in_string: Option<char> = None;
@@ -1903,8 +1908,10 @@ impl<'a> CssParser<'a> {
             let c = self.current_char();
             // CSS escape: `\<x>` — consume both bytes verbatim.
             if c == '\\' {
+                push_tail(&mut tail, '\\');
                 self.advance();
                 if !self.is_eof() {
+                    push_tail(&mut tail, self.current_char());
                     self.advance();
                 }
                 continue;
@@ -1913,11 +1920,13 @@ impl<'a> CssParser<'a> {
                 if c == quote {
                     in_string = None;
                 }
+                push_tail(&mut tail, c);
                 self.advance();
                 continue;
             }
             if c == '"' || c == '\'' {
                 in_string = Some(c);
+                push_tail(&mut tail, c);
                 self.advance();
                 continue;
             }
@@ -1932,8 +1941,8 @@ impl<'a> CssParser<'a> {
             }
 
             match c {
-                '(' => paren_depth += 1,
-                ')' => paren_depth -= 1,
+                '(' if &tail == b"url" => in_url = true,
+                ')' => in_url = false,
                 '[' if is_custom_property => bracket_depth += 1,
                 ']' if is_custom_property && bracket_depth > 0 => bracket_depth -= 1,
                 '{' if is_custom_property => brace_depth += 1,
@@ -1941,20 +1950,21 @@ impl<'a> CssParser<'a> {
                 // observable for unprocessed SCSS interpolation: the first `#{`
                 // is mistaken for the at-rule block and the real opener then
                 // terminates the declaration value.
-                '{' if paren_depth == 0 => break,
+                '{' if !in_url => break,
                 '}' if is_custom_property && brace_depth > 0 => brace_depth -= 1,
-                '}' if paren_depth == 0
+                '}' if !in_url
                     && (!is_custom_property || (bracket_depth == 0 && brace_depth == 0)) =>
                 {
                     break;
                 }
-                ';' if paren_depth == 0
+                ';' if !in_url
                     && (!is_custom_property || (bracket_depth == 0 && brace_depth == 0)) =>
                 {
                     break;
                 }
                 _ => {}
             }
+            push_tail(&mut tail, c);
             self.advance();
         }
         let value = self.source[value_start..self.index].trim_ws().to_string();

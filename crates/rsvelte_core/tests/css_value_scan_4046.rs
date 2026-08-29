@@ -139,3 +139,31 @@ fn a_line_comment_that_reaches_a_brace_is_still_an_identifier_error() {
         );
     }
 }
+
+#[test]
+fn a_plain_paren_is_not_a_bracket_the_value_scan_balances() {
+    // `url(` is the only one, so a `;` or `}` inside `calc(` / `attr(` still
+    // terminates the value. Both parens here are balanced, which is what keeps
+    // this row about the value scan alone rather than about the `</style`
+    // search (`style_close_tag_scan_3281.rs` owns that half).
+    //
+    // `calc(1;2)`: the value ends at the `;`, so `2)` is read as the next block
+    // item — a property with no value.
+    let semi = "<p class=\"a\">x</p>\n\n<style>\n\t.a {\n\t\tcolor: calc(1;2);\n\t}\n</style>\n";
+    expect_error(
+        semi,
+        "css_empty_declaration",
+        semi.find("2)").unwrap(),
+        "semicolon inside calc(",
+    );
+
+    // `attr(x}y)`: the value ends at the `}`, which closes the rule, and `y)`
+    // is then a selector.
+    let brace = "<p class=\"a\">x</p>\n\n<style>\n\t.a {\n\t\tcolor: attr(x}y);\n\t}\n</style>\n";
+    expect_error(
+        brace,
+        "css_expected_identifier",
+        brace.find("y)").unwrap() + 1,
+        "brace inside attr(",
+    );
+}

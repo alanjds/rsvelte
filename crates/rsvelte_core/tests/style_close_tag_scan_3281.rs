@@ -208,3 +208,56 @@ fn balanced_apostrophes_in_scss_line_comments_report_the_eof_upstream_reports() 
     let at = source.trim_end().len() as u32;
     assert_eq!(d.span, Some((at, at)), "{err:?}");
 }
+
+/// The three rows below are the negative direction of the `url(` tracking
+/// above: rsvelte also counted plain parenthesis depth here and required it to
+/// be zero before testing `</style`, so a single unclosed `(` anywhere in the
+/// CSS made the scan run past the real closing tag and swallow the rest of the
+/// component. Upstream balances no bracket but `url(`, so every one of these
+/// compiles there (Svelte 5.56.10, measured).
+fn compiles(source: &str) -> Result<(), String> {
+    match compile(
+        source,
+        CompileOptions {
+            filename: Some("T.svelte".to_string()),
+            generate: GenerateMode::Client,
+            dev: false,
+            css: CssMode::External,
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("{:?}", e.diagnostic().code)),
+    }
+}
+
+#[test]
+fn an_unclosed_paren_in_a_value_does_not_hide_the_closing_tag() {
+    let source = "<p class=\"a\">x</p>\n\n<style lang=\"scss\">\n\t.a {\n\t\tx: (;\n\t\tcolor: red;\n\t}\n</style>\n";
+    assert_eq!(compiles(source), Ok(()), "{source}");
+}
+
+#[test]
+fn an_unclosed_paren_in_an_scss_line_comment_does_not_hide_the_closing_tag() {
+    // Before and after a declaration: the line comment is inside the block in
+    // both, so upstream reads it as part of a value rather than as a selector.
+    for source in [
+        "<p class=\"a\">x</p>\n\n<style lang=\"scss\">\n\t.a {\n\t\t// note (\n\t\tcolor: red;\n\t}\n</style>\n",
+        "<p class=\"a\">x</p>\n\n<style lang=\"scss\">\n\t.a {\n\t\tcolor: red;\n\t\t// (\n\t}\n</style>\n",
+    ] {
+        assert_eq!(compiles(source), Ok(()), "{source}");
+    }
+}
+
+#[test]
+fn a_line_comment_paren_outside_a_block_is_still_the_identifier_error() {
+    // The negative control: the same `// (` at the top level is a selector
+    // position, where upstream throws — so "stop counting parens" must not be
+    // read as "accept everything a paren appears in".
+    let source = "<p class=\"a\">x</p>\n\n<style lang=\"scss\">\n\t// (\n\t.a {\n\t\tcolor: red;\n\t}\n</style>\n";
+    assert_eq!(
+        compiles(source),
+        Err("Some(\"css_expected_identifier\")".to_string()),
+        "{source}"
+    );
+}
