@@ -3545,8 +3545,11 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     #[allow(clippy::too_many_lines)]
     fn print_expression(&mut self, expr: &Expression, ctx: &mut Context<DIRECT>) {
         // esrap's `_` wildcard: emit comments positioned before this node first.
+        // acorn elides parentheses, so the node whose start bounds that flush is
+        // the expression INSIDE them — bounding it at the `(` puts a comment that
+        // precedes the parens on the same line as the operand it opens.
         let span = expr.span();
-        let start = span.start;
+        let start = unparen(expr).span().start;
         self.flush_leading(ctx, start);
         if HAS_COMMENTS
             && DIRECT
