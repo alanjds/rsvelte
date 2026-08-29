@@ -6688,13 +6688,22 @@ fn transform_global_block<'a>(
                 if child_end_idx <= css_source.len() && child_start_idx < child_end_idx {
                     let mut cuts = Vec::new();
                     collect_global_keyframe_prefixes(child, css_source, css_start, &mut cuts);
-                    cuts.retain(|&c| c >= child_start_idx && c + 8 <= child_end_idx);
-                    cuts.sort_unstable();
+                    let mut ranges: Vec<(usize, usize)> =
+                        cuts.into_iter().map(|c| (c, c + 8)).collect();
+                    // Upstream visits every ComplexSelector here too, so a nested
+                    // `:global(...)` still loses the pseudo-class even though no
+                    // scoping modifier is added.
+                    collect_global_pseudo_cuts(child, css_source, css_start, &mut ranges);
+                    ranges.retain(|&(a, b)| a >= child_start_idx && b <= child_end_idx && a < b);
+                    ranges.sort_unstable();
                     mark_tree(output, child);
                     let mut from = child_start_idx;
-                    for cut in cuts {
-                        output.copy(from + css_start, &css_source[from..cut]);
-                        from = cut + 8;
+                    for (a, b) in ranges {
+                        if a < from {
+                            continue;
+                        }
+                        output.copy(from + css_start, &css_source[from..a]);
+                        from = b;
                     }
                     output.copy(from + css_start, &css_source[from..child_end_idx]);
                 }
@@ -6728,6 +6737,65 @@ fn transform_global_block<'a>(
 
 /// Offsets (relative to `css_source`) of every `-global-` prefix on a keyframes
 /// name in `node`'s subtree, so a verbatim copy can still drop them.
+/// Byte ranges (relative to `css_source`) that upstream's
+/// `remove_global_pseudo_class` deletes: `:global(` plus its `)`, or the bare
+/// `:global` keyword plus the descendant space that would be left dangling.
+fn collect_global_pseudo_cuts(
+    node: &Value,
+    css_source: &str,
+    css_start: usize,
+    out: &mut Vec<(usize, usize)>,
+) {
+    if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+        for child in children {
+            collect_global_pseudo_cuts(child, css_source, css_start, out);
+        }
+    }
+    for key in ["prelude", "block"] {
+        if let Some(child) = node.get(key).filter(|v| !v.is_null()) {
+            collect_global_pseudo_cuts(child, css_source, css_start, out);
+        }
+    }
+    let after_space = node
+        .get("combinator")
+        .and_then(|c| c.get("name"))
+        .and_then(|n| n.as_str())
+        == Some(" ");
+    let Some(selectors) = node.get("selectors").and_then(|s| s.as_array()) else {
+        return;
+    };
+    for (idx, sel) in selectors.iter().enumerate() {
+        if sel.get("type").and_then(|t| t.as_str()) != Some("PseudoClassSelector")
+            || sel.get("name").and_then(|n| n.as_str()) != Some("global")
+        {
+            continue;
+        }
+        let (Some(start), Some(end)) = (
+            sel.get("start").and_then(|v| v.as_u64()),
+            sel.get("end").and_then(|v| v.as_u64()),
+        ) else {
+            continue;
+        };
+        let (start, end) = (start as usize, end as usize);
+        if start < css_start || end <= start || end - css_start > css_source.len() {
+            continue;
+        }
+        let (from, to) = (start - css_start, end - css_start);
+        if sel.get("args").is_none_or(Value::is_null) {
+            let mut cut = from;
+            if after_space && idx == 0 {
+                while cut > 0 && css_source.as_bytes()[cut - 1].is_ascii_whitespace() {
+                    cut -= 1;
+                }
+            }
+            out.push((cut, from + ":global".len()));
+        } else {
+            out.push((from, from + ":global(".len()));
+            out.push((to - 1, to));
+        }
+    }
+}
+
 fn collect_global_keyframe_prefixes(
     node: &Value,
     css_source: &str,
