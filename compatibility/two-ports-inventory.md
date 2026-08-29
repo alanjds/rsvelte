@@ -714,12 +714,20 @@ that all three constructs bind for their body only and must hide **both** the re
 `shadowed_prop_names`: the pre-existing `for…of` code removed the transform and not the second, so
 a prop read inside the loop still became `$$props.v`.
 
-The 48 that remain are two causes, both **outside phase 3**. A write through a `catch` parameter
+The second is closed too, and it is the one with real-world reach.
+`transform_legacy_state_declarations` finds `let <name> =` by text, and its caller hands it one
+top-level instance statement at a time — so `function go() { let v = …; }` arrives as a single
+input and the LOCAL declaration was lowered to `$.mutable_source`, allocating a signal per call.
+Upstream promotes only a top-level `let`, so the rewrite is refused unless the match sits at the
+statement's own brace depth. **Every other shadow fix in this batch moved 0 of 34,728 corpus
+entries; this one moves 3**, and takes `musicat/src/lib/views/AlbumsView.svelte` from a listed
+failure on `client` and `client-dev` to a 4-target match. Reachability is a property of the
+defect, not of the class.
+
+The 44 that remain are one cause, **outside phase 3**. A write through a `catch` parameter
 or a `for…of` binding is recorded on the *component's* binding by phase 2, which shows up as a
 different `$.prop` flag word (24 vs 28), a `$$ownership_validator` upstream does not emit, and a
-store declared as `$.mutable_source(writable(…))`; and a local `let v = {…}` inside a function that
-shadows a legacy promoted state variable is itself lowered to `$.mutable_source`. Both are
-recorded here rather than fixed.
+store declared as `$.mutable_source(writable(…))`; which is recorded here rather than fixed.
 
 The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available here and is the right
 shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
