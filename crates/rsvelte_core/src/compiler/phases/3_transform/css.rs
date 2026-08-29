@@ -5639,7 +5639,7 @@ fn is_simple_selector_unused(sel: &Value, ctx: &CssContext) -> bool {
                 // selectors that definitely don't exist in the template
                 let all_unused = children
                     .iter()
-                    .all(|child| is_is_inner_selector_unused(child, ctx));
+                    .all(|child| branch_is_marked_unused(child, ctx));
                 if all_unused && !children.is_empty() {
                     return true;
                 }
