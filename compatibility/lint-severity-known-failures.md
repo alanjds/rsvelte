@@ -71,6 +71,17 @@ the official compiler too**, so the two tools disagree only about whether a lint
 should report a compile error — a product decision, and rsvelte's is the more
 useful one for a Svelte-specific linter.
 
+**That cross-check is now a test, not a measurement.**
+`scripts/dev/test-lint-severity-exit-attribution.mjs` re-runs it in CI over whatever
+this list currently holds, with two valid patterns as an accepting control so a
+harness that rejected everything could not pass. The bucket is recorded as a
+deliberate divergence in
+[`deliberate-divergences.md`](deliberate-divergences.md#a-linter-reports-the-compilers-own-errors-rsvelte-lint-exit-code);
+these 56 are an accepted difference rather than a burndown target. Four entries that
+were rsvelte over-rejections hid in this same bucket until #3172, which is exactly
+what the check exists to catch: if a listed pattern ever compiles, it goes red and
+names the file.
+
 This bucket held **59** entries until #3172 fixed issues #3127 and #3128. The four
 that left were rsvelte over-rejections rather than a product decision — a
 `$`-prefixed class member NAME read as a store reference, and legacy mode

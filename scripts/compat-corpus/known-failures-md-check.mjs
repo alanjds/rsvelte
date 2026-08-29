@@ -544,7 +544,10 @@ if (fs.existsSync(mutationMdPath)) {
 
 // An attribution that names a file nobody wrote reads exactly like one that does.
 // Two of these were already live, both citing a renamed upstream_issues item.
-const issuesDir = path.join(CORPUS, '..', 'upstream_issues');
+// Resolved from the repo, not from CORPUS: the self-test points CORPUS at a
+// temp copy, and an `upstream_issues/` that is merely absent would make every
+// link look broken — a failure mode indistinguishable from a real dangling one.
+const issuesDir = path.join(ROOT, 'upstream_issues');
 let issueLinks = 0;
 for (const doc of fs.readdirSync(CORPUS).filter((f) => f.endsWith('.md'))) {
 	const docPath = path.join(CORPUS, doc);

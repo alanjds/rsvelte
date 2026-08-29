@@ -1143,7 +1143,8 @@ jobs:
           cache: 'true'
 
       # verify.mjs parses generated output with acorn, so these sandbox runs need
-      # node_modules. Still no submodules and no Rust build.
+      # node_modules. No Rust build; the lint-severity step below is the only one
+      # that needs a submodule.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -1164,6 +1165,19 @@ jobs:
       # build or the eslint oracle that the Lint parity job needs.
       - name: Check the lint gate's population floor
         run: node scripts/dev/test-lint-verify-population-floor.mjs
+
+      # The deliberate-divergence claim behind lint-severity's 56 exit-code
+      # entries is "the official compiler rejects every one of them", which is a
+      # one-time measurement until it runs. It needs the real oracle, so this is
+      # the one step here that checks out a submodule.
+      - name: Checkout svelte submodule (shallow)
+        run: git submodule update --init --depth 1 submodules/svelte
+
+      - name: Install Svelte compiler dependencies
+        run: pnpm --dir submodules/svelte install --frozen-lockfile
+
+      - name: Check the lint-severity exit attribution
+        run: node scripts/dev/test-lint-severity-exit-attribution.mjs
 
       # The ratchet-doc count parser. Lives here rather than in Corpus Compat so
       # it runs without the corpus: it needs no submodules and no build.

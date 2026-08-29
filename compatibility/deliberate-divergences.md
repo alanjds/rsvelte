@@ -5,11 +5,16 @@ That rule does not extend to reproducing bytes that are **not valid JavaScript**
 the source program's runtime meaning: an unparseable module or a dropped semantic clause is a
 defect a byte match cannot pay for. Where the two conflict, correctness wins.
 
-This file is the whole list. It is prose, not a ratchet — the divergences here are ones no
-gate observes, which is exactly why they need writing down: an unobserved surface plus a
+This file is the whole list. It is prose, not a ratchet. Most entries are divergences **no
+gate observes**, which is exactly why they need writing down: an unobserved surface plus a
 locally plausible reason ("we should match upstream", normally correct) is how a future
 contributor reintroduces a parse error while believing they are improving parity. Every
 entry below is pinned by a test, so the choice is enforced and not merely described.
+
+A few entries are the opposite: a gate **does** observe them and they sit in a shrink-only
+ratchet. Listing one here says the ratchet entry is an accepted difference rather than a
+burndown target — the ratchet still stops it from spreading, and the pin still stops the
+justification from rotting into "we happen to differ". Each such entry names its ratchet.
 
 Before adding an entry, run both compilers. "Deliberate" is a claim about which side is
 wrong, and a record that asserts it without the outputs converts an open question into a
@@ -451,3 +456,55 @@ agreed, while the matrix treats unparseable official output as an oracle rejecti
 aborts rather than producing a keyed divergence. Gate-coverage 5r records that blind
 spot. Remove this entry and converge on upstream when its two visitors adopt an async
 memoization path.
+
+---
+
+## A linter reports the compiler's own errors (`rsvelte-lint` exit code)
+
+**Ratchet** `compatibility/lint-severity-known-failures.json`, the 56 `exit|…|0->1|…` entries.
+**Pinned by** `scripts/dev/test-lint-severity-exit-attribution.mjs`, run in CI by the
+`Corpus verify baseline-flag contract` job.
+
+### Input
+
+Any source the Svelte compiler rejects. The listed patterns carry 21 distinct compiler codes;
+the largest are `slot_element_invalid_name` (13), `dollar_prefix_invalid` (7),
+`state_invalid_placement` (4), `legacy_export_invalid` (4), `animation_invalid_placement` (4)
+and `parse-error` (4). One of the smallest is the whole subject of a rule:
+
+```svelte
+<slot name={dynamic} />
+```
+
+### Both outputs, measured against `submodules/svelte` 5.56.10 and eslint-plugin-svelte 3.23.0
+
+- `svelte.compile` **throws** `slot_element_invalid_name` — measured for all 56 patterns by the
+  pin above, 56 of 56, with two valid patterns as the accepting control.
+- `eslint` with `flat/recommended` reports the rule's findings and **exits 0**:
+  `svelte-eslint-parser` is deliberately more permissive than the compiler, so it builds a tree
+  where the compiler refuses to.
+- `rsvelte-lint` merges the compiler's diagnostics into its report and **exits 1**, exactly as it
+  does for any rule configured at `error`.
+
+### Why upstream produces it
+
+ESLint's contract is a *parser* plus rules, and `svelte-eslint-parser` is a separate project from
+the compiler. A file the compiler rejects is, to ESLint, a file that parsed — so there is nothing
+to report and nothing to exit non-zero about.
+
+### Why rsvelte's form is the correct one
+
+`rsvelte-lint` is a Svelte-specific linter with the compiler *inside* it, so "this file does not
+compile" is information it has and ESLint does not. Exiting 0 on a file that cannot build would
+make the linter's own verdict misleading in the one case where it matters most. It is a product
+decision, not a parity defect — and the pin is what separates the two: if a future change made
+rsvelte reject something the official compiler accepts, that entry becomes an over-rejection and
+the check goes red naming the file.
+
+### Why no gate saw the difference between those two readings
+
+Every other lint gate configures an explicit rule universe and compares **findings**, so a
+compiler diagnostic — which is not a `svelte/…` rule id — is outside the compared population.
+The exit code is not a finding, and until gate 36 nothing compared it. Four entries that *were*
+rsvelte over-rejections hid in this same bucket until then (#3127, #3128); they are fixed and no
+longer listed, which is why the count reads 56 and not 60.
