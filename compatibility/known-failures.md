@@ -64,15 +64,28 @@ everywhere". Divergences this target keeps on purpose — because reproducing
 upstream's bytes would emit invalid JavaScript — are recorded in
 [`deliberate-divergences.md`](deliberate-divergences.md), each pinned by a test.
 
-## Server (`known-failures.server.json`, 69 entries)
+## Server (`known-failures.server.json`, 71 entries)
 
-Partition of `known-failures.server.json` by verdict: `60 + 4 + 5`
+Partition of `known-failures.server.json` by verdict: `60 + 4 + 5 + 2`
 
 - **60 — the generated JS differs.**
 - **4 — both compilers reject with a different error code.**
 - **5 — one compiler rejects and the other compiles.**
+- **2 — a recorded deliberate divergence, not a burndown target.**
+  `pattern/issues/dollar-function-parameter.svelte` and
+  `threlte/packages/extras/src/lib/hooks/useViewport.svelte.ts`. A `$`-prefixed
+  **function parameter** is a local binding, not a store subscription; upstream's
+  server visitor decides by name alone and lowers a write to it to
+  `$.store_mutate`, which throws at runtime, while upstream's own *client*
+  agrees with rsvelte. Reported in
+  [`upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md`](../upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md),
+  recorded in
+  [`deliberate-divergences.md`](deliberate-divergences.md#a--prefixed-function-parameter-is-not-a-store-subscription-server)
+  and pinned by `crates/rsvelte_core/tests/dollar_parameter_is_not_a_store.rs`.
+  **These two are listed so the gate stops the difference spreading, not so it is
+  fixed** — the pin is what keeps the justification from rotting.
 
-All 69 arrived with the wave-2 enrolment (#3130); this target was at 0 before
+The other 69 arrived with the wave-2 enrolment (#3130); this target was at 0 before
 it. The last pre-enrolment entry was #2308, from the `runed` / `svelte-toolbelt` enrolment:
 `watch.test.svelte.ts` writes `runs = runs + 1` and rsvelte **contracted** it to
 `runs += 1` (that direction, not the reverse). The `.svelte.(js|ts)` server path
@@ -90,13 +103,17 @@ quoted key dropped in a destructured `$derived`) and #2034 (`$.to_array` arity
 with a rest element) — were resolved by #2036, which mirrored #2010's client
 destructuring fixes onto the server target.
 
-## Server dev (`known-failures.server-dev.json`, 69 entries)
+## Server dev (`known-failures.server-dev.json`, 71 entries)
 
 The `server-dev` target is the server transform with `dev: true`. It separately
 ratchets server-only development instrumentation: component metadata, element
 locations, dynamic-element validation, snippet validation, and injected CSS.
 
-Partition of `known-failures.server-dev.json` by verdict: `60 + 4 + 5`
+Partition of `known-failures.server-dev.json` by verdict: `60 + 4 + 5 + 2`
+
+The trailing **2** is the same deliberate divergence as on `server` — the
+`$`-prefixed function parameter — carried on both targets because the server
+transform runs on both.
 
 - **60 — the generated JS differs.**
 - **4 — both compilers reject with a different error code.**

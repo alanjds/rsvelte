@@ -9,11 +9,11 @@
 //! single multi-declarator declaration invalidated every retained span, folded
 //! CRLF to LF and dropped the trailing newline.
 //!
-//! Only the *rendering* of a split declaration is text work, and it reproduces
-//! the shape the text pass produced: the declarators of a multi-line
-//! declaration collapse onto one line each, and a `//` comment that sat between
-//! two declarators moves above the declaration it precedes rather than staying
-//! on the keyword's line, where it would comment the declarator out.
+//! Only the *rendering* of a split declaration is text work: the declarators of
+//! a multi-line declaration collapse onto one line each, and every comment the
+//! declaration carried — leading it, or sitting between two declarators — is
+//! emitted after the keyword with the declarator on the next line, which is
+//! where esrap flushes it and where it cannot comment the declarator out.
 
 use std::cell::RefCell;
 
@@ -100,6 +100,11 @@ fn split_declaration(
     // A declaration sharing its line with earlier code is left alone: the
     // indentation the split declarators are emitted at would not be its own.
     let indent = line_indent(script, start)?;
+    // Upstream rebuilds a split declaration, so the STATEMENT carries no `loc`
+    // and esrap flushes its leading comments at the first located node inside
+    // it — the declarator, which prints after the keyword. A comment trailing
+    // the previous statement's line belongs to that statement and stays put.
+    let (leading_start, leading_comments) = leading_own_line_comments(script, start, comments);
     let keyword_start = declaration.span.start as usize;
     if !script[keyword_start..].starts_with(keyword) {
         return None;
@@ -158,12 +163,24 @@ fn split_declaration(
             replacement.push('\n');
             replacement.push_str(indent);
         }
+        replacement.push_str(&prefix);
+        if !emitted {
+            for (at, comment) in leading_comments.iter().enumerate() {
+                if at > 0 {
+                    replacement.push_str(indent);
+                }
+                replacement.push_str(comment);
+                replacement.push('\n');
+            }
+            if !leading_comments.is_empty() {
+                replacement.push_str(indent);
+            }
+        }
         for comment in comment_lines {
             replacement.push_str(&comment);
             replacement.push('\n');
             replacement.push_str(indent);
         }
-        replacement.push_str(&prefix);
         replacement.push_str(&body);
         replacement.push(';');
         emitted = true;
@@ -172,7 +189,41 @@ fn split_declaration(
         return None;
     }
 
-    Some((start as u32, end as u32, replacement))
+    Some((leading_start as u32, end as u32, replacement))
+}
+
+/// The run of comments occupying their own lines immediately before `start`,
+/// with the offset the run begins at. Blank lines inside the run are dropped,
+/// matching what upstream's flush emits. Returns `(start, [])` when the
+/// preceding text is anything else — notably a comment sharing a line with
+/// earlier code, which belongs to that line's statement.
+fn leading_own_line_comments(
+    script: &str,
+    start: usize,
+    comments: &[Span],
+) -> (usize, Vec<String>) {
+    let mut run_start = start;
+    let mut texts = Vec::new();
+    // Only the comments BEFORE the declaration can lead it; walking the whole
+    // list backwards would abort on the first later one.
+    for comment in comments
+        .iter()
+        .rev()
+        .skip_while(|comment| comment.end as usize > start)
+    {
+        let (from, to) = (comment.start as usize, comment.end as usize);
+        if to > run_start || !script[to..run_start].trim().is_empty() {
+            break;
+        }
+        let line_start = script[..from].rfind('\n').map_or(0, |at| at + 1);
+        if !script[line_start..from].trim().is_empty() {
+            break;
+        }
+        texts.push(script[from..to].to_string());
+        run_start = line_start;
+    }
+    texts.reverse();
+    (run_start, texts)
 }
 
 /// The declaration's own indentation, or `None` when code precedes it on the
@@ -298,11 +349,15 @@ mod tests {
         );
     }
 
+    /// The comment prints AFTER the keyword, with the declarator on the next
+    /// line: upstream rebuilds a split declaration, so its statement carries no
+    /// `loc` and esrap flushes the comment at the first located node inside it.
+    /// The newline is what keeps the declarator out of the comment.
     #[test]
-    fn moves_a_line_comment_above_the_declaration_it_precedes() {
+    fn prints_a_declarator_comment_after_the_keyword() {
         assert_eq!(
             split("let a = 1, // why\n\tb = 2;"),
-            "let a = 1;\n// why\nlet b = 2;"
+            "let a = 1;\nlet // why\nb = 2;"
         );
     }
 

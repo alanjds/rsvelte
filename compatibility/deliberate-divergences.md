@@ -5,11 +5,16 @@ That rule does not extend to reproducing bytes that are **not valid JavaScript**
 the source program's runtime meaning: an unparseable module or a dropped semantic clause is a
 defect a byte match cannot pay for. Where the two conflict, correctness wins.
 
-This file is the whole list. It is prose, not a ratchet — the divergences here are ones no
-gate observes, which is exactly why they need writing down: an unobserved surface plus a
+This file is the whole list. It is prose, not a ratchet. Most entries are divergences **no
+gate observes**, which is exactly why they need writing down: an unobserved surface plus a
 locally plausible reason ("we should match upstream", normally correct) is how a future
 contributor reintroduces a parse error while believing they are improving parity. Every
 entry below is pinned by a test, so the choice is enforced and not merely described.
+
+A few entries are the opposite: a gate **does** observe them and they sit in a shrink-only
+ratchet. Listing one here says the ratchet entry is an accepted difference rather than a
+burndown target — the ratchet still stops it from spreading, and the pin still stops the
+justification from rotting into "we happen to differ". Each such entry names its ratchet.
 
 Before adding an entry, run both compilers. "Deliberate" is a claim about which side is
 wrong, and a record that asserts it without the outputs converts an open question into a
@@ -173,6 +178,86 @@ Three sites lower an update through a non-`this` receiver, one comment each:
 `private_class_assign_ast.rs` (`visit_update_expression` for the spliced collector,
 `rewrite_update` for the in-place path — both reached from method bodies) and
 `class_transforms.rs::transform_class_methods_non_this` (the constructor root).
+
+---
+
+## A `$`-prefixed function parameter is not a store subscription (server)
+
+### Input
+
+```svelte
+<script>
+	import { writable } from 'svelte/store';
+
+	const viewport = writable({ distance: 0 });
+
+	function update(fn) {
+		fn({ distance: 1 });
+	}
+
+	update(($viewport) => {
+		$viewport.distance = 42;
+	});
+</script>
+
+<p>{$viewport.distance}</p>
+```
+
+### Both outputs, measured against `submodules/svelte` 5.56.10
+
+| target | official | rsvelte |
+|---|---|---|
+| `server` | `$.store_mutate($$store_subs ??= {}, '$viewport', viewport, $viewport.distance = 42);` | `$viewport.distance = 42;` |
+| `client` | `$viewport.distance = 42;` | `$viewport.distance = 42;` |
+
+**Upstream's own two targets disagree on this input**, which is what settles which side is wrong.
+
+### Why upstream produces it
+
+`3-transform/server/visitors/AssignmentExpression.js:75-79` decides "this is a store" from the
+name's spelling plus the existence of a binding one character shorter, and never asks whether
+`$viewport` itself resolves in the current scope:
+
+```js
+if (is_store_name(object.name)) {
+	const name = object.name.slice(1);
+	if (!context.state.scope.get(name)) return null;
+```
+
+The client resolves through the scope chain and finds the parameter.
+
+### Why rsvelte's form is the correct one
+
+`internal/server/index.js:284` — `store_mutate` calls
+`store_set(store, store_get(store_values, store_name, store))`. Reproducing upstream would
+subscribe to `viewport` and re-set it every time an unrelated **local object** is mutated, and
+register `$viewport` in `$$store_subs` for teardown to unsubscribe — for a store the source never
+subscribed to in that scope. It also contradicts the rule
+`compatibility/pattern-corpus/README.md` states for `dollar-function-parameter.svelte`: a `$name`
+parameter "must neither create a synthetic store subscription nor trigger
+`store_invalid_scoped_subscription`".
+
+Reported upstream in
+[`upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md`](../upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md).
+
+### Where it occurs in published code
+
+`threlte`, `packages/extras/src/lib/hooks/useViewport.svelte.ts` —
+`viewport.update(($viewport) => { … $viewport.distance = distance })`, where `update`'s callback
+receives the current value. Naming that parameter `$viewport` is idiomatic and legal.
+
+### Why no gate sees it
+
+The output gates *do* see it — they report it as a `js-mismatch` on `server` and `server-dev`,
+which is why the two ids are listed in `known-failures.server{,-dev}.json` rather than silently
+diverging. What no gate sees is **which side is right**: every gate here compares rsvelte to
+upstream and scores any difference as rsvelte's failure, so a listed entry looks identical
+whether it is our defect or theirs. That judgement lives only in this file.
+
+### Where it is pinned
+
+`crates/rsvelte_core/tests/dollar_parameter_is_not_a_store.rs` asserts the server output for the
+input above, so a future "fix" toward upstream goes red.
 
 ---
 
@@ -371,3 +456,105 @@ agreed, while the matrix treats unparseable official output as an oracle rejecti
 aborts rather than producing a keyed divergence. Gate-coverage 5r records that blind
 spot. Remove this entry and converge on upstream when its two visitors adopt an async
 memoization path.
+
+---
+
+## A linter reports the compiler's own errors (`rsvelte-lint` exit code)
+
+**Ratchet** `compatibility/lint-severity-known-failures.json`, the 56 `exit|…|0->1|…` entries.
+**Pinned by** `scripts/dev/test-lint-severity-exit-attribution.mjs`, run in CI by the
+`Corpus verify baseline-flag contract` job.
+
+### Input
+
+Any source the Svelte compiler rejects. The listed patterns carry 21 distinct compiler codes;
+the largest are `slot_element_invalid_name` (13), `dollar_prefix_invalid` (7),
+`state_invalid_placement` (4), `legacy_export_invalid` (4), `animation_invalid_placement` (4)
+and `parse-error` (4). One of the smallest is the whole subject of a rule:
+
+```svelte
+<slot name={dynamic} />
+```
+
+### Both outputs, measured against `submodules/svelte` 5.56.10 and eslint-plugin-svelte 3.23.0
+
+- `svelte.compile` **throws** `slot_element_invalid_name` — measured for all 56 patterns by the
+  pin above, 56 of 56, with two valid patterns as the accepting control.
+- `eslint` with `flat/recommended` reports the rule's findings and **exits 0**:
+  `svelte-eslint-parser` is deliberately more permissive than the compiler, so it builds a tree
+  where the compiler refuses to.
+- `rsvelte-lint` merges the compiler's diagnostics into its report and **exits 1**, exactly as it
+  does for any rule configured at `error`.
+
+### Why upstream produces it
+
+ESLint's contract is a *parser* plus rules, and `svelte-eslint-parser` is a separate project from
+the compiler. A file the compiler rejects is, to ESLint, a file that parsed — so there is nothing
+to report and nothing to exit non-zero about.
+
+### Why rsvelte's form is the correct one
+
+`rsvelte-lint` is a Svelte-specific linter with the compiler *inside* it, so "this file does not
+compile" is information it has and ESLint does not. Exiting 0 on a file that cannot build would
+make the linter's own verdict misleading in the one case where it matters most. It is a product
+decision, not a parity defect — and the pin is what separates the two: if a future change made
+rsvelte reject something the official compiler accepts, that entry becomes an over-rejection and
+the check goes red naming the file.
+
+### Why no gate saw the difference between those two readings
+
+Every other lint gate configures an explicit rule universe and compares **findings**, so a
+compiler diagnostic — which is not a `svelte/…` rule id — is outside the compared population.
+The exit code is not a finding, and until gate 36 nothing compared it. Four entries that *were*
+rsvelte over-rejections hid in this same bucket until then (#3127, #3128); they are fixed and no
+longer listed, which is why the count reads 56 and not 60.
+
+---
+
+## The default lint preset carries three rules upstream does not, and drops two
+
+**Ratchet** `compatibility/lint-preset-known-failures.json`, all 5 entries.
+**Pinned by** `crates/rsvelte_lint/tests/comment_directive.rs` (9 tests),
+`crates/rsvelte_lint/src/rules/no_undef.rs` (6), `no_unused_vars.rs` (23) and
+`no_companion_module.rs` (5), plus `pnpm run test:type-aware-lint` (9).
+
+### Input
+
+Any project linted with no configuration at all. The gate compares
+`eslint-plugin-svelte`'s `flat/recommended` against `rsvelte-lint`'s `recommended`.
+
+### Both outputs, measured by `scripts/compat-corpus/lint-preset.mjs`
+
+Every rule both sides ship now agrees on its default severity — the 21 that did not were
+an incomplete transcription and were fixed, not listed. What remains is membership:
+
+| entry | upstream | rsvelte |
+|---|---|---|
+| `svelte/system` | a rule id | not a rule — the same behaviour is `suppression.rs` |
+| `svelte/@typescript-eslint/no-unnecessary-condition` | a rule id | absent from the native registry |
+| `svelte/no-undef` | not shipped | shipped |
+| `svelte/no-unused-vars` | not shipped | shipped |
+| `svelte/no-companion-module-shadow` | not shipped | shipped |
+
+### Why upstream produces it
+
+`eslint-plugin-svelte` runs *inside* ESLint. Comment directives are ESLint's own job, so the
+plugin models them as an internal rule id; the core `no-undef` / `no-unused-vars` come from
+ESLint itself with the plugin's parser feeding them; and a type-aware wrapper can assume
+`typescript-eslint` is present.
+
+### Why rsvelte's form is the correct one
+
+`rsvelte-lint` is a single binary with no ESLint underneath it. It must carry the core checks
+or leave them unavailable, and it implements directives as a mechanism rather than a rule
+because there is no rule pipeline to hang them on. The type-aware wrapper's counterpart lives
+in the out-of-workspace `rsvelte_lint_types` crate, which needs a running `tsgo` — a scope
+boundary, not a missing feature.
+
+### Why no gate sees it
+
+`scripts/compat-corpus/lint-universe.mjs` **intersects** the two rule lists before any
+finding-level comparison, so a rule only one side ships is never enabled during a comparison.
+All five are invisible to the other eight lint gates by construction, which is why this gate
+keys on membership at all. The first version keyed on membership *alone* and reported 29
+differences; adding severity to the key took it to 50 and surfaced the 21 real ones.

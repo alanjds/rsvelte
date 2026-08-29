@@ -181,6 +181,23 @@ withCorpus(
 	(r) => check('unmutated corpus copy passes', r.code, 0),
 );
 
+// The upstream_issues link check. An attribution that names a file nobody wrote
+// reads exactly like one that does, and two such links were live when the check
+// was added — so the check is only worth having if it is shown to fire.
+withCorpus(
+	(d) => edit(
+		d,
+		'known-failures.md',
+		'upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md',
+		'upstream_issues/this-file-was-never-written.md',
+	),
+	(r) => check(
+		'an attribution to a nonexistent upstream_issues file fails',
+		[r.code, /this-file-was-never-written\.md, which does not exist/.test(r.out)],
+		[1, true],
+	),
+);
+
 // Derived, not a literal: the expected sum is the ratchet's own size less the
 // one this mutation removes, so the assertion survives the ratchet moving.
 {

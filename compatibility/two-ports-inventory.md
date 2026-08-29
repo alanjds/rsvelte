@@ -90,6 +90,9 @@ whose oracle is the other implementation is only as good as its independent expe
 | [14](#14-what-options-does-the-public-parse-run-with--d) | What options does the public `parse()` run with? | 2 bindings | **[D]** | #3688 open |
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
 | [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
+| [17](#17-does-an-assignment-lhss-computed-index-get-its-sites-read-transform--d-closed) | Does an assignment LHS's computed index get its site's read transform? | 2 (+3 `untrack` rebuilders) | **[D]** | closed |
+| [18](#18-does-a-mutation-of-a-legacy_indirect_bindings-root-get-the-invalidate-wrap-at-all--d-closed) | Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? | 4 | **[D]** | closed |
+| [19](#19-where-does-a-keywords-source-map-anchor-go--d-defended-at-degree-2) | Where does a keyword's source-map anchor go? | 2 | **[D]** | defended at degree 2 |
 
 ---
 
@@ -252,6 +255,44 @@ start", independent of both `skip_opaque` and `find_class_header`, and
 `3_transform/server/transform_store.rs` and `server/helpers.rs` carry at least eight more inline
 `in_string` / `in_comment` machines. Their input ranges are `undetermined`.
 
+**A fourth pair is worth recording for the opposite reason: the two copies AGREED, and both were
+wrong.** `client/class_transforms.rs` splits a class body into member blocks line by line, and
+until 2026-08-29 both `parse_section_members` (`is_plain_field`, which excluded a line beginning
+`//` or `/*`) and `rejoin_class_members` (which refused to terminate a block on the same two
+prefixes) asked "is this line comment text" **per line**. So the continuation lines of anything
+spanning lines were members of their own on both, and the two failure modes are different
+depending on what spans:
+
+- a multi-line `/* … */` leaves its opening `/**` on the block above, that block is an
+  unterminated comment, `private_class_assign_ast` cannot parse it, and every rewrite it owns is
+  skipped in silence — on sveltekit's `query/instance.svelte.js` the `??=` lowering of a private
+  `$state.raw` field, emitting `$.get(this.#promise) ??= this.#run()`, which no JS parser accepts;
+- a multi-line **template literal** parses fine and changes *value*: the member blocks are
+  re-emitted with esrap's margins, so a blank line lands inside the string
+  (`` `a ${1} b⏎⏎c ${2} d` `` where the source has one line break).
+
+Both are fixed by routing the two through one cross-line predicate,
+`js_scan::line_starts_outside_opaque`, which is built on the same `skip_opaque` this row names as
+the shape the copies should fold into — so `class_transforms.rs` is now a *user* of that
+predicate rather than a further copy of it. Measured over the 589 corpus sources holding both
+`class` and a rune (293 compiled by both compilers): the comment half moved 40 files from
+divergent to byte-identical on client and 1 on client-dev, and took the population's unparseable
+outputs from 1 to 0; folding onto the shared predicate then moved 2 more on client-dev, 0 on
+client, and 0 either way in the other direction.
+
+The reusable part is the grade this pair would have earned. It is **[S]**, never [D]: no input
+separates the two, because they answered the same question the same wrong way — which is
+precisely the failure mode § *The one place this is already defended* names for a port-vs-port
+oracle. **A row at [S] whose two ports provably agree is not a closed row**; it is a row whose
+divergence test cannot exist, and only an independently pinned expectation (here: the official
+compiler's output) can grade it.
+
+One defect this uncovered is **not** in this file's scope and is recorded so it is not
+rediscovered here: once a chunk containing a multi-line template literal reaches the in-place AST
+rewrite, the reprint **re-indents the template's interior lines**, which is another silent value
+change. It reproduces on a binary built before any of today's fixes, so it is pre-existing and
+belongs to the printer rather than to the member scan.
+
 ### 7. Does this element match this selector? — [D], one pair closed
 
 **Upstream:** `css-prune.js:243` `apply_selector` + `:291` `apply_combinator` + `:436`
@@ -334,6 +375,32 @@ The `globals` **table** underneath these predicates was a seventh port until #34
 row [13](#13-what-does-a-call-to-one-of-upstreams-globals-keypaths-evaluate-to--d-closed-by-degree-1),
 and it is the one instance in this file where the two ports were shown to render different text
 from the same source.
+
+**Two of these ports are closed as of 2026-08-29, and the divergence they carried ran in BOTH
+directions — which is what makes the row worth re-reading rather than ticking off.** The
+`?? ''` guard on a template hole, on `$.document.title` and on `option.value` is one upstream
+decision, `scope.evaluate(value).is_defined`, read at three sites. rsvelte answered it with the
+shared estree walk in some places and with `identifier_is_defined`, a hand-written table of
+binding shapes, in others. The table admitted no function binding and no `$state` binding that is
+never written, so `{fn}`, `{arrow}` and `<option value={n || 'a'}>` were guarded where upstream
+leaves them bare; and `<title>` graded the **source** expression rather than the value it had
+just built, so a legacy `$.untrack(…)` wrapper never made the chunk unknown and the guard was
+omitted where upstream adds it. `identifier_is_defined` now delegates to `evaluate_binding_initial`
+and `title_element` grades the built value, so both sites read the one walk; the walk itself
+gained upstream's FUNCTION case, which no port had.
+
+The measurement is the reason to state the directions separately. Over a 5,041-component
+population (a deterministic 4,000-file sample of the 33,792 corpus components plus every one of
+the 1,210 holding a `<title>`, `<option>` or `<select>`), the change moved **12 client outputs and
+12 client-dev outputs and 0 server outputs**; graded against the official compiler, 11 of the 12
+go divergent → byte-identical on each target and **none** move the other way, the twelfth
+shrinking from 15 to 11 divergent lines with the residue in comment placement. A fix measured on
+one direction's population would have scored a one-directional patch green.
+
+Still open in this row: `is_expression_known_json`, `is_initial_value_literal_or_known` (the
+`memmem::find(json, b"Literal")` one), `is_value_known_defined` and `is_expression_defined_typed`
+— four `is_known` ports, untouched here, and `is_js_expr_defined` remains a structural second
+walk over the built `JsExpr` whose leaves now call the shared one.
 
 ### 10. Which line and column is byte offset N on? — [D]
 
@@ -509,6 +576,48 @@ ports remain separate because their value domains differ (JS callbacks versus JS
 callbacks), so this closes the demonstrated cells rather than removing the row. A new option or
 validator kind still has to be added to all three ports and their boundary gates.
 
+### 17. Does an assignment LHS's computed index get its site's read transform? — [D], closed
+
+**Upstream** never asks. `Program.js:66-76`'s `replace()` rebuilds the member chain with
+`property: n.property` untouched, because the `mutate` callback is handed a mutation the general
+assignment transform has **already** visited — so by the time `replace()` sees it, the computed
+key already reads `groupKey()`. The invariant is "the LHS is transformed before the store root is
+swapped", and it lives in the call order, not in a function.
+
+**Ports.** rsvelte does not have that ordering, so each assignment path has to re-decide it:
+
+- `client/visitors/shared/utils.rs:1387` — has an `is_store_sub` arm calling
+  `transform_computed_indices_only`, with a comment giving the exact expected output.
+- `client/visitors/expression_converter.rs:5349` — had the `is_prop_binding` arm and **no**
+  store-sub arm, falling through to `left.clone()`.
+
+Three further functions rebuild the same `$.untrack($store)…` chain and each clones `property`
+independently: `shared/component.rs::replace_store_with_untrack` (fixed separately), and
+`replace_store_with_untracked` — which exists **twice**, in `shared/declarations.rs:458` and
+`visitors/program.rs:401`, byte-identical apart from the doc comment and how the arena type is
+spelled.
+
+**Demonstrated**, on two different read forms in one file
+(`pattern-corpus/issues/store-member-computed-key-in-event-handler.svelte`), against official
+5.56.10:
+
+| site | official | rsvelte, before |
+|---|---|---|
+| each-item key | `$.untrack($formData)[groupKey()] = e.detail` | `[groupKey]` |
+| reassigned `let` key | `$.untrack($scrollTop)[$.get(lastHref)] = e.detail` | `[lastHref]` |
+
+`client` and `client-dev` diverge; `server` and `server-dev` are byte-identical, which is what
+localises it to the client assignment path rather than to the store lowering.
+
+Found in the corpus as `appwrite-console/.../resource-form.svelte` and
+`huly/packages/panel/src/components/Panel.svelte` — both were failing on `main` and neither was
+in a ratchet, so **no gate was reporting them**; they surfaced only once the output ratchet's
+unlisted set was enumerated.
+
+**The reusable part** is that the two ports were not a copied table — one had been *fixed* and
+the other had not, and nothing relates them. The comment at `utils.rs:1387` even spells out the
+expected output, which reads as authority while the sibling path silently disagrees.
+
 ### 16. What is the read form of a name inside an `$.invalidate_inner_signals` body? — [D]
 
 **Upstream:** one `build_getter(node, state)` (`3-transform/client/utils.js:33`), called once per
@@ -546,6 +655,72 @@ carries all three shapes.
 cannot be made to produce the text the per-line pipeline splices. Closing this at degree 1 means
 retiring the text splice — the client instance-script pipeline AGENTS.md already names as the
 correctness hazard.
+
+### 18. Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? — [D], closed
+
+**Upstream:** one test, `AssignmentExpression.js:165` — `if (binding.legacy_indirect_bindings.size
+> 0)` wraps the mutation in `(mutation, $.invalidate_inner_signals(() => { … }))`. Row 16 asks what
+goes *inside* that body; this row asks which rsvelte code paths ask the question at all.
+
+**Ports.** Four, and they are reached by disjoint input shapes:
+
+- `visitors/expression_converter.rs` `wrap_with_legacy_invalidate` — template AST path.
+- `legacy_state_member_mutate_ast.rs:290,324` — instance-script state member mutation.
+- `prop_member_mutate_ast.rs` — instance-script prop member mutation.
+- `reactive_transforms.rs` — a `$:` body. This one had **no** wrap, on either of its two
+  internal routes: the simple-assignment `format!` builders, and `state_member_mutate_ast.rs`,
+  which is a second file with the same body as `legacy_state_member_mutate_ast.rs` and did not
+  take the `invalidate_bodies` map.
+
+**Demonstrated.** `<select bind:value={lodging.type}><option>{$t('hotel')}</option></select>` with
+`$: lodging.tz = allDay ? null : 'x'`: official emits the sequence, rsvelte emitted
+`$.mutate(lodging, $.get(lodging).tz = …)` alone. Reproduces on `adventurelog`'s
+`LodgingDetails.svelte`, twice, at both of that file's `$:` routes.
+
+**What made it hard to see is the shape of the first repro, not the defect.** The first minimal
+file was a *prop* root mutated from a *function body* — a cell that reaches port 1, which already
+wrapped. It went byte-identical on all four targets while the corpus file that motivated it still
+diverged. Crossing the two axes (binding kind × the statement the write sits in) put the
+discriminating cells on the table: the kind axis is flat, and every failing cell is a `$:`.
+A repro going green is evidence about that repro, never about the cause.
+
+**Closed at degree 1** for the `state_member_mutate_ast` route (it now takes the same map and
+builds the same string as its twin) and by construction for the two `format!` builders, which call
+one local helper. The two twin files remain — that is row 16's open half, not this one's.
+
+### 19. Where does a keyword's source-map anchor go? — [D], defended at degree 2
+
+**Upstream:** one `write_source_keyword(context, line, column, keyword)`
+(`esrap/src/languages/ts/index.js:113`) — `location(line, column)`, write the fragment,
+`location(line, column + keyword.length)`. The fragment a declaration passes it is
+`node.kind + ' '`, so the end anchor counts the separator, and esrap's `run()`
+(`esrap/src/index.js:139-146`) pushes one segment per `Location` command with no collapse.
+
+**Ports.**
+
+- `rsvelte_esrap` `Printer::write_keyword` / `KeywordCursor::write` — the client map. Every
+  `Location` reaches `Driver::push_mapping` (`command.rs`).
+- `3_transform/mod.rs` `generate_token_mappings_inner` — the **server** map. `print_split` runs
+  the printer with `emit_locations: false`, so the server's anchors come from a text token scan
+  that matches generated tokens back against the source, not from esrap at all.
+
+**Demonstrated.** On upstream's `sourcemaps/attached-sourcemap` fixture, whose `let` is alone on
+its source line, the two ports were wrong in different ways at the same instant: the client
+emitted no end anchor (a rsvelte-only guard dropped it once `column + keyword.len()` exceeded the
+source line's length), and the server emitted one at `column + 3` (it anchored the token `let`,
+not the fragment `let `). Two further defects in the client port were invisible until the first
+was fixed — `push_mapping` **overwrote** a mapping when the generated position repeated, and
+`keyword_cursor` / `write_keyword` mapped builder-made nodes that upstream skips on `node.loc`,
+so every synthesized `var root = …` anchored at offset 0 of the `.svelte` file. All four are
+fixed; the gate went 768/770 → **770/770** with out-of-range unchanged at 0.
+
+**Defended at degree 2, not closed.** The server does not print through esrap, so there is no
+single implementation to route both through. What the tree now has is four independently-failing
+pins with expectations spelled out rather than read off the other port:
+`crates/rsvelte_esrap/tests/keyword_anchor_fidelity.rs` (three tests, each failing only under its
+own ablation) and `crates/rsvelte_core/tests/server_declaration_keyword_anchor.rs`. Nothing
+compares the two maps to each other, and only one of the 29 sourcemaps samples has a source line
+that separates the two rules — which is why this row was worth writing rather than the fix alone.
 
 ## Adding a row, and closing one
 

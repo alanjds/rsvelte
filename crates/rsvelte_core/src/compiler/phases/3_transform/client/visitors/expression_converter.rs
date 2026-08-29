@@ -756,8 +756,14 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                     JsExpr::Spanned(inner, _, _)
                         if matches!(context.arena.get_expr(*inner), JsExpr::Identifier(_))
                 );
+                // `get_binding` resolves by name from the root scope, so a
+                // parameter shadowing a prop still answers with the prop's
+                // binding — the identifier arm and the rest-prop branch above
+                // both consult `shadowed_prop_names` for exactly that reason,
+                // and an each key function's parameter is the case that needs it.
                 if is_spanned_identifier
                     && let Some(name) = get_jsnode_identifier_name(object_node)
+                    && !context.state.shadowed_prop_names.contains(name.as_str())
                     && let Some(binding) = context.state.get_binding(&name)
                     && matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
                     && let Some(read) = context.state.transform.get(&name).and_then(|t| t.read)
@@ -5023,6 +5029,17 @@ pub(crate) fn check_ownership_validation(
     // Get the root object name
     let root_name = get_root_identifier_from_member_json(left_val)?;
 
+    // Upstream resolves the root through the scope at the mutation, so a local
+    // declaration shadowing a prop is not a prop mutation.
+    let root_start = get_root_start_position(left_val);
+    if root_start.is_some_and(|start| {
+        context
+            .state
+            .reference_is_shadowed_non_prop(&root_name, start)
+    }) {
+        return None;
+    }
+
     // Get the binding for the root object
     let binding = context.state.get_binding(&root_name)?;
 
@@ -5043,7 +5060,7 @@ pub(crate) fn check_ownership_validation(
     let prop_alias = binding.prop_alias.clone();
 
     // Get source location from the root identifier's start position
-    let source_loc = get_root_start_position(left_val).and_then(|start| {
+    let source_loc = root_start.and_then(|start| {
         let source = &context.state.analysis.source;
         if !source.is_empty() {
             use crate::compiler::phases::phase3_transform::utils::locate_in_source;
@@ -5329,8 +5346,21 @@ fn try_transform_assignment(
                 .unwrap_or(false)
         };
 
+        let is_store_sub = {
+            use crate::compiler::phases::phase2_analyze::scope::BindingKind;
+            context
+                .state
+                .get_binding(&root_name)
+                .map(|b| matches!(b.kind, BindingKind::StoreSub))
+                .unwrap_or(false)
+        };
+
         let visited_left = if is_prop_binding {
             apply_transforms_to_expression_with_shadowed(left, context, local_scope)
+        } else if is_store_sub {
+            // The store root is replaced by `store_sub_mutate`, but a computed index is an
+            // ordinary read and still owes its site's transform.
+            super::shared::utils::transform_computed_indices_only(left, context, local_scope)
         } else {
             left.clone()
         };

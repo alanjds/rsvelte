@@ -56,14 +56,16 @@ fn keeps_typescript_annotations_on_each_declarator() {
     assert!(out.contains("const c = 'x';"), "{out}");
 }
 
+/// Upstream prints the comment after the keyword and the declarator on the next
+/// line (measured against svelte 5.56.10); the newline is what keeps the
+/// declarator out of the comment.
 #[test]
-fn moves_a_comment_between_declarators_above_its_declaration() {
+fn prints_a_comment_between_declarators_after_the_keyword() {
     let out = client("<script>\nlet a = $state(1),\n\t// why\n\tb = $state(2);\n</script>\n{a}{b}");
     assert!(!out.contains("COMPILE_ERROR"), "{out}");
-    assert!(out.contains("// why"), "the comment was dropped: {out}");
     assert!(
-        out.contains("let b = 2;"),
-        "the comment swallowed the declarator: {out}"
+        out.contains("let // why\n\tb = 2;"),
+        "the comment must print after the keyword, with the declarator on its own line: {out}"
     );
 }
 

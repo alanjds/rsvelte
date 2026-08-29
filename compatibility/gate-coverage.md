@@ -551,6 +551,39 @@ because 1a means no gate reaches this code path with `Meaningful`.
 `result.js.map`, `result.css.map`, `result.metadata` (including the `runes` flag),
 `result.ast`. **[S]** A `metadata.runes` regression produces zero corpus signal.
 
+### Blind spot 1f — the report's line number is a position in NORMALIZED text, not in either output or the source
+
+`verify.mjs:642` builds every `js-mismatch` detail with `firstDiffLine(expJs, actJs)`, and
+`verify.mjs:566-567` defines those operands as
+`stripBlankLines(readIf(<expected|actual>/<id>/<target>.js))` — files `oxfmtTree` has already
+rewritten in place. `normalize.mjs:271-280` returns `i + 1` of the first differing line. So the
+number in a divergence report addresses the **comparison-side normalized text**, which is not
+either compiler's output and is not the `.svelte` source at all.
+
+Three things follow, and only the first is obvious:
+
+1. A report line cannot be mapped back to a source line. **[S]**
+2. `firstDiffLine` stops at the FIRST differing line, so a report shows one hunk per
+   `(id, target)` however many exist. A second cause in the same file is invisible until the
+   first is fixed. **[S]**
+3. **Where a hunk appears in the report is not evidence about codegen.** oxfmt's line breaking
+   is a function of the whole file, so a change that moves a construct across the printer's
+   width threshold renumbers every later line and can reorder which divergence is "first" with
+   no change to what either compiler emitted. **[D]** — during the 2026-08-29 cluster-E work a
+   SMUI JSDoc divergence was inferred to be a fresh regression from the report's first-diff
+   ordering; rebuilding at the merge base produced identical line counts (416/357) and the same
+   hunk, so it pre-existed. The ordering argument was invalid, not merely wrong on the facts.
+
+**Point 2 is not theoretical, and it mis-assigns work.** On 2026-08-30 three of the 19 unlisted
+failing ids were routed by the line the report printed, and all three were the wrong cause: the
+`$.mutate` "over-generation" in `adventurelog/.../LodgingDetails.svelte` was actually a missing
+`$.invalidate_inner_signals(() => { $t(); })` wrapper, and `$.event(` "line splitting" in two
+`sparrow-app` files was a **symptom** of official printing six comments inside that call. Both
+were found only by diffing the whole artifact. The reusable rule: **to attribute a divergence to
+a commit, rebuild that commit and re-measure the file — never compare two reports' line numbers
+or their hunk order.** A report answers "does this pair differ", and its coordinates answer
+nothing else.
+
 ### Blind spot 1d — the compile-option surface is one point
 
 `compile.mjs:99-100`: `{ generate, dev, filename }` plus `css: 'external'` for components.
@@ -1966,14 +1999,26 @@ justified at `:81-87` by "measured locally, tsc and tsgo produce IDENTICAL diagn
 
 **Unit.** 29 samples from the upstream sourcemaps suite: 23 hand-ported anchor assertions
 (`:127-189`), out-of-range segment budgets, and `map-parity` against the official map. Floors at
-`:1011-1028`; staleness fatal at `:1061`. Ratchet: 74 entries.
+`:1011-1028`; staleness fatal at `:1061`. Ratchet: 0 entries (2026-08-30).
 
 ### Blind spot 14a — segments rsvelte *adds* are never inspected
 
-`parity()` iterates `theirs.lines` only (`:537`). **[S]** A segment rsvelte emits at a generated
+`parity()` iterates `theirs.lines` only (`:537`). **[D]** A segment rsvelte emits at a generated
 position where the official map has none is never visited; `out_of_range` (`:463-501`) flags
 only positions past end-of-line and `has_negative_segment` (`:507`) only negatives, so an extra
 mapping to an in-range original position passes all three checks.
+
+Demonstrated on 2026-08-30. `keyword_cursor` / `write_keyword` mapped builder-made nodes that
+upstream skips on `node.loc`, so every synthesized `var root = $.from_html(…)` and every
+synthesized `import` anchored its keyword at offset 0 of the `.svelte` file — **236** segments
+over the 29 samples (1870 with this defect restored against 1634 without it, the two runs
+differing in nothing else), all but 3 of them pointing at in-range positions inside the opening
+`<script>` / `<style>` tag. The gate scored 768/770 throughout. They became visible only when a
+*separate* fix stopped `Driver::push_mapping` from overwriting a mapping at a repeated generated
+column: the spurious anchors then displaced official ones, and 12 of the 29 samples' client maps
+turned `wrong`. Two lessons, one per direction —
+a defect in this blind spot can be surfaced by fixing something else entirely, and a collapse rule
+that keeps the last write is a repair that hides what it repaired.
 
 ### Blind spot 14b — `sources`, `sourcesContent`, `names`, `file`, `version`
 

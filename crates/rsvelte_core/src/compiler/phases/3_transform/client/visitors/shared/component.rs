@@ -1932,7 +1932,7 @@ fn process_bind_directive<'a>(
             );
             // Build the assignment with $.untrack($store) as the base
             let assignment_expr = build_store_member_assignment(
-                &context.arena,
+                context,
                 &raw_expression,
                 &store_prefix,
                 b::id("$$value"),
@@ -2300,22 +2300,23 @@ fn get_store_info_from_member(expr: &Expression) -> Option<(String, String)> {
 /// Build an assignment expression for store member mutation.
 /// Replaces the store prefix ($store) with $.untrack($store) in the member expression.
 fn build_store_member_assignment(
-    arena: &crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
+    context: &ComponentContext,
     expr: &JsExpr,
     store_prefix: &str,
     value: JsExpr,
 ) -> JsExpr {
     // Build the left side by replacing $store with $.untrack($store)
-    let left = replace_store_with_untrack(arena, expr, store_prefix);
-    b::assign(arena, left, value)
+    let left = replace_store_with_untrack(context, expr, store_prefix);
+    b::assign(&context.arena, left, value)
 }
 
 /// Replace the store identifier in an expression with $.untrack($store).
 fn replace_store_with_untrack(
-    arena: &crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
+    context: &ComponentContext,
     expr: &JsExpr,
     store_prefix: &str,
 ) -> JsExpr {
+    let arena = &context.arena;
     match expr {
         JsExpr::Identifier(name) if name == store_prefix => b::call(
             arena,
@@ -2324,10 +2325,20 @@ fn replace_store_with_untrack(
         ),
         JsExpr::Member(member) => {
             let new_object =
-                replace_store_with_untrack(arena, arena.get_expr(member.object), store_prefix);
+                replace_store_with_untrack(context, arena.get_expr(member.object), store_prefix);
+            // Only the object is the untracked store; a computed key is an ordinary
+            // read and still owes its site's transform ($key -> $key(), i -> $.get(i)).
+            let property = match &member.property {
+                JsMemberProperty::Expression(id) if member.computed => {
+                    let key =
+                        super::utils::apply_transforms_to_expression(arena.get_expr(*id), context);
+                    JsMemberProperty::Expression(arena.alloc_expr(key))
+                }
+                other => other.clone(),
+            };
             JsExpr::Member(JsMemberExpression {
                 object: arena.alloc_expr(new_object),
-                property: member.property.clone(),
+                property,
                 computed: member.computed,
                 optional: member.optional,
             })
