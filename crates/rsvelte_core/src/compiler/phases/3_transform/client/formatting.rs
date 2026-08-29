@@ -235,6 +235,21 @@ pub(super) fn rehome_reactive_statement_comments(source: &str) -> String {
     relocate_comments_in_spans(source, &reactive_spans)
 }
 
+/// Whether the comment run past the last `$:` statement outlives the rebuilt
+/// effect. Upstream appends every effect after the rest of the instance body,
+/// so such a comment is printed *after* them — and only a source-located block
+/// nested in the effect body revives the cursor that reaches it.
+pub(super) fn reactive_tail_comment_outlives_effects(source: &str) -> bool {
+    let spans = reactive_statement_spans(source);
+    let Some(last) = spans.last() else {
+        return false;
+    };
+    !last.has_successor
+        && last.end < source.len()
+        && (source[last.end..].contains("//") || source[last.end..].contains("/*"))
+        && !nested_block_ranges(source, last.label, last.end).is_empty()
+}
+
 /// A top-level `$:` statement, with the byte ranges the rewrite needs.
 struct ReactiveSpan {
     /// Start of the comment run leading the statement.

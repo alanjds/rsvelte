@@ -568,7 +568,9 @@ pub fn visit_regular_element(
             if let Attribute::Attribute(attr) = attribute {
                 // Handle event attributes (onclick={...}) first, then continue
                 if is_event_attribute(attribute).is_some() {
-                    visit_event_attribute(attr, context);
+                    let name_start = node.start.saturating_add(1);
+                    let name_end = name_start + node.name.len() as u32;
+                    visit_event_attribute(attr, (name_start, name_end), context);
                     continue;
                 }
 

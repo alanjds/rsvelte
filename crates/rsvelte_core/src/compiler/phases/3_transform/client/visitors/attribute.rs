@@ -3,7 +3,7 @@
 //! Corresponds to `Attribute.js` in
 //! `svelte/packages/svelte/src/compiler/phases/3-transform/client/visitors/Attribute.js`.
 
-use crate::ast::template::{Attribute, AttributeNode};
+use crate::ast::template::{Attribute, AttributeNode, TemplateNode};
 use crate::compiler::phases::phase3_transform::client::source_anchor::CommentRegion;
 use crate::compiler::phases::phase3_transform::client::types::ComponentContext;
 use crate::compiler::phases::phase3_transform::client::types::Memoizer;
@@ -142,7 +142,11 @@ fn is_expression_attribute_value(value: &crate::ast::template::AttributeValue) -
 ///     }
 /// }
 /// ```
-pub fn visit_event_attribute(node: &AttributeNode, context: &mut ComponentContext) {
+pub fn visit_event_attribute(
+    node: &AttributeNode,
+    element_name_span: (u32, u32),
+    context: &mut ComponentContext,
+) {
     use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 
     // Extract event name (remove "on" prefix)
@@ -188,12 +192,23 @@ pub fn visit_event_attribute(node: &AttributeNode, context: &mut ComponentContex
     // Only generate a name if the handler is actually an arrow function, to avoid consuming
     // names from the conflicts set unnecessarily.
     // Reference: events.js build_event(): `if (dev && handler.type === 'ArrowFunctionExpression')`
-    let mut handler = if context.state.options.dev && matches!(handler, JsExpr::Arrow(_)) {
+    let named_function = context.state.options.dev && matches!(handler, JsExpr::Arrow(_));
+    let mut handler = if named_function {
         let name = context.state.memoizer.generate_id(event_name);
         convert_arrow_to_named_function(handler, name.into())
     } else {
         handler
     };
+
+    // Upstream's dev wrapper is `b.function(…)` — a builder node with no `loc`,
+    // so the cursor reaches no position inside it and the element identifier
+    // printed before it is where the handler's comments flush instead.
+    let (name_start, name_end) = element_name_span;
+    let mut event_node = context.state.node.clone();
+    if named_function && let Some(region) = CommentRegion::of(&context.state, expr_tag, name_start)
+    {
+        event_node = region.anchor(&context.arena, event_node, name_start, name_end);
+    }
 
     if let (Some(start), Some(end)) = (expr_tag.expression.start(), expr_tag.expression.end())
         && let Some(region) = CommentRegion::of(&context.state, expr_tag, expr_tag.start + 1)
@@ -206,7 +221,7 @@ pub fn visit_event_attribute(node: &AttributeNode, context: &mut ComponentContex
         build_event(
             &context.arena,
             event_name,
-            &context.state.node,
+            &event_node,
             handler,
             capture,
             if passive == Some(true) { passive } else { None },
@@ -230,7 +245,6 @@ pub fn visit_event_attribute(node: &AttributeNode, context: &mut ComponentContex
 
     // Check if the parent is a special element (svelte:window, svelte:document, svelte:body)
     let is_special_element = context.current_parent().is_some_and(|parent| {
-        use crate::ast::template::TemplateNode;
         matches!(
             parent,
             TemplateNode::SvelteWindow(_)

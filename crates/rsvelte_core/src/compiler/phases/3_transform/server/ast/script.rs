@@ -2709,15 +2709,14 @@ fn lower_variable_declaration<'a>(
             Some(rune) => {
                 // Lower the init from the rune; keep the binding pattern verbatim.
                 let init = d.init.as_ref().map(OxcExpression::without_parentheses);
-                if carry
-                    && let Some(arg_end) = own_line_comment_after_rune_argument(init, comments, src)
-                {
+                if carry && own_line_comment_after_rune_argument(init, comments, src).is_some() {
                     // A comment on its own line after the retained rune
-                    // argument stays pending. Extending the synthesized
-                    // declaration through the removed call wrapper would make
-                    // esrap attach it to this declaration instead of flushing
-                    // it before the next surviving node (or at the body tail).
-                    statement_loc_end = arg_end;
+                    // argument stays pending. Upstream's rebuilt declaration is
+                    // builder-made and carries no `loc` at all, so it bounds
+                    // nothing: keep the start as the region anchor and mark the
+                    // end location-less, or the flush treats the comment as a
+                    // detached block and prepends a blank line.
+                    statement_loc_end = u32::MAX;
                 }
                 let new_init = lower_decl_init(&rune, init, src, state, carry, &mut poisoned);
                 let pat_span = d.id.span();

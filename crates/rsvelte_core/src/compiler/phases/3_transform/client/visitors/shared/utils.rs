@@ -3550,6 +3550,28 @@ fn push_folded_tag_comments(tag_start: u32, tag_end: u32, context: &mut Componen
     }
 }
 
+/// Drop the opaque chunks [`push_folded_tag_comments`] emitted for the tag in
+/// `[tag_start, tag_end)`. A generated node anchored on the same source region
+/// carries those comments itself, and keeping both prints each one twice.
+pub fn drop_folded_tag_comments(
+    state: &mut crate::compiler::phases::phase3_transform::client::types::ComponentClientTransformState<'_>,
+    tag_start: u32,
+    tag_end: u32,
+) {
+    state.init.retain(|stmt| match stmt {
+        JsStatement::RawMapped {
+            code,
+            source_offset,
+            ..
+        } => {
+            !(*source_offset >= tag_start
+                && *source_offset < tag_end
+                && (code.starts_with("//") || code.starts_with("/*")))
+        }
+        _ => true,
+    });
+}
+
 /// Build a template chunk from text/expression nodes.
 ///
 /// Corresponds to `build_template_chunk` in

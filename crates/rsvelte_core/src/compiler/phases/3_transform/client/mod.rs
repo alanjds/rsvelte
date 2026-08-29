@@ -6666,6 +6666,31 @@ fn drop_trailing_svelte_ignore(output: &mut String) {
     }
 }
 
+/// Split off the run of whole-line comments that ends `result`, returning it
+/// (including the newline that starts it) with `result` truncated.
+fn split_trailing_comment_run(result: &mut String) -> Option<String> {
+    let ranges = crate::compiler::phases::phase3_transform::shared::js_scan::comment_ranges(
+        result.as_bytes(),
+    );
+    let mut boundary = result.len();
+    let mut run_start = None;
+    for &(start, end) in ranges.iter().rev() {
+        if end > boundary || !result[end..boundary].trim().is_empty() {
+            break;
+        }
+        // A comment that trails code on its line belongs to that statement.
+        let line_start = result[..start].rfind('\n').map_or(0, |newline| newline + 1);
+        if !result[line_start..start].trim().is_empty() {
+            break;
+        }
+        run_start = Some(line_start);
+        boundary = line_start;
+    }
+    // A run that starts the text has no statement to follow; leave it alone.
+    let cut = run_start?.checked_sub(1)?;
+    Some(result.split_off(cut))
+}
+
 fn transform_instance_script_for_visitors(
     script: &str,
     analysis: &ComponentAnalysis,
@@ -6754,6 +6779,10 @@ fn transform_instance_script_for_visitors(
     let pn_entry_text: &str = script;
     super::profile::record_pn(super::profile::PN_FILES);
 
+    // Decided before any rewrite, on the source the reactive spans describe.
+    let tail_comment_outlives_effects = !analysis.runes
+        && legacy_script_has_dollar_token(script)
+        && formatting::reactive_tail_comment_outlives_effects(script);
     let script: std::borrow::Cow<str> = if analysis.runes || !legacy_script_has_dollar_token(script)
     {
         std::borrow::Cow::Borrowed(script)
@@ -8747,9 +8776,18 @@ fn transform_instance_script_for_visitors(
     // (order_reactive_statements in 2-analyze/index.js) and then iterates them
     // in that sorted order. We perform the topological sort here at emission time.
     if !pending_reactive_statements.is_empty() {
+        // Upstream prints the appended effects before the script-tail comment,
+        // so the comment has to end up past them here too — otherwise the
+        // cursor the effect body kills is never rewound onto it.
+        let trailing_comments = tail_comment_outlives_effects
+            .then(|| split_trailing_comment_run(&mut result))
+            .flatten();
         let sorted = sort_reactive_statements(pending_reactive_statements);
         for (_, _, reactive_stmt) in &sorted {
             result.push_str(reactive_stmt);
+        }
+        if let Some(trailing) = trailing_comments {
+            result.push_str(&trailing);
         }
     }
 
