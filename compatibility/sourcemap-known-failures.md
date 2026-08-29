@@ -212,9 +212,18 @@ duplicate generated columns by occurrence. That pairing is right for `effects`
 but on its own it also reports a *redundant* official duplicate — the same
 segment emitted twice at one column, which `basic`'s `let foo = $.prop(…)` line
 carries — as a segment rsvelte failed to reproduce. Measured on #3896's own base
-(`b734a16ac`, its `baseRefOid`), that commit's gate scores **47 missing, 7
-wrong**, so `[]` describes no tree the comparison has ever run on. Nothing caught
-it because the CI runs for #3896 and its three successors were all `cancelled`.
+(`b734a16ac`, its `baseRefOid`), that commit's gate scores **47 missing, 7 wrong
+over 33 ratchet keys**, so `[]` describes no tree the comparison has ever run on
+— and no tree it *could* have run on, because matching a redundant duplicate
+would mean reproducing the official map byte for byte.
+
+Nothing caught it because the CI runs for #3896 and its three successors are all
+`cancelled`. This is the worked example of the rule in `CLAUDE.md`: **a cancelled
+run and a green run are indistinguishable in the branch header**, so a ratchet
+merged behind one has never been checked against anything. The gate stayed red on
+`main` for the 145 commits that followed, and the failure list at `main` is
+identical to the one on a branch cut from it — which is how a branch inherits a
+regression that reads as its own.
 
 Both defects of the comparison are now fixed together. `counterpart` still pairs
 by occurrence — an extra *leading* rsvelte segment shifts every occurrence and is
@@ -239,7 +248,10 @@ official fixture maps rather than against the ratchet:
   coordinates, where it resolves to offset 0. `export let foo = 5` and
   `export let foo = 5;` differ in the map by exactly this one segment. The end
   now falls back to the last copied run at or before the offset, which is where
-  upstream's own declaration span ends.
+  upstream's own declaration span ends. An offset past the end of the chunk is
+  excluded: a kept `;` for a removed `$inspect` marks itself with
+  `span.end == u32::MAX`, and mapping that sentinel to a real position deletes
+  the marker, so the `;;` upstream prints collapses to `;`.
 
 | | before | after |
 |---|---|---|
