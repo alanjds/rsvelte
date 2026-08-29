@@ -437,8 +437,12 @@ fn reactive_statement_end(source: &str, scan: &mut JsScan, from: usize) -> usize
         match c {
             b'(' | b'[' => scan.depth += 1,
             b'{' => {
+                // Only a brace at the statement's own depth opens its block; one
+                // nested inside is an object literal or an arrow body, and
+                // treating it as the statement's block both disables the ASI exit
+                // below and ends the statement at an unrelated `}` later on.
+                opened_block |= scan.depth == base_depth;
                 scan.depth += 1;
-                opened_block = true;
             }
             b')' | b']' => scan.depth = scan.depth.saturating_sub(1),
             b'}' => {

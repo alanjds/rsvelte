@@ -9,7 +9,7 @@ measurement.
 
 The gate compiles every `<style lang="scss"|"sass">` block and every standalone `.scss` / `.sass`
 file in the corpus source repositories with both backends and compares the CSS byte-for-byte after
-trailing-whitespace normalisation. `scss-known-failures.json` holds **318 entries** and may only
+trailing-whitespace normalisation. `scss-known-failures.json` holds **315 entries** and may only
 shrink; it is two-sided, so an entry that starts agreeing fails the run until it is
 re-baselined in the same PR.
 
@@ -19,9 +19,9 @@ The first run measured 118 units: **64 match**, **30 diverge**, and **24 are com
 "both backends reject"**. Read the denominator as 94, not 118 — a both-reject pair is parity, but
 it is parity on a comparison that never reached the CSS.
 
-**After the wave-2 enrolment (#3130) the population is 3,027 units**: 1,755 match, 213 diverge on
-the CSS, 105 are inputs `grass` rejects and dart-sass accepts, and 954 are both-reject. The
-denominator is therefore 2,073, and `grass` agrees with dart-sass on **84.7%** of it. Treat that
+**After the wave-2 enrolment (#3130) the population is 3,033 units**: 1,762 match, 216 diverge on
+the CSS, 99 are inputs `grass` rejects and dart-sass accepts, and 956 are both-reject. The
+denominator is therefore 2,077, and `grass` agrees with dart-sass on **84.8%** of it. Treat that
 as the current size of the "near-substitute, not drop-in" claim — it was measured on 94 units
 before, and the 25× larger population did not change the verdict, only its precision.
 
@@ -44,25 +44,39 @@ Two consequences worth stating rather than discovering later:
 65 of its stylesheets fall into the both-reject bucket — the gate would have looked green while
 comparing almost nothing.
 
-Partition of `scss-known-failures.json` by verdict: `213 + 105`
+Partition of `scss-known-failures.json` by verdict: `216 + 99`
 
-- **213 — the CSS differs** (`css-mismatch`).
-- **105 — `grass` rejects an input dart-sass compiles** (`grass-rejects-accepted`). This is the
+- **216 — the CSS differs** (`css-mismatch`).
+- **99 — `grass` rejects an input dart-sass compiles** (`grass-rejects-accepted`). This is the
   half a text diff cannot describe, and it is a third of the list.
 
 The clusters below are a **diagnostic ordering of the `css-mismatch` half, not a partition**: the
-gate prints one differing line per unit and 189 of the 213 produced one, so the counts sum to 189.
+gate prints one differing line per unit and 192 of the 216 produced one, so the counts sum to 192.
 The original five clusters were written when the whole ratchet was 30 entries; each is still the
 same mechanism, at the size the enrolment found.
 
 | n | cluster | changes the cascade? |
 |---|---|---|
-| 70 | declarations after nested rules (cluster 2 below) | **yes** |
+| 71 | declarations after nested rules (cluster 2 below) | **yes** |
 | 44 | indentation of a nested rule | no |
-| 31 | colour serialisation (cluster 1) | no |
+| 32 | colour serialisation (cluster 1) | no |
 | 26 | a trailing `/* … */` dropped (cluster 4) | no |
-| 10 | attribute-selector quote style — dart-sass keeps `'`, `grass` prints `"` | no |
+| 11 | attribute-selector quote style — dart-sass keeps `'`, `grass` prints `"` | no |
 | 8 | a comment `grass` emits before the block dart-sass emits it after | no |
+
+## Six `date-picker-svelte` entries moved when the abort stopped happening
+
+`grass` asserts that an indented-Sass document's top-level indentation is zero and **aborts** on a
+`<style lang="sass">` block, whose body carries the surrounding file's indentation. Dart Sass reads
+that shared prefix as the document's base indentation instead. `remove_indented_base` existed for
+this, but it was reached only from a `catch_unwind` — and every shipped binary except the three
+with an explicit `panic = "unwind"` override is built under `panic = "abort"`, so the fallback
+never ran where it mattered and the process died. Removing the base *before* `grass` sees the
+document made six units compile that previously aborted: three now agree with dart Sass and left
+the ratchet, three compile to different CSS and moved from `grass-rejects-accepted` to
+`css-mismatch` (one each into the three clusters above). The leading blank line is part of the
+condition, not incidental — dart Sass rejects a document whose very first line is indented, so
+dedenting that shape would make rsvelte accept what dart Sass refuses.
 
 The one cluster that changes rendering is also the largest, which was not true at 30 entries.
 

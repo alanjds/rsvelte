@@ -2154,7 +2154,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(accessor_starts.len(), 2, "generated={generated:?}");
 
-        let mut expected = vec![(14, 0), (19, 6)];
+        // The element identifier carries `element.name_loc`, so it starts at the
+        // tag name rather than at the `<`.
+        let mut expected = vec![(14, 1), (19, 6)];
         for start in accessor_starts {
             expected.extend([
                 (start, 19),

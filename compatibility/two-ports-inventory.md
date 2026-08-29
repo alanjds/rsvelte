@@ -89,6 +89,7 @@ whose oracle is the other implementation is only as good as its independent expe
 | [13](#13-what-does-a-call-to-one-of-upstreams-globals-keypaths-evaluate-to--d-closed-by-degree-1) | What does a call to one of upstream's `globals` keypaths evaluate to? | 2 tables | **[D]** | closed by #3471 (degree 1) |
 | [14](#14-what-options-does-the-public-parse-run-with--d) | What options does the public `parse()` run with? | 2 bindings | **[D]** | #3688 open |
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
+| [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
 
 ---
 
@@ -507,6 +508,44 @@ the C ABI suite spells the same exact messages and behaviours as independent exp
 ports remain separate because their value domains differ (JS callbacks versus JSON and native
 callbacks), so this closes the demonstrated cells rather than removing the row. A new option or
 validator kind still has to be added to all three ports and their boundary gates.
+
+### 16. What is the read form of a name inside an `$.invalidate_inner_signals` body? — [D]
+
+**Upstream:** one `build_getter(node, state)` (`3-transform/client/utils.js:33`), called once per
+indirect binding from `AssignmentExpression.js:145-182`. It reads `state.transform[name].read`,
+so the answer is a property of the **site** the body is emitted at, not of the binding.
+
+**Ports.**
+
+- `client/mod.rs` `prop_invalidate_bodies` — precomputes one body **string** per binding from a
+  `BindingKind` table (`Prop`/`BindableProp` that is a prop source and `StoreSub` → `name()`;
+  `State`/`RawState`/`Derived`/`LegacyReactive` → `$.get(name)`; otherwise bare). Consumed by the
+  instance-script text pipeline and by `legacy_state_member_mutate_ast` /
+  `prop_member_mutate_ast`, which splice it as text.
+- `client/visitors/expression_converter.rs` `wrap_with_legacy_invalidate` — a second copy of that
+  same table, for the template AST path.
+
+**Demonstrated.** The kind table has no site, and a name's read form is not a function of its
+kind alone: in `adventurelog`'s `LocationVisits.svelte`, `visit` is an instance-script function
+parameter *and* an each item, so official emits bare `visit;` in `handleGpxFileChange` and
+`$.get(visit);` inside the each block — from the same `legacy_indirect_bindings` list. The AST
+port answered `visit` at both, because the table cannot see the each scope. It now consults
+`context.state.transform` first and falls back to the table; the string port still has only the
+table.
+
+Two things the divergence was hiding, both found in the same file and both fixed:
+`prop_source_reads_ast` walked **into** the spliced body and wrapped the prop read a second time
+(`trails()` → `trails()()`), because the body arrives already in final read form and nothing said
+so; and the legacy-state arm of a component `bind:` setter
+(`visitors/shared/component.rs`, the `$.mutate(root, …)` branch) never called
+`wrap_with_legacy_invalidate` at all, so `<Comp bind:tz={activityForm.tz} />` dropped the
+invalidation the element arm emits. `compatibility/pattern-corpus/legacy-invalidate-inner-signals-site.svelte`
+carries all three shapes.
+
+**Not closed.** The string port cannot be made site-aware without a printer, and the AST port
+cannot be made to produce the text the per-line pipeline splices. Closing this at degree 1 means
+retiring the text splice — the client instance-script pipeline AGENTS.md already names as the
+correctness hazard.
 
 ## Adding a row, and closing one
 

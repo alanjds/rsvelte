@@ -854,9 +854,15 @@ fn collect_binding_writes(
             && var_decl.kind == oxc_ast::ast::VariableDeclarationKind::Let
         {
             let init_span = init.span();
+            // ESLint reports the binding through its declarator, so a TypeScript
+            // annotation is inside the reported range.
+            let binding_end = declarator
+                .type_annotation
+                .as_ref()
+                .map_or(identifier.span.end, |annotation| annotation.span.end);
             out.semantic_initialized_lets.push(SemanticLetCandidate {
                 start: base + identifier.span.start,
-                end: base + identifier.span.end,
+                end: base + binding_end,
                 name: identifier.name.to_string(),
                 init_start: base + init_span.start,
                 init_end: base + init_span.end,

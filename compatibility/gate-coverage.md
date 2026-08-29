@@ -1681,9 +1681,9 @@ Positive control that a ceiling is the house pattern where someone thought about
 `fmt.mjs:170`. **[S]** `.svelte.js` / `.svelte.ts` files are never formatted or compared here,
 and neither are standalone `.css` / `.scss` / `.less` files.
 
-**Note on exclusions:** `fmt-oracle-excluded.json` holds 22 entries, each with a written
-justification (2 migrate, ~10 oracle-bug, 2 invalid-input, 4 oxc-vs-prettier layout, 1 platform
-nondeterminism, 3 oxfmt-internal CSS disagreement). This is a *small, justified* set — noted
+**Note on exclusions:** `fmt-oracle-excluded.json` holds 29 entries, each with a written
+justification, partitioned by the JSON's own `class` field (16 oracle-bug, 7 engine-divergence,
+4 invalid-input, 2 migrate). This is a *small, justified* set — noted
 here so it is not mistaken for a blind spot. Its staleness check is `console.warn` only
 (`fmt-verify.mjs:110-126`).
 

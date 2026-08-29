@@ -14,7 +14,7 @@ preset leaves `off`. Gate 33 (`lint-preset.mjs`) pins the two presets, but it
 reads them through `--list-rules` and upstream's exported config object — the
 declared tables, never a run (gate-coverage blind spot 33b).
 
-`lint-severity-known-failures.json` holds 60 entries.
+`lint-severity-known-failures.json` holds 61 entries.
 
 Key classes:
 
@@ -25,13 +25,13 @@ Key classes:
 | `exit` | `exit\|<id>\|<oracle>-><rsvelte>\|<causes>` | the process exit codes differ |
 | `oracle-crash` | `oracle-crash\|<id>\|<rule>` | an upstream rule threw and took the file's whole report with it |
 
-Partition of `lint-severity-known-failures.json` by cause: `55 + 4 + 1`
+Partition of `lint-severity-known-failures.json` by cause: `56 + 4 + 1`
 
 Two of those addends are a `4` and they are unrelated: the standalone `4` is the
 `exit` 1→0 class below (a type-aware rule `lint-universe.mjs` excludes, which
 still reports at `error` upstream). The four rsvelte over-rejections that used to
 sit *inside* the first addend are fixed and no longer listed, which is why it
-reads 55 rather than 59.
+reads 56 rather than 60.
 
 ## `severity` — zero entries, and that is the measurement
 
@@ -49,24 +49,24 @@ oracle and 2,504 / 1,035 from rsvelte. The control was also exercised directly:
 re-running the subject with `--error svelte/no-at-debug-tags` moves 38 findings
 and the gate reports **76** `severity` keys.
 
-## `exit` 0→1, 55 entries — rsvelte surfaces a compiler diagnostic ESLint cannot see
+## `exit` 0→1, 56 entries — rsvelte surfaces a compiler diagnostic ESLint cannot see
 
 `rsvelte-lint` merges the Svelte compiler's own diagnostics into its report and
 exits non-zero on any `Error`, exactly as it does for a rule at `error`.
 `svelte-eslint-parser` is deliberately more permissive than the compiler, so a
 file the compiler rejects is linted cleanly by ESLint and exits 0.
 
-Every one of these 55 patterns fails to compile, and it is the compiler saying
+Every one of these 56 patterns fails to compile, and it is the compiler saying
 so rather than a rule: the key's cause field carries the diagnostic code, and
-all 55 are compiler codes (`slot_element_invalid_name` ×13,
+all 56 are compiler codes (`slot_element_invalid_name` ×13,
 `dollar_prefix_invalid` ×7, `state_invalid_placement` ×4, `legacy_export_invalid`
-×4, `animation_invalid_placement` ×4, `parse-error` ×3, and 15 more codes accounting for
+×4, `animation_invalid_placement` ×4, `parse-error` ×4, and 15 more codes accounting for
 20 between them), never a `svelte/…` rule id. Many are inherent to the rule being
 exercised — `no-dynamic-slot-name`'s whole subject is a construct Svelte 5
 rejects outright.
 
-**Cross-checked against the official compiler, not assumed.** Compiling all 55
-with `submodules/svelte`'s own `compile`/`compileModule`: **all 55 are rejected by
+**Cross-checked against the official compiler, not assumed.** Compiling all 56
+with `submodules/svelte`'s own `compile`/`compileModule`: **all 56 are rejected by
 the official compiler too**, so the two tools disagree only about whether a linter
 should report a compile error — a product decision, and rsvelte's is the more
 useful one for a Svelte-specific linter.
@@ -75,9 +75,14 @@ This bucket held **59** entries until #3172 fixed issues #3127 and #3128. The fo
 that left were rsvelte over-rejections rather than a product decision — a
 `$`-prefixed class member NAME read as a store reference, and legacy mode
 (`runes: false`, or `<svelte:options runes={false} />`) not turning a rune-named
-`$` reference into a store subscription. The remaining 55 are the ones official
+`$` reference into a store subscription. The remaining 56 are the ones official
 rejects too, which is what the re-measured cross-check above now reports as
-55 of 55.
+56 of 56.
+
+The 56th is `prefer-const/22-decorated-class-method.svelte`, whose decorated class the
+official compiler rejects with `typescript_invalid_feature` at the same point rsvelte
+does. It was invisible until the `lint-adversarial-end` step above it stopped failing:
+the job's shell is `bash -e`, so a red step hides every comparison below it.
 
 ## `exit` 1→0, 4 entries — `svelte/no-navigation-without-resolve`
 

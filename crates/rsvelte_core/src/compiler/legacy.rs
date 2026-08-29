@@ -429,7 +429,12 @@ fn insert_loc_after_end(object: &mut Map<String, Value>, loc: Value) {
 fn add_estree_locs(value: &mut Value, positions: &Utf8ToUtf16) {
     match value {
         Value::Object(object) => {
-            for child in object.values_mut() {
+            for (field, child) in object.iter_mut() {
+                // Upstream's `add_comments` attaches `{ type, value, start, end }`
+                // and drops the `loc` acorn gave it, so an attached comment has none.
+                if matches!(field.as_str(), "leadingComments" | "trailingComments") {
+                    continue;
+                }
                 add_estree_locs(child, positions);
             }
 
@@ -870,6 +875,12 @@ fn convert_const_tag(const_tag: &ConstTag, positions: &Utf8ToUtf16) -> Value {
             "right": init
         });
         add_estree_locs(&mut expression, positions);
+        // Upstream synthesizes this node in `legacy.js` with only
+        // `type/start/end/operator/left/right`, so it carries no `loc` of its own
+        // even though the children it reuses do.
+        if let Value::Object(ref mut map) = expression {
+            map.remove("loc");
+        }
 
         return estree_obj! {
             "type": "ConstTag",
