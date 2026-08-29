@@ -2108,8 +2108,13 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
     // the error label lands on the offending region. (Parsing the bare string as
     // a program is unreliable: OXC's statement-level error recovery folds
     // trailing tokens into one recovered node, hiding the boundary.)
-    let mut wrapped = String::with_capacity(content.len() + 2);
-    wrapped.push('(');
+    // In TypeScript a bare `(` also opens an arrow parameter list, where a type
+    // annotation is legal, so OXC reads past the colon acorn-typescript stops at.
+    // A leading operand cannot be a parameter, which forces the sequence reading
+    // and puts the error back on the colon.
+    let open: &str = if ts { "(0," } else { "(" };
+    let mut wrapped = String::with_capacity(content.len() + open.len() + 2);
+    wrapped.push_str(open);
     wrapped.push_str(content);
     // a trailing `//` comment would swallow a same-line `)`
     wrapped.push_str("\n)");
@@ -2127,8 +2132,8 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
         // enclosing construct's opening delimiter, which is never where acorn
         // returned an expression.
         let start = first_error.labels.first()?.offset() as usize;
-        // Map the label's *start* back into `content` (strip the leading `(`).
-        start.checked_sub(1)
+        // Map the label's *start* back into `content` (strip the synthetic open).
+        start.checked_sub(open.len())
     })?;
 
     // A trailing-token error has leftover input *before* the synthetic closing
@@ -13917,8 +13922,22 @@ mod tests {
 
         // OXC recovers a type annotation in a JavaScript parse. Acorn returns
         // the complete `src` expression and leaves the colon for Svelte's
-        // close-token check.
-        assert_eq!(trailing_token_offset("src: string;", false), Some(3));
+        // close-token check. acorn-typescript stops at the colon too — a type
+        // annotation is not an expression in either language, and only the
+        // synthetic wrapper's `(` makes one legal (as an arrow parameter list).
+        for source in ["src: string;", "data: string", "\n\tdata: string;\n"] {
+            let colon = source.find(':').unwrap();
+            assert_eq!(
+                trailing_token_offset(source, false),
+                Some(colon),
+                "js: {source:?}"
+            );
+            assert_eq!(
+                trailing_token_offset(source, true),
+                Some(colon),
+                "ts: {source:?}"
+            );
+        }
     }
 
     #[test]
