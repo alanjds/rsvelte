@@ -49,29 +49,59 @@ thread_local! {
 /// the bindings in `store_subs`. Returns `None` when there's
 /// nothing to rewrite or the source fails to parse.
 ///
-/// `prop_store_names` lists the underlying store source names (without the
-/// `$` prefix) that are bound to a **prop**. For those, the first
-/// `$.store_mutate(...)` argument is the prop getter call (`store()`) rather
-/// than the bare name, matching the official compiler's `get_store()` (=
-/// `context.visit(b.id(name.slice(1)))`): reading a prop binding yields a
-/// getter call, so the store source must be read the same way. Without this
-/// a `$prop.x = …` mutation passed the subscription view instead of the
-/// prop's current value. Pass `&[]` for the non-prop case.
+/// `prop_store_names` and `state_store_names` list the underlying store source
+/// names (without the `$` prefix) that are bound to a **prop** and to a
+/// **mutable state source**. The first `$.store_mutate(...)` argument is the
+/// store source read the way any reference to its binding is read, which is
+/// upstream's `get_store()` (= `context.visit(b.id(name.slice(1)))`): a prop
+/// yields the getter call `store()`, a reassigned `let` yields `$.get(store)`,
+/// and every other binding kind yields the bare name. `store_assign_ast` makes
+/// the same three-way decision for `$store = …`; the two must agree or the same
+/// source is read one way when assigned and another when mutated.
 pub fn transform_store_member_mutate_ast_with_props(
     source: &str,
     store_subs: &[String],
     prop_store_names: &[String],
+    state_store_names: &[String],
 ) -> Option<String> {
-    let spliced = || transform_store_member_mutate_spliced(source, store_subs, prop_store_names);
+    let spliced = || {
+        transform_store_member_mutate_spliced(
+            source,
+            store_subs,
+            prop_store_names,
+            state_store_names,
+        )
+    };
     ast_rewrite::dual_run::resolve("store_member_mutate_ast:inplace", source, spliced, || {
-        transform_store_member_mutate_in_place(source, store_subs, prop_store_names)
+        transform_store_member_mutate_in_place(
+            source,
+            store_subs,
+            prop_store_names,
+            state_store_names,
+        )
     })
+}
+
+/// Upstream's `get_store()`: the store source is read through its own binding.
+fn store_access_name(
+    store_name: &str,
+    prop_store_names: &[String],
+    state_store_names: &[String],
+) -> String {
+    if prop_store_names.iter().any(|n| n == store_name) {
+        format!("{store_name}()")
+    } else if state_store_names.iter().any(|n| n == store_name) {
+        format!("$.get({store_name})")
+    } else {
+        store_name.to_string()
+    }
 }
 
 fn transform_store_member_mutate_spliced(
     source: &str,
     store_subs: &[String],
     prop_store_names: &[String],
+    state_store_names: &[String],
 ) -> Option<String> {
     if store_subs.is_empty() {
         return None;
@@ -95,6 +125,7 @@ fn transform_store_member_mutate_spliced(
                     source: src,
                     store_subs,
                     prop_store_names,
+                    state_store_names,
                     replacements: Vec::new(),
                 };
                 collector.visit_program(program);
@@ -108,6 +139,7 @@ struct MemberMutateCollector<'a> {
     source: &'a str,
     store_subs: &'a [String],
     prop_store_names: &'a [String],
+    state_store_names: &'a [String],
     replacements: Vec<Edit>,
 }
 
@@ -154,14 +186,8 @@ impl<'a> MemberMutateCollector<'a> {
         }
         let store_sub = root_name;
         let store_name = &root_name[1..];
-        // The store source is read like any other reference to its binding.
-        // For a prop binding that means the getter call `store()`; for plain /
-        // state / reactive-import stores the bare name is correct.
-        let store_access = if self.prop_store_names.iter().any(|n| n == store_name) {
-            format!("{}()", store_name)
-        } else {
-            store_name.to_string()
-        };
+        let store_access =
+            store_access_name(store_name, self.prop_store_names, self.state_store_names);
 
         let outer_text = &self.source[outer_span.start as usize..outer_span.end as usize];
         let rs = (root_span.start - outer_span.start) as usize;
@@ -207,9 +233,9 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Test helper: the non-prop case (no prop-backed store sources).
+    /// Test helper: the plain case — neither a prop nor a state source.
     fn transform_store_member_mutate_ast(source: &str, store_subs: &[String]) -> Option<String> {
-        transform_store_member_mutate_ast_with_props(source, store_subs, &[])
+        transform_store_member_mutate_ast_with_props(source, store_subs, &[], &[])
     }
 
     #[test]
@@ -237,6 +263,42 @@ mod tests {
         let out = transform_store_member_mutate_ast_with_props(
             "$store.prop = 5;",
             &ssv(&["$store"]),
+            &ssv(&["store"]),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "$.store_mutate(store(), $.untrack($store).prop = 5, $.untrack($store));"
+        );
+    }
+
+    #[test]
+    fn state_backed_store_reads_its_source() {
+        // A reassigned `let` is a `$.mutable_source`, so its read is `$.get(...)`.
+        let out = transform_store_member_mutate_ast_with_props(
+            "$store.prop = 5;",
+            &ssv(&["$store"]),
+            &[],
+            &ssv(&["store"]),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "$.store_mutate($.get(store), $.untrack($store).prop = 5, $.untrack($store));"
+        );
+    }
+
+    #[test]
+    fn a_prop_wins_over_a_state_source() {
+        // Both sets are name-keyed, so the order of the arms is observable.
+        // Upstream asks the binding once; a prop binding is never also a
+        // mutable source, and if the caller says both, the prop form is the
+        // one the assign port picks too.
+        let out = transform_store_member_mutate_ast_with_props(
+            "$store.prop = 5;",
+            &ssv(&["$store"]),
+            &ssv(&["store"]),
             &ssv(&["store"]),
         )
         .unwrap();
@@ -403,6 +465,7 @@ pub(crate) fn transform_store_member_mutate_in_place(
     source: &str,
     store_subs: &[String],
     prop_store_names: &[String],
+    state_store_names: &[String],
 ) -> ast_rewrite::Rewrite {
     if store_subs.is_empty() {
         return ast_rewrite::Rewrite::Unchanged;
@@ -423,6 +486,7 @@ pub(crate) fn transform_store_member_mutate_in_place(
                 b: crate::compiler::phases::phase3_transform::builders::B::new(allocator),
                 store_subs,
                 prop_store_names,
+                state_store_names,
                 changed: false,
             };
             oxc_ast_visit::VisitMut::visit_program(&mut rewriter, program);
@@ -435,6 +499,7 @@ struct MemberMutateRewriter<'a, 'b> {
     b: crate::compiler::phases::phase3_transform::builders::B<'a>,
     store_subs: &'b [String],
     prop_store_names: &'b [String],
+    state_store_names: &'b [String],
     changed: bool,
 }
 
@@ -506,6 +571,8 @@ impl<'a> oxc_ast_visit::VisitMut<'a> for MemberMutateRewriter<'a, '_> {
 
         let store_access = if self.prop_store_names.iter().any(|n| n == store_name) {
             self.b.call(store_name, vec![])
+        } else if self.state_store_names.iter().any(|n| n == store_name) {
+            self.b.call("$.get", vec![self.b.id(store_name)])
         } else {
             self.b.id(store_name)
         };
