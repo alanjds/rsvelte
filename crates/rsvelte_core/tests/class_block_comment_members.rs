@@ -5,13 +5,18 @@
 //! `$state.raw` field — was silently skipped, emitting text no JS parser
 //! accepts. Reproduced from sveltekit's `remote-functions/query/instance`.
 
-use rsvelte_core::{ModuleCompileOptions, compile_module};
+use rsvelte_core::{GenerateMode, ModuleCompileOptions, compile_module};
 
 fn module(src: &str) -> String {
+    module_for(src, GenerateMode::Client)
+}
+
+fn module_for(src: &str, generate: GenerateMode) -> String {
     compile_module(
         src,
         ModuleCompileOptions {
             filename: Some("T.svelte.js".into()),
+            generate,
             ..Default::default()
         },
     )
@@ -60,4 +65,50 @@ fn a_multiline_template_literal_keeps_its_own_line_breaks() {
     ));
     assert!(!out.contains("COMPILE_ERROR"), "{out}");
     assert!(out.contains("`a ${1} b\nc ${2} d`"), "{out}");
+}
+
+/// The server splits the same class body with its own line loop, so the client
+/// fix left this half untouched: it emitted the continuation line as a member of
+/// its own and the emitter's `\t\t` prefix landed inside the string.
+#[test]
+fn the_server_keeps_a_multiline_template_literal_too() {
+    let out = module_for(
+        &format!("export class Q {{\n{BODY}\n\tmsg = `a ${{ 1 }} b\nc ${{ 2 }} d`;\n}}\n"),
+        GenerateMode::Server,
+    );
+    assert!(!out.contains("COMPILE_ERROR"), "{out}");
+    assert!(out.contains("`a ${1} b\nc ${2} d`"), "{out}");
+}
+
+/// A template nested in another template's `${}` closes two literals on one
+/// line, which is what separates reading the predicate from counting backticks.
+#[test]
+fn the_server_keeps_a_nested_multiline_template_literal() {
+    let out = module_for(
+        &format!(
+            "export class Q {{\n{BODY}\n\ttpl = `outer ${{ `inner\nstill inner` }} end`;\n}}\n"
+        ),
+        GenerateMode::Server,
+    );
+    assert!(!out.contains("COMPILE_ERROR"), "{out}");
+    assert!(out.contains("`inner\nstill inner`"), "{out}");
+}
+
+/// The over-reach direction. A bracketed initializer spanning lines is code, so
+/// its continuation lines must keep going through the existing accumulator and
+/// come back re-indented; a block comment likewise stays one comment member.
+#[test]
+fn the_server_still_reindents_a_multiline_code_initializer() {
+    let out = module_for(
+        &format!("export class Q {{\n{BODY}\n\tcfg = build({{\n\t\ta: 1\n\t}});\n}}\n"),
+        GenerateMode::Server,
+    );
+    assert!(!out.contains("COMPILE_ERROR"), "{out}");
+    assert!(out.contains("cfg = build({"), "{out}");
+    let out = module_for(
+        &format!("export class Q {{\n{BODY}\n\t/**\n\t * text\n\t */\n\tzzz() {{}}\n}}\n"),
+        GenerateMode::Server,
+    );
+    assert!(!out.contains("COMPILE_ERROR"), "{out}");
+    assert!(out.contains(" * text"), "{out}");
 }
