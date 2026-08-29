@@ -2184,7 +2184,16 @@ fn build_each_block_accessor_parts(
             // Property of each item: bind:value={item.prop} or bind:value={item.a.b} or bind:value={item[expr]}
             // Getter: () => $.get(item).prop  OR  () => $.get(item)[$.get(expr)]
             // Setter: ($$value) => ($.get(item).prop = $$value, invalidation)
-            let get_base = if each_ctx.item_reactive {
+            // Upstream's each-item read transform answers `collection[index]` for a
+            // reassigned item at EVERY site, not only where the item is read bare.
+            let get_base = if each_ctx.item_reassigned {
+                let member =
+                    super::shared::utils::build_reassigned_item_read(&each_ctx, &context.arena);
+                crate::compiler::phases::phase3_transform::js_ast::codegen::generate_expr(
+                    &member,
+                    &context.arena,
+                )
+            } else if each_ctx.item_reactive {
                 format!("$.get({})", item_name)
             } else {
                 item_name.clone()
