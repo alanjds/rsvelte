@@ -7284,7 +7284,12 @@ fn transform_instance_script_for_visitors(
                 {
                     format!("{}()", n)
                 }
-                Some(b) if matches!(b.kind, BK::StoreSub) => format!("{}()", n),
+                // This body is spliced into instance-script TEXT, which then has read
+                // transforms applied to it, so a store sub is written bare and gets its
+                // `()` from that pass — writing `$t()` here yields `$t()()`. The AST port
+                // in `wrap_with_legacy_invalidate` is emitted post-transform and does the
+                // opposite; the two are not interchangeable.
+                Some(b) if matches!(b.kind, BK::StoreSub) => n.to_string(),
                 Some(b)
                     if matches!(
                         b.kind,
