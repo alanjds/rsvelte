@@ -49,7 +49,7 @@ fn has_non_css_lang<'a>(attributes: &[crate::ast::Attribute<'a>]) -> bool {
 
 /// Parse CSS content and return the children array for StyleSheet.
 pub fn parse_css(content: &str, offset: usize) -> Vec<Value> {
-    let mut parser = CssParser::new(content, offset);
+    let mut parser = CssParser::new(content, offset, offset + content.len());
     parser.parse()
 }
 
@@ -60,8 +60,9 @@ pub fn parse_css(content: &str, offset: usize) -> Vec<Value> {
 pub(crate) fn parse_css_strict(
     content: &str,
     offset: usize,
+    template_end: usize,
 ) -> Result<Vec<Value>, crate::error::ParseError> {
-    let mut parser = CssParser::new(content, offset);
+    let mut parser = CssParser::new(content, offset, template_end);
     let rules = parser.parse();
     if let Some(err) = parser.error.take() {
         return Err(err);
@@ -444,6 +445,18 @@ impl<'a> Parser<'a> {
         (first_invalid_lt, in_url, first_line_comment)
     }
 
+    /// Upstream's `read_style` runs `read_body` to completion before it reaches
+    /// `eat('</style', true)`, so any CSS error precedes the structural ones the
+    /// closing-tag scan raises. That scan is a raw-text approximation of a
+    /// recursive parse, so it is consulted only once the CSS parse is silent.
+    fn css_error_before_structural(
+        &self,
+        style_content: &str,
+        content_start: usize,
+    ) -> Option<crate::error::ParseError> {
+        parse_css_strict(style_content, content_start, self.content_end).err()
+    }
+
     /// Parse a `<style>` tag and store it in stylesheet.
     pub fn parse_style_tag(
         &mut self,
@@ -563,6 +576,9 @@ impl<'a> Parser<'a> {
                 i += 1;
             }
             if in_string || unterminated_url {
+                if let Some(err) = self.css_error_before_structural(style_content, content_start) {
+                    return Err(err);
+                }
                 // `//` is not a CSS comment. Upstream reaches that slash and
                 // raises from `read_identifier` before text later on the same
                 // SCSS line (for example `don't`) can look like the start of an
@@ -596,6 +612,9 @@ impl<'a> Parser<'a> {
                 self.index = after_name;
             }
         } else if self.is_eof() {
+            if let Some(err) = self.css_error_before_structural(style_content, content_start) {
+                return Err(err);
+            }
             // Style tag was not closed - check if there was invalid '<' in content
             if let Some(lt_pos) = first_invalid_lt {
                 return Err(crate::error::ParseError::svelte(
@@ -732,7 +751,7 @@ impl<'a> Parser<'a> {
             // children, so the surrounding template still lints normally.
             Vec::new()
         } else {
-            parse_css_strict(style_content, content_start)?
+            parse_css_strict(style_content, content_start, self.content_end)?
         };
 
         // Capture the preceding HTML comment for svelte-ignore support.
@@ -779,17 +798,21 @@ struct CssParser<'a> {
     /// so that helper methods which take `&self` (because they mutate only
     /// `self.index` indirectly via sub-parsers) can still record errors.
     error: std::cell::Cell<Option<crate::error::ParseError>>,
+    /// Upstream reports every CSS EOF at `parser.template.length`, which is the
+    /// whole trimmed template rather than this style block.
+    template_end: usize,
     /// Current nested-rule depth, bounded by `MAX_NESTING_DEPTH`.
     depth: u32,
 }
 
 impl<'a> CssParser<'a> {
-    fn new(source: &'a str, offset: usize) -> Self {
+    fn new(source: &'a str, offset: usize, template_end: usize) -> Self {
         Self {
             source,
             offset,
             index: 0,
             error: std::cell::Cell::new(None),
+            template_end,
             depth: 0,
         }
     }
@@ -998,51 +1021,65 @@ impl<'a> CssParser<'a> {
             }
         }
 
-        let mut paren_depth = 0i32;
-        let mut bracket_depth = 0i32;
-        let mut in_string: Option<u8> = None;
+        // Upstream's `read_value`: the only bracket it tracks is `url(`, so a
+        // `{` inside any other parenthesis or bracket still ends the value and
+        // makes the item a rule.
+        let mut in_url = false;
+        let mut quote: Option<u8> = None;
+        let mut escaped = false;
+        // The last three bytes `value` would hold, for upstream's `url(` test.
+        let mut tail = [0u8; 3];
+        let push_tail = |tail: &mut [u8; 3], b: u8| {
+            tail[0] = tail[1];
+            tail[1] = tail[2];
+            tail[2] = b;
+        };
         while i < bytes.len() {
             let b = bytes[i];
-            // CSS escape: `\<x>` — skip both bytes verbatim, no semantic effect.
-            if b == b'\\' && i + 1 < bytes.len() {
-                i += 2;
-                continue;
-            }
-            if let Some(q) = in_string {
-                if b == q {
-                    in_string = None;
-                }
+            if escaped {
+                push_tail(&mut tail, b'\\');
+                push_tail(&mut tail, b);
+                escaped = false;
                 i += 1;
                 continue;
-            }
-            if b == b'"' || b == b'\'' {
-                in_string = Some(b);
+            } else if b == b'\\' {
+                escaped = true;
                 i += 1;
                 continue;
-            }
-            // CSS block comments don't appear inside parens for declarations,
-            // but skip them defensively to avoid false-positives.
-            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            } else if Some(b) == quote {
+                quote = None;
+            } else if b == b')' {
+                in_url = false;
+            } else if quote.is_none() && (b == b'"' || b == b'\'') {
+                quote = Some(b);
+            } else if b == b'(' && &tail == b"url" {
+                in_url = true;
+            } else if matches!(b, b';' | b'{' | b'}') && !in_url && quote.is_none() {
+                return b == b'{';
+            } else if b == b'/' && !in_url && quote.is_none() && bytes.get(i + 1) == Some(&b'*') {
                 i += 2;
                 while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
                     i += 1;
                 }
                 if i + 1 < bytes.len() {
                     i += 2;
+                } else {
+                    i = bytes.len();
                 }
                 continue;
             }
-            match b {
-                b'(' => paren_depth += 1,
-                b')' => paren_depth -= 1,
-                b'[' => bracket_depth += 1,
-                b']' => bracket_depth -= 1,
-                b'{' if paren_depth == 0 && bracket_depth == 0 => return true,
-                b';' | b'}' if paren_depth == 0 && bracket_depth == 0 => return false,
-                _ => {}
-            }
+            push_tail(&mut tail, b);
             i += 1;
         }
+        // Upstream throws `unexpected_eof` from this scan instead of returning.
+        record_first_error(
+            &self.error,
+            crate::error::ParseError::svelte(
+                "unexpected_eof",
+                "Unexpected end of input",
+                (self.template_end, self.template_end),
+            ),
+        );
         false
     }
 
@@ -1955,7 +1992,9 @@ impl<'a> CssParser<'a> {
                 crate::error::ParseError::expected_token(";", self.offset + value_offset + 1),
             );
         } else if self.current_char() != '}' && !self.eat_optional(";") {
-            record_declaration_terminator_error(
+            // Not the interpolation case above: upstream throws at the earlier
+            // selector error rather than reaching this declaration at all.
+            record_first_error(
                 &self.error,
                 crate::error::ParseError::expected_token(";", self.offset + self.index),
             );

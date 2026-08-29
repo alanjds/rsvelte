@@ -69,7 +69,7 @@ pub(crate) fn is_js_whitespace_byte(b: u8) -> bool {
 }
 
 /// Byte length of `source` after upstream's `template.trimEnd()`.
-fn js_trim_end_len(source: &str) -> usize {
+pub(crate) fn js_trim_end_len(source: &str) -> usize {
     source.trim_end_matches(is_js_whitespace).len()
 }
 

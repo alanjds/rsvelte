@@ -186,7 +186,13 @@ fn an_apostrophe_in_an_scss_line_comment_does_not_hide_the_css_error() {
 }
 
 #[test]
-fn balanced_apostrophes_in_scss_line_comments_do_not_hide_the_css_error() {
+fn balanced_apostrophes_in_scss_line_comments_report_the_eof_upstream_reports() {
+    // Measured against the official compiler (5.56.10): `unexpected_eof` at 53.
+    // `//` is not a CSS comment, so the block-item value scan starts at the
+    // slash, the apostrophe in `can't` opens a string, the one in `isn't`
+    // closes it, and the scan then runs out of input with no `{` behind it —
+    // upstream never reaches `read_identifier`, which is what the sibling
+    // apostrophe test does reach.
     let source = "<style lang=\"scss\">\n.a {\n// can't\n}\n// isn't\n</style>\n";
     let err = compile(
         source,
@@ -196,9 +202,9 @@ fn balanced_apostrophes_in_scss_line_comments_do_not_hide_the_css_error() {
             ..Default::default()
         },
     )
-    .expect_err("expected a CSS identifier error");
-    assert!(
-        format!("{err:?}").contains("css_expected_identifier"),
-        "{err:?}"
-    );
+    .expect_err("expected an EOF error");
+    let d = err.diagnostic();
+    assert_eq!(d.code.as_deref(), Some("unexpected_eof"), "{err:?}");
+    let at = source.trim_end().len() as u32;
+    assert_eq!(d.span, Some((at, at)), "{err:?}");
 }
