@@ -758,6 +758,39 @@ narrowing vetoed on any nested non-`Normal` binding, which is also true of an ea
 the `$$index` parameter back on the repro two rows above. A predicate fix needs the whole set of
 repros the predicate serves re-run, not only the one that failed.
 
+**A sweep of the shadow shapes the 165-probe matrix did NOT enumerate then found the same question
+answered wrongly in THREE more places at once, and the count is the point: `const f = function v() { … }`
+binds `v` inside its own body, and every implementation that had to know said otherwise.** `server/ast/read_wrap.rs` never put the
+id in its frame; `client/ast_state_transform.rs` carries a comment saying named function
+expressions "bind only in their own scope, so they are excluded" — correct about the *enclosing*
+scope, and it then never declared the name in the function's own scope either; and the template
+walker's `LocalScope` collected parameters and block declarations and not the id. So `typeof v`
+came out `v()` on the server, `$.get(v)` in the instance script and `$$props.w` for a shadowed
+prop, with the instance script and a template event handler being two separate ports of the client
+half. Each hunk is independently necessary (2 / 4 / 2 divergent lines ablated one at a time) and
+the blast radius is 0 of 34,728 corpus entries on all four targets. **A row that says "two ports" is a lower bound
+until somebody counts**; the sweep that found this one also found `for (let v = 0; …)` above, and
+neither shape was an axis value the generated family's author wrote.
+
+Three things that sweep turned up are recorded rather than fixed. A named **class** expression is
+the same shape and **upstream emits output no JS parser accepts** for it — `const C = class $.get(v) {`
+on the client and `class v() {` on the server, both rejected by acorn — while rsvelte emits the
+correct `class v {`; that is
+[`upstream_issues/svelte-named-class-expression-shadowing-a-rune-emits-unparseable-output.md`](../upstream_issues/svelte-named-class-expression-shadowing-a-rune-emits-unparseable-output.md),
+and no pattern-corpus file can carry it while byte equality is the goal. `function $y() {}` is
+rejected by official with `dollar_prefix_invalid` and accepted here — the over-acceptance shape,
+in phase 2. The opposite direction turned up too: upstream creates no scope for a class
+`static {}` block, so `class C { static { const v = 2; … } }` beside a top-level `let v` is
+rejected with `declaration_duplicate` while a method body, a function body and a plain block all
+compile — legal JavaScript refused, which no collected corpus can hold either
+([`upstream_issues/svelte-class-static-block-shares-the-instance-scope.md`](../upstream_issues/svelte-class-static-block-shares-the-instance-scope.md)). And a `$derived` name reused as a **destructured default parameter**
+(`function go({ v } = { v: 0 })`) makes the client emit
+`function go(($$value) => { v = $$value.v; return $$value; })({ v: 0 }) { … }` — text no parser
+accepts, with the component's own `$state` / `$derived` declarations left unlowered beside it. The
+same source with a `$state` name, an array pattern, a plain default or a non-colliding name is
+correct on all four targets, and the server is correct in every case, so it is one client text
+pass claiming a *parameter* pattern as a destructuring assignment.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`

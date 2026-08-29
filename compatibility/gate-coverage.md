@@ -4270,11 +4270,16 @@ the source byte-identical.
 **What it cannot see `[S]`.**
 
 - **The read side.** A read has no sink. In the same handler as the fixed write,
-  `items.selected = data` still emits `items(items().selected = data(), true)` where official
-  emits `data`, because the RHS is transformed eagerly with an empty `LocalScope`. Measured, open,
-  and structurally outside this gate.
-- **Server output.** The check runs at the two `client/mod.rs` codegen return sites only. The
-  server's own ports of the same passes are ungated by it.
+  `items.selected = data` emitted `items(items().selected = data(), true)` where official emits
+  `data`, because the RHS is transformed eagerly with an empty `LocalScope`. That instance is
+  fixed; the class is still structurally outside this gate, and it was found by reading the write
+  fix rather than by running the gate.
+- **Server output.** The check runs at the two `client/mod.rs` codegen return sites only, so the
+  server's own ports of the same passes are ungated by it. That is a discriminating case, not an
+  argument: `server/ast/read_wrap.rs` never collected a `catch` clause or a loop head into its
+  shadow frame, so `catch (v) { v.n = 2 }` emitted `v().n = 2` and `for (let v = 0; v < 2; v++)`
+  emitted `for (let v = 0; v() < 2; $.update_derived(v))` — a runtime helper called on a loop
+  counter — while this gate was green on the identical sources, whose client output was correct.
 - **A `const`, and a non-literal initialiser.** Both are excluded because upstream's own output
   contains them (`const st = 1` beside `$.set(st, …)` in a generated accessor; `let i = $$index_4`
   receiving a signal through a parameter). A defect that lands on either shape is invisible here.

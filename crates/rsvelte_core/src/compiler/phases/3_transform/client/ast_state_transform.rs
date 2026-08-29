@@ -355,6 +355,8 @@ struct StateVarCollector<'a, 's> {
     /// component-function body (depth 1), so we trigger the `$.save(...)`
     /// wrap when our `function_depth >= 1`.
     function_depth: u32,
+    /// A named function expression's own name, declared once its scope is entered.
+    pending_fn_expr_name: Option<String>,
 
     /// Semantic for the parsed script, set after construction. Enables
     /// per-site resolution of a bare-identifier assignment RHS (upstream
@@ -450,6 +452,7 @@ impl<'a, 's> StateVarCollector<'a, 's> {
             exported_names,
             prop_source_vars_slice: prop_source_vars,
             function_depth: 0,
+            pending_fn_expr_name: None,
             semantic: None,
         }
     }
@@ -3075,6 +3078,15 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
         {
             self.declare_in_current_scope(&id.name);
         }
+        // A named function EXPRESSION binds its own name inside its body, so it
+        // is declared once the function's scope has been entered — which the
+        // parameter walk is the first hook inside.
+        let saved_fn_expr_name = self.pending_fn_expr_name.take();
+        if it.r#type == oxc_ast::ast::FunctionType::FunctionExpression
+            && let Some(id) = &it.id
+        {
+            self.pending_fn_expr_name = Some(id.name.to_string());
+        }
         // Track enclosing function depth so the `$derived(await …)`
         // declarator handler can choose between `await $.async_derived(…)`
         // (top-level instance script, depth 0) and
@@ -3093,6 +3105,7 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
             .or_else(|| self.trace_parent_label.clone());
         self.trace_function_is_async = it.r#async;
         walk::walk_function(self, it, flags);
+        self.pending_fn_expr_name = saved_fn_expr_name;
         self.trace_function_label = saved_label;
         self.trace_function_is_async = saved_async;
         self.trace_in_class_method = saved_class_method;
@@ -3156,6 +3169,9 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
     }
 
     fn visit_formal_parameters(&mut self, params: &FormalParameters<'ast>) {
+        if let Some(name) = self.pending_fn_expr_name.take() {
+            self.declare_in_current_scope(&name);
+        }
         // Register parameter names in the current scope before walking
         for param in &params.items {
             self.collect_binding_names(&param.pattern);

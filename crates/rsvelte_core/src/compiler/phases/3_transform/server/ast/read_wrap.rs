@@ -1002,6 +1002,10 @@ impl<'a, 'b> VisitMut<'a> for ReadWrap<'a, 'b> {
         flags: oxc_syntax::scope::ScopeFlags,
     ) {
         let mut frame = FxHashSet::default();
+        // A named function expression's own name is bound inside its body.
+        if let Some(id) = &it.id {
+            frame.insert(id.name.to_string());
+        }
         Self::collect_param_names(&it.params, &mut frame);
         if let Some(body) = it.body.as_ref() {
             collect_block_decl_names(&body.statements, &mut frame);

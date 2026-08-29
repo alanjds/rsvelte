@@ -88,12 +88,15 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `oxfmt-style-terminator-inside-a-css-string.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
 | `svelte-bind-group-unresolved-identifier-crash.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte-class-index-signature-crash.md` | sveltejs/svelte | #3422 | unrecorded |
+| `svelte-class-static-block-shares-the-instance-scope.md` | sveltejs/svelte | — | unrecorded |
 | `svelte-declaration-tag-dollar-identifier.md` | sveltejs/svelte | #3614 | unrecorded |
 | `svelte-eslint-parser-self-closing-style-lookalike-component.md` | sveltejs/svelte-eslint-parser | — | unrecorded |
 | `svelte-fromcodepoint-rangeerror.md` | sveltejs/svelte | #3617 | unrecorded |
 | `svelte-inspect-with-in-a-declarator.md` | sveltejs/svelte | #3614, #3627 | unrecorded |
+| `svelte-named-class-expression-shadowing-a-rune-emits-unparseable-output.md` | sveltejs/svelte | — | unrecorded |
 | `svelte-snippet-name-colliding-with-an-import.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
 
-The six unnumbered reports came out of the lint-parity campaign rather than from a single rsvelte
-issue, and none of them names one internally — `—` records that, rather than inventing a number.
+Eight reports carry no rsvelte issue number: six came out of the lint-parity campaign and two out
+of the `two-ports-inventory.md` row 17 shadow probes. None of them names an issue internally —
+`—` records that, rather than inventing a number.

@@ -1016,6 +1016,10 @@ pub fn apply_transforms_to_expression_with_shadowed(
         JsExpr::Function(func) => {
             // Extract parameter names - these shadow any outer transforms
             let mut new_scope = local_scope.clone();
+            // A named function expression binds its own name inside its body.
+            if let Some(id) = &func.id {
+                new_scope.add_shadowed(id.to_string());
+            }
             for param in &func.params {
                 extract_pattern_names_to_scope(param, &mut new_scope);
             }
