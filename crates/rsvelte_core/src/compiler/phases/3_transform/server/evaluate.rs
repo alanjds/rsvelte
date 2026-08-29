@@ -1870,6 +1870,21 @@ pub(crate) fn evaluate_binding_initial<S: EvalScope + ?Sized>(
     if binding.is_updated() {
         return Evaluation::unknown();
     }
+    // Upstream keeps the function node itself as `binding.initial`, so
+    // `scope.evaluate` types the binding FUNCTION. The analyzer records no
+    // initializer for a `function` declaration and no JSON for a function
+    // expression, so neither reaches the recursion below.
+    if matches!(
+        binding.declaration_kind,
+        crate::compiler::phases::phase2_analyze::scope::DeclarationKind::Function
+    ) || binding.initial_node_type.as_deref().is_some_and(|ty| {
+        matches!(
+            ty,
+            "FunctionDeclaration" | "FunctionExpression" | "ArrowFunctionExpression"
+        )
+    }) {
+        return Evaluation::single(EvalValue::FunctionMarker);
+    }
     // `$state()` / `$state.raw()` with no argument evaluates to
     // `undefined` (upstream scope.js CallExpression rune case: no
     // argument → `values.add(undefined)`). The analyzer stores the rune
