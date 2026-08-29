@@ -116,12 +116,22 @@ fn a_const_tag_over_void_of_an_unknown_operand_is_known() {
 /// The template-fold path used to have its own recursive evaluator after the
 /// `{@const}` path had moved to the shared one. A direct read therefore pins
 /// the second caller: `void p` has one result even though `p` is unknown.
+///
+/// The expectation is upstream 5.56.10's own output for this source. Knowing the
+/// value does not buy the `textContent` shortcut — upstream gates that on
+/// `has_state` / `has_await` / `has_blockers()` alone, and the expression has a
+/// call in its metadata, so the text node stays and is written through
+/// `nodeValue`.
 #[test]
 fn a_direct_void_of_an_unknown_operand_folds_to_undefined() {
     let out = client("<script>\n\tlet { p } = $props();\n</script>\n<b>x{void p}</b>\n");
     assert!(
-        out.contains("b.textContent = 'x';"),
+        out.contains("text.nodeValue = 'x';"),
         "the undefined chunk is omitted from the static text; got:\n{out}"
+    );
+    assert!(
+        out.contains("$.from_html(`<b> </b>`)"),
+        "upstream keeps the text node here; got:\n{out}"
     );
     assert!(
         !out.contains("template_effect"),
