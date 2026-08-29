@@ -3314,6 +3314,16 @@ fn overlay_lowered_callee_spans(
         let delimiter_end = end + 1;
         let mut kept = Vec::with_capacity(spans.len() + 3);
         for span in spans.drain(..) {
+            // A zero-width resynchronization marker at the callee start has no
+            // copied byte to preserve. Keeping it beside the explicit overlay
+            // makes `source_offset` prefer the stale marker for the generated
+            // member expression's start, while its property uses the overlay.
+            if span.code.start == span.code.end
+                && span.code.start >= start
+                && span.code.start < delimiter_end
+            {
+                continue;
+            }
             if span.code.end <= start || span.code.start >= delimiter_end {
                 kept.push(span);
                 continue;

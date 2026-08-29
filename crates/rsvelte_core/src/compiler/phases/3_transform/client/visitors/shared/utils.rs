@@ -6251,11 +6251,6 @@ impl EvalScope for ClientEvalScope<'_, '_> {
                     .state
                     .scope_root
                     .binding_at_reference(name, start as u32)
-            })
-            .filter(|binding| {
-                self.context
-                    .state
-                    .evaluation_scope_contains(binding.scope_index)
             });
         let binding = match reference_binding {
             // Phase 2 resolves children of a component against its `let:`
