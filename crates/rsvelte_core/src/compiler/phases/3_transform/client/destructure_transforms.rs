@@ -291,7 +291,9 @@ pub(super) fn find_and_transform_one_destructure(
                     // brace/bracket depth. If we encounter an unmatched
                     // opening `{` or `[` before hitting a statement boundary,
                     // we're nested inside another pattern and should skip.
-                    if is_inside_enclosing_pattern(statement, b(pattern_start).get()) {
+                    if is_inside_enclosing_pattern(statement, b(pattern_start).get())
+                        || is_function_parameter_default(statement, b(pattern_start).get())
+                    {
                         i = j + 1;
                         continue;
                     }
@@ -517,6 +519,83 @@ fn is_inside_enclosing_pattern(statement: &str, pattern_open_byte: usize) -> boo
         }
     }
     false
+}
+
+/// Whether the destructure pattern opening at `pattern_open_byte` is a FORMAL
+/// PARAMETER carrying a default (`function go({ v } = { v: 0 })`) rather than a
+/// destructuring assignment. Both spell the same bytes; what separates them is
+/// the enclosing paren — a parameter list's `)` is followed by `=>` or by the
+/// body's `{`, and a control-flow head is the one other paren that closes
+/// before a `{`.
+fn is_function_parameter_default(statement: &str, pattern_open_byte: usize) -> bool {
+    let bytes = statement.as_bytes();
+    // Walk back to the unmatched `(` enclosing the pattern. A `{`/`[` opening
+    // first means the pattern sits inside another pattern, which
+    // `is_inside_enclosing_pattern` answers.
+    let before: Vec<(usize, u8)> = code_bytes(bytes)
+        .take_while(|&(i, _)| i < pattern_open_byte)
+        .collect();
+    let mut depth: i32 = 0;
+    let mut open_paren = None;
+    for &(i, b) in before.iter().rev() {
+        match b {
+            b')' | b'}' | b']' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth < 0 {
+                    open_paren = Some(i);
+                    break;
+                }
+            }
+            b'{' | b'[' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            b';' if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    let Some(open_paren) = open_paren else {
+        return false;
+    };
+    // `if ({ a } = obj) {}` is a real assignment whose paren also closes before
+    // a `{`, so the keyword that opened the paren decides.
+    let head = statement[..open_paren].trim_end();
+    if ["if", "while", "for", "switch", "catch", "with"]
+        .iter()
+        .any(|kw| {
+            head.ends_with(kw)
+                && head[..head.len() - kw.len()]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '$')
+        })
+    {
+        return false;
+    }
+    let mut after_close = code_bytes(bytes).skip_while(|&(i, _)| i < open_paren);
+    let mut depth: i32 = 0;
+    for (_, b) in after_close.by_ref() {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    // The next two CODE bytes, so a comment between the `)` and the body does
+    // not decide this.
+    let mut next = after_close.filter(|&(_, b)| !b.is_ascii_whitespace());
+    matches!(
+        (next.next(), next.next()),
+        (Some((_, b'{')), _) | (Some((_, b'=')), Some((_, b'>')))
+    )
 }
 
 /// Find the matching opening bracket, respecting nesting and strings.

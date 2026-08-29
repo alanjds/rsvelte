@@ -784,12 +784,20 @@ in phase 2. The opposite direction turned up too: upstream creates no scope for 
 rejected with `declaration_duplicate` while a method body, a function body and a plain block all
 compile — legal JavaScript refused, which no collected corpus can hold either
 ([`upstream_issues/svelte-class-static-block-shares-the-instance-scope.md`](../upstream_issues/svelte-class-static-block-shares-the-instance-scope.md)). And a `$derived` name reused as a **destructured default parameter**
-(`function go({ v } = { v: 0 })`) makes the client emit
+(`function go({ v } = { v: 0 })`) made the client emit
 `function go(($$value) => { v = $$value.v; return $$value; })({ v: 0 }) { … }` — text no parser
-accepts, with the component's own `$state` / `$derived` declarations left unlowered beside it. The
-same source with a `$state` name, an array pattern, a plain default or a non-colliding name is
-correct on all four targets, and the server is correct in every case, so it is one client text
-pass claiming a *parameter* pattern as a destructuring assignment.
+accepts, with the component's own `$state` / `$derived` declarations left unlowered beside it.
+`destructure_transforms.rs` finds a destructuring assignment by scanning for `} =` / `] =`, and
+its one guard asks "is this inside ANOTHER pattern" — which a formal parameter list is not. What
+separates the two spellings is the enclosing paren: a parameter list's `)` is followed by `=>` or
+by the body's `{`, and a control-flow head is the one other paren that closes before a `{`. That
+is fixed. **Two more defects in the same scanner are open**, both about `is_standalone`: upstream
+computes it as `context.path.at(-1).type.endsWith('Statement')` — a *parent node type* — so an
+`if (…)`, `while (…)` or `return` head IS standalone there, while rsvelte's text rule reads it as
+an expression position and appends the right-hand side. `if (({ v } = o))` comes out
+`if (($.set(v, o.v, true), o))` against official's `if (($.set(v, o.v, true)))`, and a cached
+right-hand side gains a `return $$value;` official does not emit. A byte scanner cannot see a
+parent node type at all, which is the class this row keeps returning to.
 
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
