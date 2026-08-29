@@ -90,6 +90,7 @@ whose oracle is the other implementation is only as good as its independent expe
 | [14](#14-what-options-does-the-public-parse-run-with--d) | What options does the public `parse()` run with? | 2 bindings | **[D]** | #3688 open |
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
 | [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
+| [17](#17-does-this-write-target-resolve-to-the-components-binding-or-to-a-shadow--d) | Does this write target resolve to the component's binding, or to a shadow? | 44 rewrite passes, 8 scope-aware | **[D]** | 4 ports closed at degree 1 |
 
 ---
 
@@ -610,6 +611,51 @@ carries all three shapes.
 cannot be made to produce the text the per-line pipeline splices. Closing this at degree 1 means
 retiring the text splice — the client instance-script pipeline AGENTS.md already names as the
 correctness hazard.
+
+### 17. Does this write target resolve to the component's binding, or to a shadow? — [D]
+
+**Upstream:** every write lowering reaches its binding through **one** `context.state.scope.get(name)`
+— `build_assignment` (`3-transform/client/visitors/AssignmentExpression.js:120`) and
+`validate_mutation` (`.../shared/utils.js:402`) both do, and a name that resolves to a nested
+declaration returns a binding whose `kind` is `normal`, so nothing is rewritten.
+
+**Ports.** rsvelte answers it once per rewrite pass. Of the 44 `*_ast.rs` passes under
+`3_transform/client/`, **8** consulted `oxc_semantic` and 36 compared the identifier's **text**
+against a `Vec<String>` of binding names. Four of the text ones were binding-keyed write
+lowerings (the count is 12 / 32 after fixing them):
+
+- `prop_member_mutate_ast.rs` — `prop.x = v` → `prop(prop().x = v, true)`
+- `state_member_mutate_ast.rs` — `state.x = v` → `$.mutate(state, $.get(state).x = v)`, the
+  reactive-body twin of `legacy_state_member_mutate_ast.rs`, which has resolved through
+  `find_state_var_symbols` since it was written and carries
+  `skips_parameter_shadow_but_rewrites_captured_state` as a test
+- `state_set_reactive_ast.rs` — `state = v` → `$.set(state, v)`
+- `reactive_update_ast.rs` — `x++` → `$.update(x)` / `$.update_prop(x)`
+
+**Demonstrated.** `huly`'s `FilterTypePopup.svelte` writes `filter.group` inside
+`for (const filter of filters)` where `filter` is also a prop, and `musicat`'s `AnalyticsView.svelte`
+writes `stats.totalPlays` inside `songs.reduce((stats, song) => …)` where `stats` is also legacy
+reactive state. Official emits the plain write in both; rsvelte emitted the setter call. The
+second is the one that names the *pair* rather than one port: the identical source inside a
+plain instance function was already correct, because that path runs the scope-aware twin.
+
+**What made the reactive ports get it wrong** is worth keeping: a `$:` body is handed to its
+transforms **without** the component-level declarations, so the state variable is an *unresolved*
+name there. `is_locally_shadowed` — "resolves to a declaration below the root scope" — is the
+predicate that is right for both input shapes: unresolved (fragment) and root-scope (whole
+script) both mean "the component's binding", and only a shadow is below the root.
+
+**These four now route the decision through one primitive** (`scope_analysis::is_locally_shadowed`,
+with `shadowed_reference_starts` for the in-place rewriters, which cannot hold a `Semantic`). That
+is degree 1 for the *shadow* question and not for the row: the instance twin
+`legacy_state_member_mutate_ast` still answers through `find_state_var_symbols` /
+`is_state_var_reference_or_unresolved`, a second primitive with a second rule, and nothing compares
+the two. The row stays open for that and because the remaining 32 text-keyed passes are
+**未測定**: several are binding-keyed too (`store_assign_ast`, `store_member_mutate_ast`,
+`store_update_ast`, `local_assign_ast`, `state_eager_ast`, `state_raw_frozen_ast`,
+`rest_prop_member_access_ast`) and none has been probed for a shadow. Degree 3 is available here
+and is the right shape for it: "no rewrite pass claims an identifier that resolves inside its own
+input" is a property, not a comparison, so the corpus becomes the detector at whatever size it is.
 
 ## Adding a row, and closing one
 

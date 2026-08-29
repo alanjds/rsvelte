@@ -63,7 +63,7 @@ use oxc_span::Span;
 use rustc_hash::FxHashSet;
 
 use super::ast_rewrite::{self, Edit};
-use super::scope_analysis::is_locally_shadowed;
+use super::scope_analysis::{is_locally_shadowed, shadowed_reference_starts};
 
 thread_local! {
     static MODULE_PROP_MEMBER_MUTATE_ALLOC: RefCell<Allocator> = RefCell::new(Allocator::default());
@@ -414,13 +414,7 @@ pub(crate) fn transform_prop_member_mutate_in_place(
             // rewrite below moves nodes, and `Semantic` borrows the program.
             let shadowed = {
                 let built = SemanticBuilder::new().with_build_nodes(true).build(program);
-                let mut finder = ShadowedRootFinder {
-                    semantic: &built.semantic,
-                    prop_vars,
-                    spans: FxHashSet::default(),
-                };
-                finder.visit_program(program);
-                finder.spans
+                shadowed_reference_starts(program, &built.semantic, prop_vars)
             };
             let mut rewriter = PropMemberMutateRewriter {
                 allocator,
@@ -437,25 +431,6 @@ pub(crate) fn transform_prop_member_mutate_in_place(
             rewriter.changed
         },
     )
-}
-
-/// Span starts of every prop-named reference that resolves to a binding
-/// declared inside the program — upstream's `scope.get` answer for "is this
-/// identifier the prop", collected before the rewrite invalidates the parse.
-struct ShadowedRootFinder<'a, 'sem> {
-    semantic: &'sem Semantic<'sem>,
-    prop_vars: &'a [String],
-    spans: FxHashSet<u32>,
-}
-
-impl<'a, 'sem, 'ast> Visit<'ast> for ShadowedRootFinder<'a, 'sem> {
-    fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'ast>) {
-        if self.prop_vars.iter().any(|p| p == ident.name.as_str())
-            && is_locally_shadowed(self.semantic, ident)
-        {
-            self.spans.insert(ident.span.start);
-        }
-    }
 }
 
 struct PropMemberMutateRewriter<'a, 'b> {
