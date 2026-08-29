@@ -2114,47 +2114,43 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
     // a trailing `//` comment would swallow a same-line `)`
     wrapped.push_str("\n)");
 
-    let content_positions = with_oxc_allocator(|allocator| {
+    let content_pos = with_oxc_allocator(|allocator| {
         let result = OxcParser::new(allocator, &wrapped, expression_source_type(ts)).parse();
         // OXC keeps a TypeScript-only operator in a JavaScript file and reports
         // it as a diagnostic over the whole expression; acorn has no such node
         // and stops where the operator begins.
         if !ts && let Some(at) = typescript_operator_start(&result.program) {
-            return Some(vec![at as usize]);
+            return Some(at as usize);
         }
         let first_error = result.diagnostics.first()?;
-        let mut positions = Vec::with_capacity(first_error.labels.len());
-        for label in &first_error.labels {
-            // OXC diagnostics do not consistently put the offending token in
-            // the first label. In particular, adjacent literals separated by
-            // a comment label the recovered expression first and the second
-            // literal later. Label ends, however, also expose recovery ranges
-            // inside invalid assignments and enclosing calls; those are not
-            // tokens where acorn returned an expression.
-            let start = label.offset() as usize;
-            if let Some(at) = start.checked_sub(1) {
-                positions.push(at);
-            }
-        }
-        positions.sort_unstable();
-        positions.dedup();
-        Some(positions)
+        // The first label is the offending token; any further label is the
+        // enclosing construct's opening delimiter, which is never where acorn
+        // returned an expression.
+        let start = first_error.labels.first()?.offset() as usize;
+        // Map the label's *start* back into `content` (strip the leading `(`).
+        start.checked_sub(1)
     })?;
 
-    content_positions.into_iter().find(|&content_pos| {
-        // A trailing-token error has leftover input *before* the synthetic
-        // closing `)`; an incomplete expression errors at/after the end.
-        content_pos < content.len()
-            // A diagnostic range ending after a recovered expression can start
-            // on the separating space. Acorn stops at the following token.
-            && !content.as_bytes()[content_pos].is_ascii_whitespace()
-            // A comma continues the expression (as a SequenceExpression).
-            && content.as_bytes().get(content_pos) != Some(&b',')
-            // Acorn returns only after consuming one complete expression.
-            && content
-                .get(..content_pos)
-                .is_some_and(|prefix| check_js_parse_error_with_pos(prefix, ts).is_none())
-    })
+    // A trailing-token error has leftover input *before* the synthetic closing
+    // `)`; an incomplete expression errors at/after the end.
+    if content_pos >= content.len() {
+        return None;
+    }
+    // A comma continues the expression (as a SequenceExpression); acorn does
+    // not return the complete prefix and leave it for the caller's close-token
+    // check. With no following operand (`a,`) or another comma (`a,,b`) it
+    // throws a JS parse error at the missing operand instead.
+    if content.as_bytes()[content_pos] == b',' {
+        return None;
+    }
+    // acorn parses ONE maximal expression and only then expects the close token,
+    // so leftover input is only leftover when what precedes it is itself a
+    // complete expression. Without this an error *inside* the expression (e.g.
+    // `String(a b)`) reads as a missing close token.
+    let prefix = content.get(..content_pos)?;
+    check_js_parse_error_with_pos(prefix, ts)
+        .is_none()
+        .then_some(content_pos)
 }
 
 /// The start of the leftmost TypeScript-only construct (`as`, `satisfies`, `!`,
@@ -13895,6 +13891,10 @@ mod tests {
             ("foo() bar", Some(6), Some(6)),
             ("'a' /* c */ 'b'", Some(12), Some(12)),
             ("x.y = 1 z", Some(8), Some(8)),
+            // The offending token, not the enclosing construct: OXC's second
+            // label is the call's opening `(`, whose prefix (`String`) parses.
+            ("String(a b)", None, None),
+            ("() => sink(a b)", None, None),
             // TypeScript-only syntax stops acorn at the TS token in JS mode and
             // parses in TS mode.
             ("y as string", Some(2), None),
