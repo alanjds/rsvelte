@@ -2164,20 +2164,19 @@ impl<'a> ComponentClientTransformState<'a> {
         self.scope_root.bindings.get(index)
     }
 
-    /// Get a binding declared by the component instance script.
+    /// Get the prop binding which installed an already-applied read transform.
     ///
-    /// The root compatibility scope is deliberately flattened and may contain
-    /// a same-named declaration from a nested template scope. Code that has
-    /// already applied an instance transform (for example `prop` -> `prop()`)
-    /// must use the declaration that installed that transform, not the first
-    /// name found in the flattened scope.
-    pub fn get_instance_binding(&self, name: &str) -> Option<&Binding> {
-        let scope = self
-            .scope_root
-            .all_scopes
-            .get(self.scope_root.instance_scope_index)?;
-        let index = *scope.declarations.get(name)?;
-        self.scope_root.bindings.get(index)
+    /// Phase 2 can retain the prop kind on a binding which is not the instance
+    /// scope's declaration entry (notably around legacy exports and same-named
+    /// parameters). Selecting by kind also avoids the flattened root scope's
+    /// unrelated same-named template declarations.
+    pub fn get_prop_binding(&self, name: &str) -> Option<&Binding> {
+        self.scope_root
+            .bindings_by_name
+            .get(name)?
+            .iter()
+            .filter_map(|&index| self.scope_root.bindings.get(index as usize))
+            .find(|binding| matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp))
     }
 
     /// Whether `scope_index` is the current scope (`self.scope`) or one of its

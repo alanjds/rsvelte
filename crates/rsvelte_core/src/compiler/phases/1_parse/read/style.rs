@@ -978,7 +978,17 @@ impl<'a> CssParser<'a> {
                 property_end += 1;
             }
             if bytes.get(property_end) == Some(&b':') {
-                return false;
+                let mut value_start = property_end + 1;
+                while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
+                    value_start += 1;
+                }
+                // This parser consumes plain CSS, even when a preprocessor
+                // attribute is present. Preserve upstream's CSS parse error for
+                // an unprocessed SCSS interpolation instead of accepting its
+                // braces as a custom-property value block.
+                if bytes.get(value_start..value_start + 2) != Some(b"#{") {
+                    return false;
+                }
             }
         }
 

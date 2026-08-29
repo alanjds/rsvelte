@@ -717,6 +717,11 @@ fn substitute_explicit_nesting(
             // discard the child rule and omits the scope class from markup.
             merged.is_global = rel.is_global;
             merged.is_global_like = rel.is_global_like;
+            // Keep the child subject distinguishable from an unnested
+            // `:global(...):hover` compound. The marker is a no-op for matching
+            // and mirrors the upstream NestingSelector that this flattened
+            // representation otherwise loses.
+            merged.selectors.push(CssSimpleSelector::Nesting);
             result.push(merged);
         } else {
             // No parent to substitute with — keep the rel as-is minus the nesting
@@ -1258,17 +1263,26 @@ fn truncate_globals(children: &[CssRelativeSelector]) -> &[CssRelativeSelector] 
     // is still a local relative selector which can cause the element carrying
     // `:is` to be scoped. Upstream's `truncate` uses the strict
     // `metadata.is_global` meaning here, not the recursive matcher used by
-    // selector pruning. The extracted metadata also carries our global-block
-    // tail marker, so exclude that tail explicitly and otherwise retain the
-    // child relative selector's own metadata. That metadata is what keeps a
-    // nested `&:hover` local after substituting a fully-global parent.
+    // selector pruning. A substituted nesting selector keeps its child's
+    // metadata; ordinary selectors use the strict shape calculation because
+    // the extracted parser metadata classifies functional pseudo arguments
+    // recursively and would make `:is(:global(.x))` global as a whole.
     let scoped_prefix_end = children
         .iter()
         .position(is_bare_global_relative)
         .unwrap_or(children.len());
-    let last_non_global = children[..scoped_prefix_end]
-        .iter()
-        .rposition(|rel| !rel.is_global && !rel.is_global_like);
+    let last_non_global = children[..scoped_prefix_end].iter().rposition(|rel| {
+        let substituted_nesting = rel
+            .selectors
+            .iter()
+            .any(|selector| matches!(selector, CssSimpleSelector::Nesting));
+        let is_global = if substituted_nesting {
+            rel.is_global
+        } else {
+            compute_is_global(&rel.selectors)
+        };
+        !is_global && !rel.is_global_like
+    });
     match last_non_global {
         Some(idx) => &children[..=idx],
         None => &[],

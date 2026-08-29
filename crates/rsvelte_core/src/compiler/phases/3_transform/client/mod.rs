@@ -3532,33 +3532,6 @@ fn copied_spans_for_normalized_code(
                     consider(common_run(&code_tail[skip..], input_tail), 0, skip);
                 }
             }
-            // A direct assignment is replaced on both sides (`state = 1` →
-            // `$.set(state, 1)`). Only this lowering needs both cursors to
-            // move. Applying the same fuzzy search to every mismatch lets a
-            // repeated identifier inside unrelated generated code steal the
-            // following source position.
-            if code_tail.starts_with(b"$.set(") {
-                for (skip_output, &byte) in code_tail
-                    .iter()
-                    .take(NEAR_RESYNC_WINDOW)
-                    .enumerate()
-                    .skip(1)
-                {
-                    for (skip_input, _) in input_tail
-                        .iter()
-                        .take(NEAR_RESYNC_WINDOW)
-                        .enumerate()
-                        .skip(1)
-                        .filter(|(_, input)| **input == byte)
-                    {
-                        consider(
-                            common_run(&code_tail[skip_output..], &input_tail[skip_input..]),
-                            skip_input,
-                            skip_output,
-                        );
-                    }
-                }
-            }
             if let Some((_, skip_input, skip_output)) = best {
                 input += skip_input;
                 output += skip_output;
