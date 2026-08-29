@@ -1893,7 +1893,8 @@ impl<'a> CssParser<'a> {
         // first interpolation brace is (necessarily) mistaken for the at-rule
         // block. The second interpolation then reaches this declaration path
         // as its value. Its closing `}` is not the CSS block terminator
-        // upstream commits to: upstream asks for `;` at the start of `#{b}`.
+        // upstream commits to: upstream asks for `;` at the opening brace of
+        // `#{b}`.
         // Preserve that error and position instead of letting the later empty
         // block overwrite it with `css_expected_identifier`.
         let interpolation_value = self.source[value_start..self.index]
@@ -1905,7 +1906,7 @@ impl<'a> CssParser<'a> {
                     - self.source[value_start..self.index].trim_start_ws().len());
             record_declaration_terminator_error(
                 &self.error,
-                crate::error::ParseError::expected_token(";", self.offset + value_offset),
+                crate::error::ParseError::expected_token(";", self.offset + value_offset + 1),
             );
         } else if self.current_char() != '}' && !self.eat_optional(";") {
             record_declaration_terminator_error(

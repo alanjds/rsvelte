@@ -2783,6 +2783,7 @@ pub(crate) fn transform_client(
                 super::shared::module_tail_comment::rehome(
                     code,
                     &script.raw,
+                    script.source_projection.as_ref(),
                     &analysis.name,
                     &mut mappings,
                 )
@@ -2810,6 +2811,7 @@ pub(crate) fn transform_client(
                     result.code = super::shared::module_tail_comment::rehome(
                         result.code,
                         &script.raw,
+                        script.source_projection.as_ref(),
                         &analysis.name,
                         &mut result.mappings,
                     );
@@ -2833,7 +2835,13 @@ pub(crate) fn transform_client(
             code
         };
         let code = if let Some(script) = analysis.module_script_content.as_ref() {
-            super::shared::module_tail_comment::rehome(code, &script.raw, &analysis.name, &mut [])
+            super::shared::module_tail_comment::rehome(
+                code,
+                &script.raw,
+                script.source_projection.as_ref(),
+                &analysis.name,
+                &mut [],
+            )
         } else {
             code
         };
@@ -3305,6 +3313,36 @@ fn copied_spans_for_normalized_code(
         const NEAR_RESYNC_WINDOW: usize = 32;
         let code_tail = &code.as_bytes()[output..];
         let input_tail = &stripped.as_bytes()[input..];
+        // `$bindable()` is removed while its containing props declarator is
+        // rebuilt as `$.prop(...)`. Upstream stamps the generated callee with
+        // the rune's location (`b.id('$.prop', bindable.loc)`), so carry that
+        // non-linear replacement through the same alignment pass that records
+        // unchanged script slices. The zero-width endpoint marker is consumed
+        // together with the following `(` run, just like the shorter member
+        // callee marker below.
+        if code_tail.starts_with(b"$.prop(") && input_tail.starts_with(b"$bindable(") {
+            let source_start = source_at_output
+                .as_deref()
+                .and_then(|table| table.get(input).copied().flatten())
+                .unwrap_or(original_offset + input as u32);
+            let source_end = source_at_output
+                .as_deref()
+                .and_then(|table| table.get(input + "$bindable".len()).copied().flatten())
+                .unwrap_or(original_offset + input as u32 + "$bindable".len() as u32);
+            spans.push(RawMappedSpan {
+                code: output as u32..output as u32 + "$.prop".len() as u32,
+                source: source_start..source_start + "$.prop".len() as u32,
+                erased_comment_before_export_prop: false,
+            });
+            spans.push(RawMappedSpan {
+                code: output as u32 + "$.prop".len() as u32..output as u32 + "$.prop".len() as u32,
+                source: source_end..source_end,
+                erased_comment_before_export_prop: false,
+            });
+            output += "$.prop".len();
+            input += "$bindable".len();
+            continue;
+        }
         let next_input = input_tail
             .iter()
             .take(RESYNC_WINDOW)

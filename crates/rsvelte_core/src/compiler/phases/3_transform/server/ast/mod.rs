@@ -1951,6 +1951,7 @@ See https://svelte.dev/docs/svelte/v5-migration-guide#Components-are-no-longer-c
             crate::compiler::phases::phase3_transform::shared::module_tail_comment::rehome(
                 code,
                 &script.raw,
+                script.source_projection.as_ref(),
                 component_name,
                 &mut [],
             )
