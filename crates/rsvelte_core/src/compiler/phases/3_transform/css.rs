@@ -7383,11 +7383,11 @@ fn transform_complex_selector(
     }
 
     let mut result = String::new();
-    // Each complex selector resets specificity bumping - first element gets direct class
-    // For nested rules, start with bumped=true to use :where() for specificity preservation
-    // EXCEPT when we're inside a :global() block - then start fresh (bumped=false)
-    // Also, if parent rule doesn't have local selectors (like :root), don't bump
-    let mut local_specificity_bumped = parent_has_local_selectors && !is_in_global_block;
+    // Each complex selector resets specificity bumping - first element gets direct class.
+    // Upstream walks `metadata.parent_rule` and bumps at the first ancestor with
+    // `has_local_selectors`; whether that ancestor also carries a `:global(...)`
+    // is not part of the test, so `:global(.dark) .phone` (local `.phone`) bumps.
+    let mut local_specificity_bumped = parent_has_local_selectors;
     // Track if we've seen a :global() selector - elements AFTER :global() should use direct class
     let mut seen_global = false;
     // Track if the previous selector was scoped - for specificity bumping decisions
