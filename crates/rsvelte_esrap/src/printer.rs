@@ -1868,6 +1868,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             .filter(|elem| keep_empty || !elem.is_empty_stmt())
             .peekable();
         let mut prev: Option<(BodyElem<'a, 'b>, bool)> = None;
+        let mut prev_joined = false;
         let mut last_end = None;
         while let Some(elem) = elems.next() {
             let layout_mark = ctx.event_mark();
@@ -1877,9 +1878,11 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
                 // statement, so nothing separates them — but two separate holes
                 // are two statements and take a newline. A pair is built at
                 // consecutive starts (`B::empty_kept(s)` / `(s + 1)`).
-                let joined = prev_elem.is_kept_empty()
-                    && elem.is_kept_empty()
-                    && elem.span_start() == prev_elem.span_start().wrapping_add(1);
+                // `Place::At` deliberately gives both halves the same source
+                // anchor, so pair by adjacency just like the comment-island
+                // path. Alternation keeps two neighbouring holes as `;;\n;;`.
+                let joined = !prev_joined && prev_elem.is_kept_empty() && elem.is_kept_empty();
+                prev_joined = joined;
                 has_margin = !joined && (*prev_multiline || !elem.same_kind(prev_elem));
                 if has_margin {
                     ctx.margin();
@@ -1887,6 +1890,8 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
                 if !joined {
                     ctx.newline();
                 }
+            } else {
+                prev_joined = false;
             }
 
             let scope = ctx.begin_scope();

@@ -1774,13 +1774,6 @@ pub fn check_js_parse_error_with_pos(content: &str, ts: bool) -> Option<(String,
     if head.trim_end_ws().is_empty() || head.starts_with("...") {
         return Some(("Unexpected token".to_string(), leading_ws));
     }
-    // Acorn consumes comments while looking for the first expression token and
-    // reports the closing Svelte delimiter when none remains. Detect that on
-    // the unwrapped program: the later bare retry can otherwise replace this
-    // answer with OXC's final comment byte.
-    if is_code_empty(content, ts) {
-        return Some(("Unexpected token".to_string(), content.len()));
-    }
     // OXC may recover a string literal with a forbidden legacy escape without
     // retaining the literal node that the strict-mode visitor needs. Acorn
     // reports that lexical restriction before the generic recovery error.
@@ -1805,6 +1798,13 @@ pub fn check_js_parse_error_with_pos(content: &str, ts: bool) -> Option<(String,
             }
             i += 1;
         }
+    }
+    // Acorn consumes comments while looking for the first expression token and
+    // reports the closing Svelte delimiter when none remains. This must run
+    // after the lexical strict-mode check: OXC can recover a forbidden legacy
+    // escape into an empty, diagnostic-free program.
+    if is_code_empty(content, ts) {
+        return Some(("Unexpected token".to_string(), content.len()));
     }
     // Acorn's `parseExpressionAt` consumes a dangling optional-chain marker
     // and reports the delimiter after it. OXC labels the `?` token instead.
@@ -1958,7 +1958,7 @@ pub fn check_js_parse_error_with_pos(content: &str, ts: bool) -> Option<(String,
 /// Whether `content` carries no JavaScript at all — only whitespace and
 /// comments. Answered by the parser rather than by a scan so that a `//` or
 /// `/*` inside a string cannot be mistaken for one.
-fn is_code_empty(content: &str, ts: bool) -> bool {
+pub(crate) fn is_code_empty(content: &str, ts: bool) -> bool {
     if content.is_empty() {
         return true;
     }
@@ -2112,44 +2112,43 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
     // a trailing `//` comment would swallow a same-line `)`
     wrapped.push_str("\n)");
 
-    let content_pos = with_oxc_allocator(|allocator| {
+    let content_positions = with_oxc_allocator(|allocator| {
         let result = OxcParser::new(allocator, &wrapped, expression_source_type(ts)).parse();
         // OXC keeps a TypeScript-only operator in a JavaScript file and reports
         // it as a diagnostic over the whole expression; acorn has no such node
         // and stops where the operator begins.
         if !ts && let Some(at) = typescript_operator_start(&result.program) {
-            return Some(at as usize);
+            return Some(vec![at as usize]);
         }
         let first_error = result.diagnostics.first()?;
-        let label = first_error.labels.first()?;
-        // Map the label's *start* back into `content` (strip the leading `(`).
-        let start = label.offset() as usize;
-        if start == 0 {
-            return None;
+        let mut positions = Vec::with_capacity(first_error.labels.len() * 2);
+        for label in &first_error.labels {
+            // OXC diagnostics do not consistently put the offending token in
+            // the first label. In particular, adjacent literals separated by
+            // a comment label the recovered expression first and the second
+            // literal later. Both label edges are parser-provided token
+            // boundaries; the complete-prefix check below decides which edge
+            // is where acorn stopped.
+            let start = label.offset() as usize;
+            let end = start + label.len() as usize;
+            positions.extend([start, end].into_iter().filter_map(|at| at.checked_sub(1)));
         }
-        Some(start - 1)
+        positions.sort_unstable();
+        positions.dedup();
+        Some(positions)
     })?;
 
-    // A trailing-token error has leftover input *before* the synthetic closing
-    // `)`; an incomplete expression errors at/after the end.
-    if content_pos >= content.len() {
-        return None;
-    }
-    // A comma continues the expression (as a SequenceExpression); acorn does
-    // not return the complete prefix and leave it for the caller's close-token
-    // check. With no following operand (`a,`) or another comma (`a,,b`) it
-    // throws a JS parse error at the missing operand instead.
-    if content.as_bytes().get(content_pos) == Some(&b',') {
-        return None;
-    }
-    // acorn parses ONE maximal expression and only then expects the close token,
-    // so leftover input is only leftover when what precedes it is itself a
-    // complete expression. Without this an error *inside* the expression (e.g.
-    // `String(a b)`) reads as a missing close token.
-    let prefix = content.get(..content_pos)?;
-    check_js_parse_error_with_pos(prefix, ts)
-        .is_none()
-        .then_some(content_pos)
+    content_positions.into_iter().find(|&content_pos| {
+        // A trailing-token error has leftover input *before* the synthetic
+        // closing `)`; an incomplete expression errors at/after the end.
+        content_pos < content.len()
+            // A comma continues the expression (as a SequenceExpression).
+            && content.as_bytes().get(content_pos) != Some(&b',')
+            // Acorn returns only after consuming one complete expression.
+            && content
+                .get(..content_pos)
+                .is_some_and(|prefix| check_js_parse_error_with_pos(prefix, ts).is_none())
+    })
 }
 
 /// The start of the leftmost TypeScript-only construct (`as`, `satisfies`, `!`,
@@ -13800,6 +13799,7 @@ mod tests {
             ("a bcd", Some(2), Some(2)),
             ("foo();", Some(5), Some(5)),
             ("foo() bar", Some(6), Some(6)),
+            ("'a' /* c */ 'b'", Some(12), Some(12)),
             ("x.y = 1 z", Some(8), Some(8)),
             // TypeScript-only syntax stops acorn at the TS token in JS mode and
             // parses in TS mode.

@@ -1952,6 +1952,23 @@ fn process_bind_directive<'a>(
                                 )
                             })
                     })
+                    // A template scope can fail to retain the reference edge
+                    // for a synthesized `<svelte:self>` binding. Resolve the
+                    // lexically visible source by name before giving up; the
+                    // kind filter keeps an unrelated static/template binding
+                    // from claiming the mutation.
+                    .or_else(|| {
+                        context.state.get_binding(&name).filter(|binding| {
+                            crate::compiler::phases::phase3_transform::client::utils::is_state_source(
+                                binding,
+                                context.state.analysis,
+                            ) || matches!(
+                                binding.kind,
+                                crate::compiler::phases::phase2_analyze::scope::BindingKind::Prop
+                                    | crate::compiler::phases::phase2_analyze::scope::BindingKind::BindableProp
+                            )
+                        })
+                    })
                     .or_else(|| context.state.get_prop_binding(&name))
                     .map(|binding| {
                     let is_state =
