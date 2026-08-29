@@ -3209,6 +3209,132 @@ fn common_run(left: &[u8], right: &[u8]) -> usize {
         .count()
 }
 
+/// Locate `$.prop` callees that came specifically from `$bindable` defaults.
+///
+/// The props lowering preserves that fact in the numeric flags argument, so
+/// this does not confuse an ordinary prop initializer with a bindable one.
+/// Pairing is deliberately all-or-nothing: a bindable declaration which was
+/// optimized away would otherwise shift every later source location.
+fn bindable_prop_callee_spans(code: &str, source: &str) -> Vec<(usize, usize)> {
+    use crate::compiler::phases::phase3_transform::shared::js_scan::find_code_from;
+
+    const GENERATED: &[u8] = b"$.prop(";
+    const SOURCE: &[u8] = b"$bindable";
+    const PROPS_IS_BINDABLE: u32 = 1 << 3;
+
+    let mut generated = Vec::new();
+    let mut from = 0;
+    while let Some(start) = find_code_from(code.as_bytes(), GENERATED, from) {
+        let args_start = start + GENERATED.len();
+        let mut depth = 0u32;
+        let mut commas = Vec::new();
+        let mut close = None;
+        for (offset, byte) in
+            crate::compiler::phases::phase3_transform::shared::js_scan::code_bytes_from(
+                code.as_bytes(),
+                args_start,
+            )
+        {
+            match byte {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' if depth == 0 => {
+                    close = Some(offset);
+                    break;
+                }
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                b',' if depth == 0 => commas.push(offset),
+                _ => {}
+            }
+        }
+        let flag_end = commas.get(2).copied().or(close);
+        if let (Some(flag_start), Some(flag_end)) = (commas.get(1).map(|at| at + 1), flag_end)
+            && code[flag_start..flag_end]
+                .trim()
+                .parse::<u32>()
+                .is_ok_and(|flags| flags & PROPS_IS_BINDABLE != 0)
+        {
+            generated.push(start);
+        }
+        from = start + GENERATED.len();
+    }
+
+    let mut bindable = Vec::new();
+    let mut from = 0;
+    while let Some(start) = find_code_from(source.as_bytes(), SOURCE, from) {
+        bindable.push(start);
+        from = start + SOURCE.len();
+    }
+
+    (generated.len() == bindable.len())
+        .then(|| generated.into_iter().zip(bindable).collect())
+        .unwrap_or_default()
+}
+
+/// Replace copied mappings under a generated callee with the explicit
+/// lowering location. The endpoint marker makes the shorter `$.prop` callee
+/// end at the end of `$bindable`, while the following `(` remains mappable.
+fn overlay_bindable_prop_spans(
+    spans: &mut Vec<RawMappedSpan>,
+    pairs: &[(usize, usize)],
+    original_offset: u32,
+    source_at_output: Option<&[Option<u32>]>,
+) {
+    const GENERATED_LEN: u32 = "$.prop".len() as u32;
+    const SOURCE_LEN: u32 = "$bindable".len() as u32;
+
+    for &(generated, source) in pairs {
+        let start = generated as u32;
+        let end = start + GENERATED_LEN;
+        let delimiter_end = end + 1;
+        let mut kept = Vec::with_capacity(spans.len() + 3);
+        for span in spans.drain(..) {
+            if span.code.end <= start || span.code.start >= delimiter_end {
+                kept.push(span);
+                continue;
+            }
+            if span.code.start < start {
+                let len = start - span.code.start;
+                kept.push(RawMappedSpan {
+                    code: span.code.start..start,
+                    source: span.source.start..span.source.start + len,
+                    erased_comment_before_export_prop: span.erased_comment_before_export_prop,
+                });
+            }
+            if span.code.end > delimiter_end {
+                let skipped = delimiter_end - span.code.start;
+                kept.push(RawMappedSpan {
+                    code: delimiter_end..span.code.end,
+                    source: span.source.start + skipped..span.source.end,
+                    erased_comment_before_export_prop: span.erased_comment_before_export_prop,
+                });
+            }
+        }
+        let source_start = source_at_output
+            .and_then(|table| table.get(source).copied().flatten())
+            .unwrap_or(original_offset + source as u32);
+        let source_end = source_at_output
+            .and_then(|table| table.get(source + SOURCE_LEN as usize).copied().flatten())
+            .unwrap_or(source_start + SOURCE_LEN);
+        kept.push(RawMappedSpan {
+            code: start..end,
+            source: source_start..source_start + GENERATED_LEN,
+            erased_comment_before_export_prop: false,
+        });
+        kept.push(RawMappedSpan {
+            code: end..end,
+            source: source_end..source_end,
+            erased_comment_before_export_prop: false,
+        });
+        kept.push(RawMappedSpan {
+            code: end..delimiter_end,
+            source: source_end..source_end + 1,
+            erased_comment_before_export_prop: false,
+        });
+        *spans = kept;
+    }
+    spans.sort_by_key(|span| span.code.start);
+}
+
 /// Align normalized raw output with the stripped script, then project every
 /// unchanged byte back through TypeScript erasure to its component offset.
 /// Formatting may add whitespace or a semicolon, so unmatched bytes are left
@@ -3219,6 +3345,7 @@ fn copied_spans_for_normalized_code(
     original_offset: u32,
     projection: Option<&ScriptProjection>,
 ) -> Vec<RawMappedSpan> {
+    let bindable_prop_spans = bindable_prop_callee_spans(code, stripped);
     // Without TypeScript erasure the stripped script *is* the source slice, so
     // every byte projects back at its own offset: the per-byte table would hold
     // `Some(original_offset + i)` at every `i` and the split loop below could
@@ -3313,36 +3440,6 @@ fn copied_spans_for_normalized_code(
         const NEAR_RESYNC_WINDOW: usize = 32;
         let code_tail = &code.as_bytes()[output..];
         let input_tail = &stripped.as_bytes()[input..];
-        // `$bindable()` is removed while its containing props declarator is
-        // rebuilt as `$.prop(...)`. Upstream stamps the generated callee with
-        // the rune's location (`b.id('$.prop', bindable.loc)`), so carry that
-        // non-linear replacement through the same alignment pass that records
-        // unchanged script slices. The zero-width endpoint marker is consumed
-        // together with the following `(` run, just like the shorter member
-        // callee marker below.
-        if code_tail.starts_with(b"$.prop(") && input_tail.starts_with(b"$bindable(") {
-            let source_start = source_at_output
-                .as_deref()
-                .and_then(|table| table.get(input).copied().flatten())
-                .unwrap_or(original_offset + input as u32);
-            let source_end = source_at_output
-                .as_deref()
-                .and_then(|table| table.get(input + "$bindable".len()).copied().flatten())
-                .unwrap_or(original_offset + input as u32 + "$bindable".len() as u32);
-            spans.push(RawMappedSpan {
-                code: output as u32..output as u32 + "$.prop".len() as u32,
-                source: source_start..source_start + "$.prop".len() as u32,
-                erased_comment_before_export_prop: false,
-            });
-            spans.push(RawMappedSpan {
-                code: output as u32 + "$.prop".len() as u32..output as u32 + "$.prop".len() as u32,
-                source: source_end..source_end,
-                erased_comment_before_export_prop: false,
-            });
-            output += "$.prop".len();
-            input += "$bindable".len();
-            continue;
-        }
         let next_input = input_tail
             .iter()
             .take(RESYNC_WINDOW)
@@ -3458,6 +3555,12 @@ fn copied_spans_for_normalized_code(
             }
         }
     }
+    overlay_bindable_prop_spans(
+        &mut spans,
+        &bindable_prop_spans,
+        original_offset,
+        source_at_output.as_deref(),
+    );
     spans
 }
 
