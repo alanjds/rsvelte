@@ -3619,7 +3619,9 @@ pub fn build_template_chunk(
             }
             TextOrExpr::Expr(expr_tag) => {
                 // Check if it's a literal or can be evaluated at compile time
-                if let Some(lit_value) = get_literal_value(&expr_tag.expression, context) {
+                if let Some(lit_value) =
+                    get_literal_value(&expr_tag.expression, &expr_tag.metadata.expression, context)
+                {
                     if let Some(val) = lit_value {
                         let last_quasi = quasis.last_mut().unwrap();
                         last_quasi.raw.push_str(&val);
@@ -3976,9 +3978,38 @@ pub(crate) fn cook_string_literal(s: &str) -> String {
 /// - `None` - expression cannot be evaluated at compile time
 pub(crate) fn get_literal_value(
     expr: &crate::ast::js::Expression,
+    metadata: &crate::ast::template::ExpressionMetadata,
     context: &ComponentContext,
 ) -> Option<Option<String>> {
+    if legacy_build_expression_wraps(expr, metadata, context) {
+        return None;
+    }
     eval_value_text(&get_literal_value_json(expr.as_json(), context)?)
+}
+
+/// Whether `build_expression` will wrap this chunk in legacy reactivity.
+///
+/// Upstream's `build_template_chunk` evaluates the value it BUILT, and in legacy
+/// mode that value is a `SequenceExpression` whenever the expression has a call,
+/// a member or an assignment. `scope.evaluate` has no `SequenceExpression` case,
+/// so such a chunk is never known however constant the source reads.
+fn legacy_build_expression_wraps(
+    expr: &crate::ast::js::Expression,
+    metadata: &crate::ast::template::ExpressionMetadata,
+    context: &ComponentContext,
+) -> bool {
+    if context.state.analysis.runes || context.state.analysis.maybe_runes {
+        return false;
+    }
+    if metadata.has_call() || metadata.has_member_expression() || metadata.has_assignment() {
+        return true;
+    }
+    // Some directive paths drop the structural flags in phase 2, and the sites
+    // that build this chunk repair them before `build_expression` reads them —
+    // so the fold has to see the repaired answer or the two disagree about one
+    // tree.
+    let props = analyze_expression_properties(expr, context);
+    props.has_member || props.has_assignment || has_call_json(expr.as_json(), context)
 }
 
 /// A folded value as the inlining callers consume it: `None` for a nullish
