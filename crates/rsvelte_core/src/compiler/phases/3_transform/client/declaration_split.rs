@@ -155,7 +155,8 @@ fn split_declaration(
     let mut replacement = String::new();
     let mut emitted = false;
     for (from, to) in pieces {
-        let (comment_lines, body) = split_leading_line_comments(&collapse_lines(&script[from..to]));
+        let (comment_lines, raw) = split_leading_own_line_comments(&script[from..to]);
+        let body = collapse_lines(raw);
         if body.is_empty() {
             continue;
         }
@@ -283,23 +284,42 @@ fn collapse_lines(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// Peel the whole-line `//` comments a declarator starts with off its front. A
-/// block comment stays where it is: it does not run to the end of its line, so
-/// it cannot hide the declarator.
-fn split_leading_line_comments(part: &str) -> (Vec<String>, String) {
+/// Peel the comments a declarator starts with that ENDED their own line, off
+/// the RAW slice — `collapse_lines` joins lines with a space, so asking after it
+/// cannot tell a block comment that stood alone from one written beside the
+/// declarator, and upstream prints only the first on its own line.
+fn split_leading_own_line_comments(part: &str) -> (Vec<String>, &str) {
     let mut comments = Vec::new();
-    let mut rest = part.trim_start();
-    while rest.starts_with("//") {
-        match rest.find('\n') {
-            Some(at) => {
-                comments.push(rest[..at].trim_end().to_string());
-                rest = rest[at + 1..].trim_start();
+    let mut rest = part.trim_start_matches([' ', '\t', '\r', '\n']);
+    loop {
+        let end = if rest.starts_with("//") {
+            match rest.find('\n') {
+                Some(at) => at,
+                // A trailing line comment has no declarator after it.
+                None => {
+                    comments.push(rest.trim_end().to_string());
+                    return (comments, "");
+                }
             }
-            // A trailing line comment has no declarator after it.
-            None => return (comments, String::new()),
+        } else if rest.starts_with("/*") {
+            match rest.find("*/") {
+                Some(at) => at + 2,
+                None => break,
+            }
+        } else {
+            break;
+        };
+        let after = &rest[end..];
+        if !after
+            .trim_start_matches([' ', '\t', '\r'])
+            .starts_with('\n')
+        {
+            break;
         }
+        comments.push(rest[..end].trim_end().to_string());
+        rest = after.trim_start_matches([' ', '\t', '\r', '\n']);
     }
-    (comments, rest.trim().to_string())
+    (comments, rest)
 }
 
 #[cfg(test)]
