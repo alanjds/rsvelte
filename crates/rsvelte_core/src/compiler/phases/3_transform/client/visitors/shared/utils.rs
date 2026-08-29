@@ -455,8 +455,9 @@ fn should_proxy_with_context(
                             return binding.initial_identifier_name.as_deref() != Some("undefined");
                         }
                         _ => {
-                            // Recursively check if initial value type should be proxied
-                            return should_proxy_node_type(initial_type);
+                            // Recursively check if initial value type should be proxied.
+                            // The `Identifier` arm above already answered that case.
+                            return should_proxy_node_type(initial_type, None);
                         }
                     }
                 }
@@ -472,8 +473,16 @@ fn should_proxy_with_context(
 ///
 /// Returns `false` for types known to produce primitive values or functions.
 /// This is the equivalent of calling `should_proxy(binding.initial, null)` in
-/// the official compiler, where `null` scope prevents further identifier lookups.
-fn should_proxy_node_type(node_type: &str) -> bool {
+/// the official compiler, where `null` scope prevents further identifier lookups
+/// — which is also why a bare `undefined` still answers `false` here while every
+/// other identifier answers `true`.
+pub(in crate::compiler::phases::phase3_transform::client) fn should_proxy_node_type(
+    node_type: &str,
+    identifier_name: Option<&str>,
+) -> bool {
+    if node_type == "Identifier" && identifier_name == Some("undefined") {
+        return false;
+    }
     !matches!(
         node_type,
         "Literal"

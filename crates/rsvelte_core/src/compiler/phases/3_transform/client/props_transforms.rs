@@ -2415,13 +2415,17 @@ fn expr_should_proxy(
             if id.name.as_str() == "undefined" {
                 return false;
             }
-            // Upstream: recurse into a resolvable, non-reassigned, non-function
-            // binding's initial (with a `null` scope, hence at most one level).
+            // Upstream: recurse into a resolvable, non-reassigned binding's
+            // initial (with a `null` scope, hence at most one level). Upstream's
+            // own exclusions name DECLARATION kinds it has no initializer
+            // expression for, and every one of them answers `true` from the
+            // node-type dispatch below anyway — a function-VALUED initializer is
+            // NOT among them, so testing `initial_is_function` proxied what
+            // upstream leaves alone.
             if let Some(analysis) = analysis
                 && let Some(idx) = analysis.root.find_binding_any_scope(id.name.as_str())
                 && let Some(binding) = analysis.root.bindings.get(idx)
                 && !binding.reassigned
-                && !binding.initial_is_function
             {
                 // Upstream recurses into the declaration initializer node. A
                 // rune declaration's initializer is the call itself, not its
@@ -2431,8 +2435,17 @@ fn expr_should_proxy(
                 if binding.init_rune.is_some() {
                     return true;
                 }
+                // `binding.initial` only carries a LITERAL's text; every other
+                // initializer leaves it `None` and records its node type
+                // instead, which is what upstream's null-scope recursion
+                // dispatches on.
                 let Some(initial) = binding.initial.as_deref() else {
-                    return true;
+                    return binding.initial_node_type.as_deref().is_none_or(|ty| {
+                        super::visitors::shared::utils::should_proxy_node_type(
+                            ty,
+                            binding.initial_identifier_name.as_deref(),
+                        )
+                    });
                 };
                 // `None` disables further identifier recursion (upstream `null` scope).
                 return ast_should_proxy(initial, None).unwrap_or(true);
