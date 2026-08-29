@@ -3265,9 +3265,11 @@ fn bindable_prop_callee_spans(code: &str, source: &str) -> Vec<(usize, usize)> {
         from = start + SOURCE.len();
     }
 
-    (generated.len() == bindable.len())
-        .then(|| generated.into_iter().zip(bindable).collect())
-        .unwrap_or_default()
+    if generated.len() == bindable.len() {
+        generated.into_iter().zip(bindable).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Pair the rest-props helper emitted for a `$props()` destructuring declaration
@@ -3288,9 +3290,11 @@ fn rest_props_callee_spans(code: &str, source: &str) -> Vec<(usize, usize)> {
 
     let generated = occurrences(code, b"$.rest_props(");
     let props = occurrences(source, b"$props(");
-    (generated.len() == props.len())
-        .then(|| generated.into_iter().zip(props).collect())
-        .unwrap_or_default()
+    if generated.len() == props.len() {
+        generated.into_iter().zip(props).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Replace copied mappings under a generated callee with the explicit
