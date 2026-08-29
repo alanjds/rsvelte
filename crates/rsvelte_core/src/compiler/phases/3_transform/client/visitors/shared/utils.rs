@@ -110,7 +110,7 @@ fn append_each_invalidation(
 }
 
 impl LocalScope {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             vars: FxHashMap::default(),
         }

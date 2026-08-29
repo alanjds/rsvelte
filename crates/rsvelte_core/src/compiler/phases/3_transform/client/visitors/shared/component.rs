@@ -2106,10 +2106,20 @@ fn process_bind_directive<'a>(
                 vec![b::stmt(&context.arena, assignment)]
             }
         } else {
-            vec![b::stmt(
-                &context.arena,
-                b::assign(&context.arena, raw_expression.clone(), b::id("$$value")),
-            )]
+            // Upstream builds the setter from the SOURCE assignment and visits it
+            // (`context.visit(b.assignment('=', attribute.expression, b.id('$$value')))`),
+            // so a member base whose root carries a read transform keeps it.
+            let original_root = crate::compiler::phases::phase3_transform::client::visitors::bind_directive::get_ast_root_identifier_span(
+                &bind.expression,
+            );
+            let assignment = crate::compiler::phases::phase3_transform::client::visitors::expression_converter::transform_synthesized_assignment(
+                &raw_expression,
+                &b::id("$$value"),
+                original_root.as_ref().map(|(name, _, _)| name.as_str()),
+                original_root.as_ref().map(|(_, start, _)| *start),
+                context,
+            );
+            vec![b::stmt(&context.arena, assignment)]
         }
     };
 

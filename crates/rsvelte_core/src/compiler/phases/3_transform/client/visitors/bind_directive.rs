@@ -127,7 +127,28 @@ pub fn unified_build_bind_this(
         None
     };
 
-    let mut set = apply_transforms_to_expression_with_shadowed(&setter_raw, context, &local_scope);
+    // Upstream visits a synthesized `expression = $$value`, so the assignment visitor's
+    // mutate transform still fires for a prop root whose read was already lowered to
+    // `prop()` during conversion (`prop(prop()[k] = $$value, true)`).
+    let mut set = if setter_expr.is_some() {
+        apply_transforms_to_expression_with_shadowed(&setter_raw, context, &local_scope)
+    } else {
+        let original_root = get_ast_root_identifier_span(expression);
+        // The assignment visitor decides reassign-vs-mutate by IR variant, and an
+        // outer source-span wrapper answers neither.
+        let setter_left = match &raw_expr {
+            JsExpr::Spanned(inner, _, _) => context.arena.get_expr(*inner).clone(),
+            other => other.clone(),
+        };
+        super::expression_converter::transform_synthesized_assignment_with_shadowed(
+            &setter_left,
+            &b::id("$$value"),
+            original_root.as_ref().map(|(name, _, _)| name.as_str()),
+            original_root.as_ref().map(|(_, start, _)| *start),
+            &local_scope,
+            context,
+        )
+    };
 
     // A synthesized `bind:this={item.ref}` setter mutates the each item. Upstream's
     // each-item `mutate` transform therefore marks the render callback as using its

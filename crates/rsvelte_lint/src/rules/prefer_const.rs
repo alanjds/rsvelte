@@ -1174,7 +1174,7 @@ fn append_semantic_fallback_reports(
             return;
         };
         for declaration in declarations {
-            if !declaration.get("init").is_some_and(|init| !init.is_null()) {
+            if declaration.get("init").is_none_or(|init| init.is_null()) {
                 continue;
             }
             let Some(id) = declaration

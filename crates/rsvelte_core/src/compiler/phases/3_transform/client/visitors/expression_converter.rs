@@ -1158,6 +1158,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                 should_proxy,
                 original_root_name.as_deref(),
                 original_root_start,
+                &super::shared::utils::LocalScope::new(),
                 context,
             ) {
                 transformed
@@ -4849,6 +4850,7 @@ fn convert_assignment_expression(
         should_proxy_rhs,
         original_root_name.as_deref(),
         original_root_start,
+        &super::shared::utils::LocalScope::new(),
         context,
     ) {
         transformed
@@ -5217,6 +5219,7 @@ fn try_transform_assignment(
     should_proxy_rhs: Option<bool>,
     original_root_name: Option<&str>,
     original_root_start: Option<u32>,
+    local_scope: &super::shared::utils::LocalScope,
     context: &mut ComponentContext,
 ) -> Option<JsExpr> {
     use crate::compiler::phases::phase3_transform::client::visitors::shared::assignment_helpers::build_assignment_value;
@@ -5300,8 +5303,9 @@ fn try_transform_assignment(
     {
         // Apply transforms to the RIGHT side so that store reads like `$a.foo`
         // become `$a().foo`.
-        use super::shared::utils::apply_transforms_to_expression;
-        let visited_right = apply_transforms_to_expression(right, context);
+        use super::shared::utils::apply_transforms_to_expression_with_shadowed;
+        let visited_right =
+            apply_transforms_to_expression_with_shadowed(right, context, local_scope);
 
         // For Prop/BindableProp bindings, apply read transforms to the LEFT side
         // so that the base identifier gets the getter call: items -> items().
@@ -5326,7 +5330,7 @@ fn try_transform_assignment(
         };
 
         let visited_left = if is_prop_binding {
-            apply_transforms_to_expression(left, context)
+            apply_transforms_to_expression_with_shadowed(left, context, local_scope)
         } else {
             left.clone()
         };
@@ -5367,9 +5371,30 @@ pub(crate) fn transform_synthesized_assignment(
     original_root_start: Option<u32>,
     context: &mut ComponentContext,
 ) -> JsExpr {
+    transform_synthesized_assignment_with_shadowed(
+        left,
+        right,
+        original_root_name,
+        original_root_start,
+        &super::shared::utils::LocalScope::new(),
+        context,
+    )
+}
+
+/// `transform_synthesized_assignment` for a caller that already shadows names — a
+/// `bind:this` setter builds its own each-item scope, and a shadowed name must not
+/// pick up a read transform inside the mutation it synthesizes.
+pub(crate) fn transform_synthesized_assignment_with_shadowed(
+    left: &JsExpr,
+    right: &JsExpr,
+    original_root_name: Option<&str>,
+    original_root_start: Option<u32>,
+    local_scope: &super::shared::utils::LocalScope,
+    context: &mut ComponentContext,
+) -> JsExpr {
     use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 
-    use super::shared::utils::apply_transforms_to_expression;
+    use super::shared::utils::apply_transforms_to_expression_with_shadowed;
 
     let assignment = try_transform_assignment(
         "=",
@@ -5378,13 +5403,14 @@ pub(crate) fn transform_synthesized_assignment(
         None,
         original_root_name,
         original_root_start,
+        local_scope,
         context,
     )
     .unwrap_or_else(|| b::assign(&context.arena, left.clone(), right.clone()));
 
     // The normal expression path recursively visits the expression returned by the assignment
     // visitor. Preserve that step for nested reads in both transformed and plain assignments.
-    apply_transforms_to_expression(&assignment, context)
+    apply_transforms_to_expression_with_shadowed(&assignment, context, local_scope)
 }
 
 /// Preserve the sequence that upstream's each-item `mutate` transform always
