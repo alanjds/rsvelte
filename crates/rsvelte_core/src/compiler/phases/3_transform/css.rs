@@ -798,6 +798,26 @@ fn replace_animation_keyframes(
             continue;
         }
 
+        // A `//` in property position is not a comment to upstream's CSS parser:
+        // `read_declaration` takes it as the property and everything up to the
+        // `;` as the value, so an `animation` on the next line is inside that
+        // value and never renamed. Mirror that by skipping to the terminator.
+        if chars[i] == '/'
+            && i + 1 < chars.len()
+            && chars[i + 1] == '/'
+            && result
+                .chars()
+                .rev()
+                .find(|c| !c.is_whitespace())
+                .is_none_or(|c| matches!(c, '{' | '}' | ';'))
+        {
+            while i < chars.len() && !matches!(chars[i], ';' | '{' | '}') {
+                result.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
         // Look for animation or animation-name property
         let remaining: String = chars[i..].iter().collect();
         let lower = remaining.to_lowercase();
