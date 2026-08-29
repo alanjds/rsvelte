@@ -3667,6 +3667,29 @@ fn convert_ts_type(
             );
             Value::Object(obj)
         }
+        TSType::TSTupleType(t) => {
+            let mut obj = base("TSTupleType");
+            let elements: Vec<Value> = t
+                .element_types
+                .iter()
+                .map(|element| convert_ts_tuple_element(arena, element, offset, line_offsets))
+                .collect();
+            obj.set_field("elementTypes", Value::Array(elements));
+            Value::Object(obj)
+        }
+        TSType::TSNamedTupleMember(member) => {
+            let mut obj = base("TSNamedTupleMember");
+            obj.set_field(
+                "label",
+                convert_ts_identifier_name(&member.label, offset, line_offsets),
+            );
+            obj.set_field("optional", Value::Bool(member.optional));
+            obj.set_field(
+                "elementType",
+                convert_ts_tuple_element(arena, &member.element_type, offset, line_offsets),
+            );
+            Value::Object(obj)
+        }
         // ---- literal types: `'a'`, `403`, `true` ----------------------------
         TSType::TSLiteralType(l) => {
             let mut obj = base("TSLiteralType");
@@ -3788,6 +3811,62 @@ fn convert_ts_type(
         // still address the node even when its inner shape isn't modelled yet.
         _ => Value::Object(base("TSUnknownKeyword")),
     }
+}
+
+/// Convert a tuple element. Beyond the plain `TSType` cases oxc models the two
+/// positional wrappers (`T?`, `...T`) as variants only reachable from a tuple.
+fn convert_ts_tuple_element(
+    arena: &ParseArena,
+    element: &oxc_ast::ast::TSTupleElement,
+    offset: usize,
+    line_offsets: &[usize],
+) -> Value {
+    use oxc_ast::ast::TSTupleElement;
+
+    let wrapper = |type_name: &str, span: oxc_span::Span, inner: &oxc_ast::ast::TSType| {
+        let mut obj = Map::new();
+        obj.set_field("type", Value::String(type_name.to_string()));
+        push_span_fields(
+            &mut obj,
+            offset + span.start as usize,
+            offset + span.end as usize,
+            line_offsets,
+        );
+        obj.set_field(
+            "typeAnnotation",
+            convert_ts_type(arena, inner, offset, line_offsets),
+        );
+        Value::Object(obj)
+    };
+
+    match element {
+        TSTupleElement::TSOptionalType(optional) => {
+            wrapper("TSOptionalType", optional.span, &optional.type_annotation)
+        }
+        TSTupleElement::TSRestType(rest) => wrapper("TSRestType", rest.span, &rest.type_annotation),
+        other => other.as_ts_type().map_or_else(
+            || Value::Object(Map::new()),
+            |ts_type| convert_ts_type(arena, ts_type, offset, line_offsets),
+        ),
+    }
+}
+
+/// svelte/compiler emits a tuple member's label as a plain `Identifier`.
+fn convert_ts_identifier_name(
+    name: &oxc_ast::ast::IdentifierName,
+    offset: usize,
+    line_offsets: &[usize],
+) -> Value {
+    let mut obj = Map::new();
+    obj.set_field("type", Value::String("Identifier".to_string()));
+    push_span_fields(
+        &mut obj,
+        offset + name.span.start as usize,
+        offset + name.span.end as usize,
+        line_offsets,
+    );
+    obj.set_field("name", Value::String(name.name.to_string()));
+    Value::Object(obj)
 }
 
 /// Convert a `TSTypeParameterDeclaration` (`<T, U extends V = W>`) into
