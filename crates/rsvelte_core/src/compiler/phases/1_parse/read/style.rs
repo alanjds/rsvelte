@@ -710,10 +710,14 @@ impl<'a> Parser<'a> {
                         // declaration property and stops at the first property
                         // colon on the following line. Its point diagnostic is
                         // immediately after that colon, rather than at </style>.
-                        let colon_pos = style_content.find(':').map(|pos| content_start + pos + 1);
-                        let err_pos = first_line_comment
-                            .or(colon_pos)
-                            .unwrap_or(content_start + style_content.len());
+                        // Upstream stops at whichever it reaches first, so the
+                        // earlier position wins rather than the `//`.
+                        let colon_pos =
+                            sass_stop_colon(style_content).map(|pos| content_start + pos);
+                        let err_pos = match (first_line_comment, colon_pos) {
+                            (Some(a), Some(b)) => a.min(b),
+                            (a, b) => a.or(b).unwrap_or(content_start + style_content.len()),
+                        };
                         return Err(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
@@ -757,8 +761,14 @@ impl<'a> Parser<'a> {
                         && !stripped.starts_with('@')
                     {
                         // Non-empty CSS content with no blocks and no at-rules - invalid
-                        let err_pos =
-                            first_line_comment.unwrap_or(content_start + style_content.len());
+                        // Upstream stops at whichever it reaches first, so the
+                        // earlier position wins rather than the `//`.
+                        let colon_pos =
+                            sass_stop_colon(style_content).map(|pos| content_start + pos);
+                        let err_pos = match (first_line_comment, colon_pos) {
+                            (Some(a), Some(b)) => a.min(b),
+                            (a, b) => a.or(b).unwrap_or(content_start + style_content.len()),
+                        };
                         return Err(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
@@ -2178,6 +2188,60 @@ impl<'a> CssParser<'a> {
     fn read_identifier(&mut self) -> String {
         read_css_identifier(self.source, &mut self.index)
     }
+}
+
+/// Where upstream's CSS reader gives up on a block that never opens a rule.
+///
+/// Indented Sass is read as ordinary CSS, so the whole block is one selector
+/// until a `:` is followed by something `read_identifier` refuses, and the point
+/// diagnostic sits immediately after that colon — not after the first colon in
+/// the block, which is usually a pseudo-class. A `:` inside a comment or a
+/// string is not a colon, and `::` is one pseudo-element token.
+fn sass_stop_colon(content: &str) -> Option<usize> {
+    let b = content.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(b.len());
+            }
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != quote {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b':' => {
+                let mut after = i + 1;
+                if b.get(after) == Some(&b':') {
+                    after += 1;
+                }
+                if !starts_css_identifier(content.get(after..).unwrap_or("")) {
+                    return Some(after);
+                }
+                i = after;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Can `rest` begin a name `read_identifier` accepts? A leading `-` is fine
+/// (`:-moz-…`, `--custom`) unless a digit follows it, which is the
+/// `-?\d` the reader refuses outright.
+fn starts_css_identifier(rest: &str) -> bool {
+    if starts_with_hyphen_or_digit(rest) {
+        return false;
+    }
+    rest.chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '-' || c == '\\' || !c.is_ascii())
 }
 
 /// `REGEX_LEADING_HYPHEN_OR_DIGIT` — upstream's `read_identifier` refuses a name
