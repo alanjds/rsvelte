@@ -560,10 +560,10 @@ fn bind_directive_inner(
 
     let call = if let Some(element) = parent.as_regular_element() {
         let mut call = call;
-        let element_end = element
-            .start
-            .saturating_add(1)
-            .saturating_add(element.name.len() as u32);
+        // Upstream stamps the element identifier with `element.name_loc`, which
+        // starts at the tag name rather than at the `<`.
+        let name_start = element.start.saturating_add(1);
+        let name_end = name_start.saturating_add(element.name.len() as u32);
         if let (JsExpr::Call(binding), JsExpr::Identifier(node_id)) =
             (&mut call, &context.state.node)
         {
@@ -571,8 +571,8 @@ fn bind_directive_inner(
                 if matches!(argument, JsExpr::Identifier(name) if name == node_id) {
                     *argument = JsExpr::Spanned(
                         context.arena.alloc_expr(argument.clone()),
-                        element.start,
-                        element_end,
+                        name_start,
+                        name_end,
                     );
                 }
             }
