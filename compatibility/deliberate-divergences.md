@@ -176,6 +176,86 @@ Three sites lower an update through a non-`this` receiver, one comment each:
 
 ---
 
+## A `$`-prefixed function parameter is not a store subscription (server)
+
+### Input
+
+```svelte
+<script>
+	import { writable } from 'svelte/store';
+
+	const viewport = writable({ distance: 0 });
+
+	function update(fn) {
+		fn({ distance: 1 });
+	}
+
+	update(($viewport) => {
+		$viewport.distance = 42;
+	});
+</script>
+
+<p>{$viewport.distance}</p>
+```
+
+### Both outputs, measured against `submodules/svelte` 5.56.10
+
+| target | official | rsvelte |
+|---|---|---|
+| `server` | `$.store_mutate($$store_subs ??= {}, '$viewport', viewport, $viewport.distance = 42);` | `$viewport.distance = 42;` |
+| `client` | `$viewport.distance = 42;` | `$viewport.distance = 42;` |
+
+**Upstream's own two targets disagree on this input**, which is what settles which side is wrong.
+
+### Why upstream produces it
+
+`3-transform/server/visitors/AssignmentExpression.js:75-79` decides "this is a store" from the
+name's spelling plus the existence of a binding one character shorter, and never asks whether
+`$viewport` itself resolves in the current scope:
+
+```js
+if (is_store_name(object.name)) {
+	const name = object.name.slice(1);
+	if (!context.state.scope.get(name)) return null;
+```
+
+The client resolves through the scope chain and finds the parameter.
+
+### Why rsvelte's form is the correct one
+
+`internal/server/index.js:284` — `store_mutate` calls
+`store_set(store, store_get(store_values, store_name, store))`. Reproducing upstream would
+subscribe to `viewport` and re-set it every time an unrelated **local object** is mutated, and
+register `$viewport` in `$$store_subs` for teardown to unsubscribe — for a store the source never
+subscribed to in that scope. It also contradicts the rule
+`compatibility/pattern-corpus/README.md` states for `dollar-function-parameter.svelte`: a `$name`
+parameter "must neither create a synthetic store subscription nor trigger
+`store_invalid_scoped_subscription`".
+
+Reported upstream in
+[`upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md`](../upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md).
+
+### Where it occurs in published code
+
+`threlte`, `packages/extras/src/lib/hooks/useViewport.svelte.ts` —
+`viewport.update(($viewport) => { … $viewport.distance = distance })`, where `update`'s callback
+receives the current value. Naming that parameter `$viewport` is idiomatic and legal.
+
+### Why no gate sees it
+
+The output gates *do* see it — they report it as a `js-mismatch` on `server` and `server-dev`,
+which is why the two ids are listed in `known-failures.server{,-dev}.json` rather than silently
+diverging. What no gate sees is **which side is right**: every gate here compares rsvelte to
+upstream and scores any difference as rsvelte's failure, so a listed entry looks identical
+whether it is our defect or theirs. That judgement lives only in this file.
+
+### Where it is pinned
+
+`crates/rsvelte_core/tests/dollar_parameter_is_not_a_store.rs` asserts the server output for the
+input above, so a future "fix" toward upstream goes red.
+
+---
+
 ## Private `$derived` field written on the server
 
 **Pinned by** `crates/rsvelte_core/tests/private_field_constructor_grid_2573.rs`
