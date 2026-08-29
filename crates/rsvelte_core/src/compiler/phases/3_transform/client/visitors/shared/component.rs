@@ -1929,7 +1929,9 @@ fn process_bind_directive<'a>(
             // Use the source AST as the authority for the root. The converted
             // tree may already contain a getter call or an in-band source-map
             // wrapper, neither of which changes which binding owns the write.
-            get_ast_root_identifier(&bind.expression)
+            crate::compiler::phases::transform::client::visitors::bind_directive::get_ast_root_identifier(
+                &bind.expression,
+            )
             .and_then(|name| {
                 context.state.get_binding(&name).map(|binding| {
                     let is_state =

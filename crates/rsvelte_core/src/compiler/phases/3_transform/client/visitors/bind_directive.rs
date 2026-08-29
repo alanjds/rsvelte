@@ -2818,7 +2818,7 @@ fn get_ast_root_identifier_span(expr: &Expression) -> Option<(String, u32, u32)>
 
 /// Get the root identifier name from an AST Expression (JSON-based).
 /// For `form.count` returns `Some("form")`.
-fn get_ast_root_identifier(expr: &Expression) -> Option<String> {
+pub(crate) fn get_ast_root_identifier(expr: &Expression) -> Option<String> {
     get_ast_root_identifier_span(expr).map(|(name, _, _)| name)
 }
 
