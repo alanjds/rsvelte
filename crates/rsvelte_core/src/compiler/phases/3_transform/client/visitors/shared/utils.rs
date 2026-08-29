@@ -3720,8 +3720,45 @@ pub fn build_template_chunk(
                         };
                     }
 
-                    let is_defined =
-                        template_chunk_value_is_defined(&value, &expr_tag.expression, context);
+                    // Check if the expression is guaranteed to be non-null.
+                    // This corresponds to Svelte's `state.scope.evaluate(value).is_defined` check.
+                    //
+                    // We use a two-step approach:
+                    // 1. Check the ORIGINAL expression with full binding context (knows EachIndex
+                    //    is always a number, const bindings with defined values, etc.)
+                    // 2. If the original was defined, check if a transform made it potentially
+                    //    undefined by wrapping it in $.get() (which returns a Call expression).
+                    //
+                    // This correctly handles:
+                    // - Non-keyed each index `i`: original=defined, built=Identifier => defined
+                    // - Keyed each index `$.get(index)`: original=defined, built=Call => NOT defined
+                    // - Normal variables: original=not defined => NOT defined
+                    // Determine defined-ness by checking the built (transformed) expression.
+                    //
+                    // For simple identifiers that weren't transformed (like non-keyed each
+                    // index `i`), we check the original expression which has binding context
+                    // (knows EachIndex is always a number). For everything else, we check
+                    // the built JsExpr.
+                    let mut value_for_definedness = &value;
+                    while let JsExpr::Spanned(inner, _, _) = value_for_definedness {
+                        value_for_definedness = context.arena.get_expr(*inner);
+                    }
+                    let is_defined = if let JsExpr::Identifier(name) = value_for_definedness {
+                        // Check if this is a memoized parameter ($0, $1, etc.)
+                        // Memoized parameters are unknown identifiers, so they're not defined.
+                        // The official compiler evaluates the memoized expression through
+                        // scope.evaluate() which returns is_defined=false for unknown identifiers.
+                        if name.starts_with('$') && name[1..].chars().all(|c| c.is_ascii_digit()) {
+                            false
+                        } else {
+                            // Value is still a plain identifier (no $.get() wrapping).
+                            // Use the original expression check which has binding context.
+                            is_expression_defined(&expr_tag.expression, context)
+                        }
+                    } else {
+                        // Value was transformed. Check the built expression.
+                        is_js_expr_defined(value_for_definedness, &context.arena, context)
+                    };
 
                     // Add ?? '' where necessary (only if not guaranteed to be defined)
                     let final_value = if is_defined {
@@ -4061,33 +4098,6 @@ pub(crate) fn is_global_constant(keypath: &str) -> bool {
             | "Math.SQRT2"
             | "Math.SQRT1_2"
     )
-}
-
-/// Upstream `build_template_chunk` / `TitleElement` both ask
-/// `state.scope.evaluate(value).is_defined` of the BUILT value, never of the
-/// source expression — a legacy prop read becomes a `SequenceExpression`, which
-/// upstream's `evaluate` has no case for, so it is never `is_defined`. The
-/// original is consulted only where the transform left a bare identifier, which
-/// is the one shape whose binding context survives it.
-pub(crate) fn template_chunk_value_is_defined(
-    value: &JsExpr,
-    original: &crate::ast::js::Expression,
-    context: &ComponentContext,
-) -> bool {
-    let mut built = value;
-    while let JsExpr::Spanned(inner, _, _) = built {
-        built = context.arena.get_expr(*inner);
-    }
-    if let JsExpr::Identifier(name) = built {
-        // A memoizer parameter (`$0`) is unknown to the component scope.
-        if name.starts_with('$') && name[1..].chars().all(|c| c.is_ascii_digit()) {
-            false
-        } else {
-            is_expression_defined(original, context)
-        }
-    } else {
-        is_js_expr_defined(built, &context.arena, context)
-    }
 }
 
 pub(crate) fn is_js_expr_defined(
