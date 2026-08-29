@@ -7,7 +7,10 @@
   and it is the prop lowering — which rebuilds the declaration from its own text
   — that has to carry the moved comment through. A comment sharing the
   declarator's line was written there and keeps that line, so the same peel has
-  to tell the two apart rather than strip both.
+  to tell the two apart rather than strip both. The SSR output is a second port
+  of the same decision and is compared here too: it assembles the component from
+  re-parsed slices and registers a comment region per statement, so the rule
+  lives in where that region is anchored rather than in a text peel.
 -->
 <script>
 	// lead line
