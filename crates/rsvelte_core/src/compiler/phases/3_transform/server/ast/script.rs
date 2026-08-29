@@ -3939,16 +3939,17 @@ fn transform_script_legacy<'a>(
                         // `loc` while the declaration around it has none — and
                         // the hoist is printed FIRST, which makes it the flush
                         // point for every comment written before that target.
-                        let decl_anchor =
-                            if decl_names.is_empty() || ret.program.comments.is_empty() {
-                                None
-                            } else {
-                                state.comments.register_anchor()
-                            };
+                        // The anchor is taken AFTER this statement's own leading
+                        // region is registered, at the end of the loop: the hoist is
+                        // printed first, so a comment registered after the anchor
+                        // flushes at the NEXT declarator instead of this one.
+                        let wants_decl_anchor =
+                            !decl_names.is_empty() && !ret.program.comments.is_empty();
                         reactive.push(ReactiveEntry {
                             stmt: rehomed,
                             decl_names,
-                            decl_anchor,
+                            decl_anchor: None,
+                            wants_decl_anchor,
                             assigns,
                             deps,
                         });
@@ -4140,6 +4141,12 @@ fn transform_script_legacy<'a>(
                 state.mark_deferred_tail_comment_landed(index);
             }
         }
+        if let Some(entry) = reactive.get_mut(reactive_len)
+            && entry.wants_decl_anchor
+        {
+            entry.decl_anchor = state.comments.register_anchor();
+            entry.wants_decl_anchor = false;
+        }
         if is_reactive && reactive_leading_comment {
             reactive_leading_comment_pending = true;
         } else if !is_reactive && anchor.is_some() {
@@ -4219,6 +4226,9 @@ struct ReactiveEntry<'a> {
     /// anchored at, standing in for the source `loc` of the `$:` assignment
     /// target upstream carries onto them.
     decl_anchor: Option<u32>,
+    /// Set at collection; the anchor itself is registered once the statement's
+    /// leading comments are in the buffer, so they sort before it.
+    wants_decl_anchor: bool,
     /// Instance-scope binding indices this statement assigns to.
     assigns: Vec<usize>,
     /// Instance-scope binding indices this statement depends on (reads), with
