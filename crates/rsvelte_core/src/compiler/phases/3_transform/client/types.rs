@@ -2184,6 +2184,18 @@ impl<'a> ComponentClientTransformState<'a> {
         false
     }
 
+    /// Whether a binding is reachable while evaluating a template expression.
+    ///
+    /// Phase 3's current template scope is not always linked back through the
+    /// Phase-2 instance/module scopes, although both are lexical ancestors of
+    /// every template expression. Template-local scopes still have to be on the
+    /// active chain so a constant from a sibling snippet cannot leak across.
+    pub fn evaluation_scope_contains(&self, scope_index: usize) -> bool {
+        scope_index == 0
+            || scope_index == self.scope_root.instance_scope_index
+            || self.scope_chain_contains(scope_index)
+    }
+
     /// Look up a local variable's init expression AST node type.
     /// Searches all active local scope frames (innermost first).
     pub fn get_local_var_init_type(&self, name: &str) -> Option<&str> {

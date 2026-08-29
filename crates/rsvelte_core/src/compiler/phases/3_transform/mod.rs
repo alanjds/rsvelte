@@ -1862,6 +1862,7 @@ mod tests {
 	let derived = $derived(state);
 	let by = $derived.by(() => state);
 	let { value = $bindable(), ...rest } = $props();
+	value = 1;
 	$effect(() => state);
 	$effect.pre(() => state);
 </script>

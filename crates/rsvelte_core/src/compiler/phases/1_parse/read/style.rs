@@ -1889,7 +1889,25 @@ impl<'a> CssParser<'a> {
 
         // End position is before the semicolon
         let end = self.offset + self.index;
-        if self.current_char() != '}' && !self.eat_optional(";") {
+        // In an unprocessed SCSS prelude such as `@media #{a}, #{b} {}` the
+        // first interpolation brace is (necessarily) mistaken for the at-rule
+        // block. The second interpolation then reaches this declaration path
+        // as its value. Its closing `}` is not the CSS block terminator
+        // upstream commits to: upstream asks for `;` at the start of `#{b}`.
+        // Preserve that error and position instead of letting the later empty
+        // block overwrite it with `css_expected_identifier`.
+        let interpolation_value = self.source[value_start..self.index]
+            .trim_start_ws()
+            .starts_with("#{");
+        if self.current_char() == '}' && interpolation_value {
+            let value_offset = value_start
+                + (self.source[value_start..self.index].len()
+                    - self.source[value_start..self.index].trim_start_ws().len());
+            record_declaration_terminator_error(
+                &self.error,
+                crate::error::ParseError::expected_token(";", self.offset + value_offset),
+            );
+        } else if self.current_char() != '}' && !self.eat_optional(";") {
             record_declaration_terminator_error(
                 &self.error,
                 crate::error::ParseError::expected_token(";", self.offset + self.index),

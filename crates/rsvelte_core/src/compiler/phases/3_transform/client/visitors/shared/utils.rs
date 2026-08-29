@@ -6252,7 +6252,11 @@ impl EvalScope for ClientEvalScope<'_, '_> {
                     .scope_root
                     .binding_at_reference(name, start as u32)
             })
-            .filter(|binding| self.context.state.scope_chain_contains(binding.scope_index));
+            .filter(|binding| {
+                self.context
+                    .state
+                    .evaluation_scope_contains(binding.scope_index)
+            });
         let binding = match reference_binding {
             // Phase 2 resolves children of a component against its `let:`
             // scope before Phase 3 separates those children by slot. A named
@@ -6291,7 +6295,11 @@ impl EvalScope for ClientEvalScope<'_, '_> {
                     .get(name)
                     .filter(|bindings| bindings.len() == 1)
                     .and_then(|_| self.context.state.get_binding(name))
-                    .filter(|binding| self.context.state.scope_chain_contains(binding.scope_index))
+                    .filter(|binding| {
+                        self.context
+                            .state
+                            .evaluation_scope_contains(binding.scope_index)
+                    })
             }
         };
         match binding {

@@ -2194,9 +2194,14 @@ pub(crate) fn transform_client(
             } else {
                 None
             };
-            // Strip TypeScript syntax before processing
-            let raw = crate::compiler::phases::phase2_analyze::types::strip_typescript(
-                trace_lowered.as_deref().unwrap_or(&module_content.raw),
+            // ScriptContent is already TypeScript-stripped. Only the trace pass
+            // starts again from original source and therefore needs stripping
+            // here. Keeping the ordinary path byte-identical to its recorded
+            // projection is required to remove comments re-emitted from erased
+            // type declarations by their output ranges below.
+            let raw = trace_lowered.as_deref().map_or_else(
+                || module_content.raw.clone(),
+                crate::compiler::phases::phase2_analyze::types::strip_typescript,
             );
             // Phase 2 preserves comments from erased TypeScript declarations for
             // instance scripts, whose located component block lets esrap print
