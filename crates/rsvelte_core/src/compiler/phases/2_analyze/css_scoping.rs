@@ -1253,13 +1253,20 @@ fn element_matches_simple_selectors(
 
 /// Truncate trailing global selectors from a complex selector's children.
 fn truncate_globals(children: &[CssRelativeSelector]) -> &[CssRelativeSelector] {
-    let last_non_global = children
+    // A bare `:global` opens a global block, so it and the entire tail are
+    // unscoped. Inline functional pseudos are different: `:is(:global(.x))`
+    // is still a local relative selector which can cause the element carrying
+    // `:is` to be scoped. Upstream's `truncate` uses the strict
+    // `metadata.is_global` meaning here, not the recursive matcher used by
+    // selector pruning. Recompute that strict meaning because the extracted
+    // metadata also carries our global-block tail marker.
+    let scoped_prefix_end = children
         .iter()
-        // This mirrors upstream `truncate`, which deliberately uses the
-        // analysis metadata rather than its recursive `is_global` matcher.
-        // In particular, a nested `&:hover` has non-global child metadata even
-        // when `&` resolves to a fully-global parent.
-        .rposition(|rel| !rel.is_global && !rel.is_global_like);
+        .position(is_bare_global_relative)
+        .unwrap_or(children.len());
+    let last_non_global = children[..scoped_prefix_end]
+        .iter()
+        .rposition(|rel| !compute_is_global(&rel.selectors) && !rel.is_global_like);
     match last_non_global {
         Some(idx) => &children[..=idx],
         None => &[],

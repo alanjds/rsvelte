@@ -3532,31 +3532,6 @@ fn copied_spans_for_normalized_code(
                     consider(common_run(&code_tail[skip..], input_tail), 0, skip);
                 }
             }
-            // A replacement may consume bytes on both sides (`state = 1` →
-            // `$.set(state, 1)`). Restricting candidates to one stationary
-            // cursor then latches onto a short identifier inside the rewrite
-            // and can carry that stale source position into the next rune.
-            // Find the nearest shared run after both replacement regions.
-            for (skip_output, &byte) in code_tail
-                .iter()
-                .take(NEAR_RESYNC_WINDOW)
-                .enumerate()
-                .skip(1)
-            {
-                for (skip_input, _) in input_tail
-                    .iter()
-                    .take(NEAR_RESYNC_WINDOW)
-                    .enumerate()
-                    .skip(1)
-                    .filter(|(_, input)| **input == byte)
-                {
-                    consider(
-                        common_run(&code_tail[skip_output..], &input_tail[skip_input..]),
-                        skip_input,
-                        skip_output,
-                    );
-                }
-            }
             if let Some((_, skip_input, skip_output)) = best {
                 input += skip_input;
                 output += skip_output;

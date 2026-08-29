@@ -2812,7 +2812,7 @@ fn extract_root_identifier_span_from_json(val: &serde_json::Value) -> Option<(St
     }
 }
 
-fn get_ast_root_identifier_span(expr: &Expression) -> Option<(String, u32, u32)> {
+pub(crate) fn get_ast_root_identifier_span(expr: &Expression) -> Option<(String, u32, u32)> {
     extract_root_identifier_span_from_json(expr.as_json())
 }
 
@@ -2847,10 +2847,15 @@ fn validate_bind_this_mutation(
     if !expression.is_member_expression() {
         return set;
     }
-    let Some(root_name) = get_ast_root_identifier(expression) else {
+    let Some((root_name, root_start, _)) = get_ast_root_identifier_span(expression) else {
         return set;
     };
-    let Some(binding) = context.state.get_binding(&root_name) else {
+    let Some(binding) = context
+        .state
+        .scope_root
+        .binding_at_reference(&root_name, root_start)
+        .or_else(|| context.state.get_binding(&root_name))
+    else {
         return set;
     };
     if !matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp) {

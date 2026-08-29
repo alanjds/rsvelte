@@ -1929,11 +1929,16 @@ fn process_bind_directive<'a>(
             // Use the source AST as the authority for the root. The converted
             // tree may already contain a getter call or an in-band source-map
             // wrapper, neither of which changes which binding owns the write.
-            crate::compiler::phases::phase3_transform::client::visitors::bind_directive::get_ast_root_identifier(
+            crate::compiler::phases::phase3_transform::client::visitors::bind_directive::get_ast_root_identifier_span(
                 &bind.expression,
             )
-            .and_then(|name| {
-                context.state.get_binding(&name).map(|binding| {
+            .and_then(|(name, start, _)| {
+                context
+                    .state
+                    .scope_root
+                    .binding_at_reference(&name, start)
+                    .or_else(|| context.state.get_binding(&name))
+                    .map(|binding| {
                     let is_state =
                         crate::compiler::phases::phase3_transform::client::utils::is_state_source(
                             binding,
@@ -1954,7 +1959,7 @@ fn process_bind_directive<'a>(
                                 crate::compiler::phases::phase2_analyze::scope::BindingKind::BindableProp
                             ));
                     (name, is_state, is_prop)
-                })
+                    })
             })
         } else {
             None

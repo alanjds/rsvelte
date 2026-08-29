@@ -1848,7 +1848,11 @@ impl<'a> CssParser<'a> {
                 continue;
             }
 
-            if is_custom_property && self.match_str("/*") {
+            // A block comment is whitespace in every declaration value. If it
+            // is left to the quote scanner below, an apostrophe in prose such
+            // as `/* it's a comment */` opens a string and makes the real
+            // declaration terminator disappear.
+            if self.match_str("/*") {
                 self.skip_block_comment();
                 continue;
             }
