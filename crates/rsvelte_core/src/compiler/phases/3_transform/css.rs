@@ -6040,8 +6040,13 @@ fn is_functional_branch_unused(
 
 /// Check if a selector inside `:is()`/`:where()`/`:has()` is definitely unused,
 /// judged on its own (no enclosing-chain context).
+///
+/// "On its own" has to include the nesting context: an argument constrains the
+/// same element the enclosing compound does, so with the parent preludes still
+/// in `ctx` a bare `a` inside `.row { &:is(a) { … } }` is asked whether an `<a>`
+/// sits *below* a `.row` — and `<a class="row">` is the `.row`.
 fn is_is_inner_selector_unused(complex: &Value, ctx: &CssContext) -> bool {
-    is_functional_branch_unused(complex, None, ctx)
+    without_parent_preludes(ctx, || is_functional_branch_unused(complex, None, ctx))
 }
 
 /// Read the marking walk's verdict for one argument. Falls back to the isolated
