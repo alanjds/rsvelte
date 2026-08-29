@@ -825,6 +825,13 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         self.comment_source.or(self.placement_source)
     }
 
+    /// One past the last pending comment, as a `flush_comments_until` bound that
+    /// takes all of them. `None` when nothing is pending.
+    fn pending_comments_end(&self) -> Option<u32> {
+        self.comment_at(self.comment_len().checked_sub(1)?)
+            .map(|comment| comment.end + 1)
+    }
+
     /// esrap's `if (node.loc)`: whether a span offset is a real source position
     /// (and so may carry comments) rather than a synthesized node's placeholder.
     fn has_loc(&self, offset: u32) -> bool {
@@ -3158,13 +3165,23 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         let this_len = usize::from(this_param.is_some());
         let item_len = params.items.len();
         let n = this_len + item_len + usize::from(params.rest.is_some());
+        // esrap reads an ESTree parameter, which IS the pattern; oxc's
+        // `FormalParameter` wrapper is builder-made in generated output, so its
+        // span would bound nothing.
+        let loc_base = self.loc_base;
+        let located = move |offset: u32| offset != u32::MAX && loc_base.is_none_or(|b| offset >= b);
         self.sequence_indexed(
             n,
             |i| {
                 let span = if i < this_len {
                     this_param.unwrap().span
                 } else if i - this_len < item_len {
-                    params.items[i - this_len].span()
+                    let param = &params.items[i - this_len];
+                    if located(param.span().start) {
+                        param.span()
+                    } else {
+                        param.pattern.span()
+                    }
                 } else {
                     params.rest.as_ref().unwrap().span()
                 };
@@ -3252,9 +3269,18 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
         // comments must leave a located body's leading comments for the body
         // itself. Otherwise its empty parameter list consumes them before the
         // `=>`. An original-source body cannot bound comments in the synthetic
-        // comment buffer, so it instead owns comments up to the next argument.
+        // comment buffer, so the owner falls back to the next argument — and
+        // when that argument is builder-made too it bounds nothing, leaving the
+        // owner every comment still pending, which is where upstream's located
+        // body puts the boundary.
         let until = match owned_comment_until {
-            Some(next) if !self.has_loc(body_start) => Some(next),
+            Some(next) if !self.has_loc(body_start) => {
+                if self.has_loc(next) {
+                    Some(next)
+                } else {
+                    self.pending_comments_end()
+                }
+            }
             Some(_) => None,
             None => Some(body_start),
         };
