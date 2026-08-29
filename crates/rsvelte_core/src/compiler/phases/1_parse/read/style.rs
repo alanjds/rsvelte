@@ -321,6 +321,42 @@ fn nth_of_tail(text: &str, anb: usize) -> Option<usize> {
 /// A comment where a compound selector should begin. Upstream's `read_selector`
 /// tolerates one only immediately before `,`, `{` or `)`; anywhere else the loop
 /// falls through to `read_identifier`, which rejects the `/`.
+/// Upstream reads a combinator, consumes only WHITESPACE after it, and then
+/// requires a compound: `read_selector` raises `css_selector_invalid` on a `,`,
+/// on the rule's `{` (or the argument list's `)` inside a pseudo-class) and
+/// reads an identifier on anything else — so a comment there is
+/// `css_expected_identifier`, reported at the comment and not at the
+/// terminator. Both selector scans lose that terminator to trimming, so it is
+/// recovered from the source rather than from the text they were handed.
+fn record_trailing_combinator_error(
+    cell: &std::cell::Cell<Option<crate::error::ParseError>>,
+    source: &str,
+    offset: usize,
+    combinator_end: usize,
+) {
+    let Some(rest) = combinator_end
+        .checked_sub(offset)
+        .and_then(|i| source.get(i..))
+    else {
+        return;
+    };
+    let skip = rest.len() - rest.trim_start_ws().len();
+    let pos = combinator_end + skip;
+    let after = &rest[skip..];
+    if after.starts_with("/*") {
+        record_selector_comment_error(cell, pos);
+    } else if after.starts_with(',') || after.starts_with('{') || after.starts_with(')') {
+        record_first_error(
+            cell,
+            crate::error::ParseError::svelte(
+                "css_selector_invalid",
+                "Invalid selector",
+                (pos, pos),
+            ),
+        );
+    }
+}
+
 fn record_selector_comment_error(
     cell: &std::cell::Cell<Option<crate::error::ParseError>>,
     pos: usize,
@@ -1566,12 +1602,14 @@ impl<'a> CssParser<'a> {
                 let rel_selector =
                     self.create_empty_relative_selector_with_combinator(comb, comb_start, comb_end);
                 result.push(rel_selector);
+                record_trailing_combinator_error(&self.error, self.source, self.offset, comb_end);
             }
         } else if let Some((comb, comb_start, comb_end)) = last_combinator {
             // Trailing combinator with no selector after it
             let rel_selector =
                 self.create_empty_relative_selector_with_combinator(comb, comb_start, comb_end);
             result.push(rel_selector);
+            record_trailing_combinator_error(&self.error, self.source, self.offset, comb_end);
         }
 
         // If no selectors were found, create one for the whole text
@@ -3089,18 +3127,10 @@ impl<'a> SelectorParser<'a> {
             }
         }
 
-        // Upstream reads a combinator and then requires a compound after it;
-        // hitting the argument list's `)` instead is `css_selector_invalid`.
-        if last_combinator.is_some() && text[current_start..].trim_ws().is_empty() {
-            let pos = base_offset + text.len();
-            record_first_error(
-                &self.error,
-                crate::error::ParseError::svelte(
-                    "css_selector_invalid",
-                    "Invalid selector",
-                    (pos, pos),
-                ),
-            );
+        if let Some((_, _, comb_end)) = last_combinator
+            && text[current_start..].trim_ws().is_empty()
+        {
+            record_trailing_combinator_error(&self.error, self.source, self.offset, comb_end);
         }
 
         // If no selectors were found, create one for the whole text
