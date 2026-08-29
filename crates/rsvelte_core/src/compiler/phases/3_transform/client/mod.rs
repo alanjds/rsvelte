@@ -3315,20 +3315,26 @@ fn overlay_lowered_callee_spans(
                 continue;
             }
             if span.code.start < start {
-                let len = start - span.code.start;
-                kept.push(RawMappedSpan {
-                    code: span.code.start..start,
-                    source: span.source.start..span.source.start + len,
-                    erased_comment_before_export_prop: span.erased_comment_before_export_prop,
-                });
+                let shared_len = (start - span.code.start)
+                    .min(span.source.end.saturating_sub(span.source.start));
+                if shared_len != 0 {
+                    kept.push(RawMappedSpan {
+                        code: span.code.start..span.code.start + shared_len,
+                        source: span.source.start..span.source.start + shared_len,
+                        erased_comment_before_export_prop: span.erased_comment_before_export_prop,
+                    });
+                }
             }
             if span.code.end > delimiter_end {
-                let skipped = delimiter_end - span.code.start;
-                kept.push(RawMappedSpan {
-                    code: delimiter_end..span.code.end,
-                    source: span.source.start + skipped..span.source.end,
-                    erased_comment_before_export_prop: span.erased_comment_before_export_prop,
-                });
+                let shared_len = (span.code.end - delimiter_end)
+                    .min(span.source.end.saturating_sub(span.source.start));
+                if shared_len != 0 {
+                    kept.push(RawMappedSpan {
+                        code: span.code.end - shared_len..span.code.end,
+                        source: span.source.end - shared_len..span.source.end,
+                        erased_comment_before_export_prop: span.erased_comment_before_export_prop,
+                    });
+                }
             }
         }
         let source_start = source_at_output
