@@ -7875,9 +7875,12 @@ fn transform_complex_selector(
                     for (idx, sel) in selectors.iter().enumerate() {
                         let sel_type = sel.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-                        // Handle universal selector
+                        // Upstream walks the compound from the END and replaces `*`
+                        // only when it is the selector it stops on; a `*` earlier in
+                        // the compound (`*.a`) is ordinary output and the modifier
+                        // goes after `.a`.
                         if sel_type == "TypeSelector" && is_bare_universal(sel) {
-                            if needs_scoping {
+                            if needs_scoping && Some(idx) == last_non_pseudo_idx {
                                 // Replace * with the scoping selector
                                 let modifier = get_modifier(selector, &local_specificity_bumped);
                                 append_modifier(&mut selector_parts, &modifier);
