@@ -2164,6 +2164,22 @@ impl<'a> ComponentClientTransformState<'a> {
         self.scope_root.bindings.get(index)
     }
 
+    /// Get a binding declared by the component instance script.
+    ///
+    /// The root compatibility scope is deliberately flattened and may contain
+    /// a same-named declaration from a nested template scope. Code that has
+    /// already applied an instance transform (for example `prop` -> `prop()`)
+    /// must use the declaration that installed that transform, not the first
+    /// name found in the flattened scope.
+    pub fn get_instance_binding(&self, name: &str) -> Option<&Binding> {
+        let scope = self
+            .scope_root
+            .all_scopes
+            .get(self.scope_root.instance_scope_index)?;
+        let index = *scope.declarations.get(name)?;
+        self.scope_root.bindings.get(index)
+    }
+
     /// Whether `scope_index` is the current scope (`self.scope`) or one of its
     /// ancestors. Used to restrict constant-folding of snippet-scoped template
     /// declarations to lexically reachable references (upstream resolves these

@@ -2854,7 +2854,7 @@ fn validate_bind_this_mutation(
         .state
         .scope_root
         .binding_at_reference(&root_name, root_start)
-        .or_else(|| context.state.get_binding(&root_name))
+        .or_else(|| context.state.get_instance_binding(&root_name))
     else {
         return set;
     };

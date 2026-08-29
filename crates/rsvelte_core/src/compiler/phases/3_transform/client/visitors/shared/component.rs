@@ -1937,7 +1937,7 @@ fn process_bind_directive<'a>(
                     .state
                     .scope_root
                     .binding_at_reference(&name, start)
-                    .or_else(|| context.state.get_binding(&name))
+                    .or_else(|| context.state.get_instance_binding(&name))
                     .map(|binding| {
                     let is_state =
                         crate::compiler::phases::phase3_transform::client::utils::is_state_source(
