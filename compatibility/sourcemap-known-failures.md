@@ -15,7 +15,7 @@ each sample's recorded `metadata.json` still says exactly that).
 | `map-parity` | `map-parity\t<sample>\t<target>\t<count>` | budget: official map segments that rsvelte does not reproduce, where the generated code is byte-identical (missing + wrong) |
 | `out-of-range` | `out-of-range\t<sample>\t<target>\t<count>` | budget: out-of-range segments not also emitted by the official map at the same generated and original position |
 
-**Current baseline: `sourcemap-known-failures.json`, 2 entries.** The
+**Current baseline: `sourcemap-known-failures.json`, 0 entries.** The
 before/after tables further down record what one specific change did at the time
 it landed; they are history, not the current size. Reading the newest number in
 those tables as today's count is the mistake this line exists to prevent — the
@@ -260,15 +260,73 @@ official fixture maps rather than against the ratchet:
 | out-of-range segments | 0 | 0 |
 | ratchet entries | 0 (unattainable) | **2** |
 
+### Sixth catch: the keyword anchor, ported twice and guarded once
+
+The last two entries were `attached-sourcemap` on `client` and `server`, one
+segment each, and they read as one defect: official emits two segments at one
+generated column and rsvelte emitted only the second. They were **four**
+defects, in two ports of one upstream function
+(`write_source_keyword`, `esrap/src/languages/ts/index.js:113`), which anchors
+`location(line, column)` / `location(line, column + keyword.length)` around a
+fragment that *includes* the keyword's trailing space.
+
+| # | where | what it did |
+|---|---|---|
+| A | `KeywordCursor::write`, `Printer::write_keyword` | dropped the end anchor when `column + keyword.len()` exceeded the source line's length. Upstream has no such test; `let` alone on a line is 3 wide and the anchor for `let ` is at column 4. |
+| B | `Driver::push_mapping` | **overwrote** the previous mapping when the generated position matched. esrap pushes one segment per `Location` command, so two anchors at one generated column are two segments. |
+| C | `keyword_cursor`, `write_keyword` | mapped a builder-made node's keyword. Upstream guards every keyword write on `node.loc`; rsvelte spells "no loc" as an empty or sentinel span and only `write_node` was checking it, so every synthesized `var root = …` / `import …` anchored at offset 0 of the `.svelte` file. |
+| D | `generate_token_mappings_inner` (`3_transform/mod.rs`) | the **server** map is not built by esrap at all — `print_split` runs with `emit_locations: false` and a text token scan supplies the anchors. It anchored the 3-character token `let`, so its end anchor was one column short of upstream's. |
+
+Each was measured on its own by restoring it and re-running the gate:
+
+| restored | official segments reproduced | out-of-range | which sample |
+|---|---|---|---|
+| — (all four fixed) | **770 / 770** | **0 / 1634** | — |
+| A | 769 / 770 | 0 / 1633 | `attached-sourcemap/client` |
+| B | 769 / 770 | 0 / 1596 | `attached-sourcemap/client` |
+| C | 758 / 770 | 3 / 1870 | 10 samples, all `client` |
+| D | 769 / 770 | 0 / 1634 | `attached-sourcemap/server` |
+
+Two things generalize past the fix.
+
+**B was masking C.** The dedup made a spurious anchor invisible whenever a
+correct one landed on the same generated column, which is exactly what happens
+after `var ` in `var h1 = root();`. Removing the dedup alone takes the gate from
+2 wrong to 13, and twelve of those thirteen are C, which had been there the whole
+time — 236 spurious segments over the 29 samples (1870 with C restored against
+1634 without it). A collapse rule that keeps "the last write wins" is not a
+normalization — it is a repair that hides whatever it repaired.
+
+**The two ports could not be compared to each other by anything.** The client's
+anchors come from `rsvelte_esrap`, the server's from a text token scan in
+`3_transform/mod.rs`, and every gate here compares each of them to *upstream* on
+whatever inputs a sample happens to supply. `attached-sourcemap` is the one
+sourcemaps sample whose `let` is alone on its source line, and it is the only
+reason either half was visible. See `two-ports-inventory.md`.
+
+Four independently-failing pins keep them apart:
+`crates/rsvelte_esrap/tests/keyword_anchor_fidelity.rs` (A, B, C — one test
+each, each failing only under its own ablation) and
+`crates/rsvelte_core/tests/server_declaration_keyword_anchor.rs` (D). There is no
+`compatibility/pattern-corpus/` repro because the corpus pipeline never writes a
+`js.map`: `scripts/compat-corpus/compile.mjs` stores generated code only, so a
+file added there would measure nothing about this class.
+
+| | before | after |
+|---|---|---|
+| official segments reproduced | 768 / 770 | **770 / 770** |
+| — of which missing / wrong | 0 / 2 | **0 / 0** |
+| out-of-range segments | 0 / 1816 | **0 / 1634** |
+| ratchet entries | 2 | **0** |
+
+Total segments fall 1816 → 1634 because C's spurious anchors are gone; the
+official map is reproduced in full at the same time, so the drop is
+over-emission being removed, not resolution being lost.
+
 ## Entries
 
-No entry is accepted as correct behaviour; all are burndown targets.
-
-- **`map-parity` (2)** — `attached-sourcemap` on `client` and `server`, one
-  segment each. Official emits two segments at that generated column whose
-  original positions differ (the end of the preceding source line, then the
-  statement itself); rsvelte emits only the second, so the first scores `wrong`.
-  This is the surplus/missing-segment shape described under the root cause above
-  and is not affected by the duplicate rule, which only applies where rsvelte
-  already has an exactly equal segment at the column. `effects` (server), the
-  third pre-#3896 entry, now passes.
+No entry is accepted as correct behaviour; all are burndown targets. The list is
+currently **empty**: every official segment is reproduced and no segment points
+outside its source. Unlike the empty list #3896 wrote (see the fifth catch), this
+one is a measurement — `sourcemap_gate` asserts it, and the four ablations above
+each turn it red.

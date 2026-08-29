@@ -91,6 +91,8 @@ whose oracle is the other implementation is only as good as its independent expe
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
 | [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
 | [17](#17-does-an-assignment-lhss-computed-index-get-its-sites-read-transform--d-closed) | Does an assignment LHS's computed index get its site's read transform? | 2 (+3 `untrack` rebuilders) | **[D]** | closed |
+| [18](#18-does-a-mutation-of-a-legacy_indirect_bindings-root-get-the-invalidate-wrap-at-all--d-closed) | Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? | 4 | **[D]** | closed |
+| [19](#19-where-does-a-keywords-source-map-anchor-go--d-defended-at-degree-2) | Where does a keyword's source-map anchor go? | 2 | **[D]** | defended at degree 2 |
 
 ---
 
@@ -685,6 +687,40 @@ A repro going green is evidence about that repro, never about the cause.
 **Closed at degree 1** for the `state_member_mutate_ast` route (it now takes the same map and
 builds the same string as its twin) and by construction for the two `format!` builders, which call
 one local helper. The two twin files remain — that is row 16's open half, not this one's.
+
+### 19. Where does a keyword's source-map anchor go? — [D], defended at degree 2
+
+**Upstream:** one `write_source_keyword(context, line, column, keyword)`
+(`esrap/src/languages/ts/index.js:113`) — `location(line, column)`, write the fragment,
+`location(line, column + keyword.length)`. The fragment a declaration passes it is
+`node.kind + ' '`, so the end anchor counts the separator, and esrap's `run()`
+(`esrap/src/index.js:139-146`) pushes one segment per `Location` command with no collapse.
+
+**Ports.**
+
+- `rsvelte_esrap` `Printer::write_keyword` / `KeywordCursor::write` — the client map. Every
+  `Location` reaches `Driver::push_mapping` (`command.rs`).
+- `3_transform/mod.rs` `generate_token_mappings_inner` — the **server** map. `print_split` runs
+  the printer with `emit_locations: false`, so the server's anchors come from a text token scan
+  that matches generated tokens back against the source, not from esrap at all.
+
+**Demonstrated.** On upstream's `sourcemaps/attached-sourcemap` fixture, whose `let` is alone on
+its source line, the two ports were wrong in different ways at the same instant: the client
+emitted no end anchor (a rsvelte-only guard dropped it once `column + keyword.len()` exceeded the
+source line's length), and the server emitted one at `column + 3` (it anchored the token `let`,
+not the fragment `let `). Two further defects in the client port were invisible until the first
+was fixed — `push_mapping` **overwrote** a mapping when the generated position repeated, and
+`keyword_cursor` / `write_keyword` mapped builder-made nodes that upstream skips on `node.loc`,
+so every synthesized `var root = …` anchored at offset 0 of the `.svelte` file. All four are
+fixed; the gate went 768/770 → **770/770** with out-of-range unchanged at 0.
+
+**Defended at degree 2, not closed.** The server does not print through esrap, so there is no
+single implementation to route both through. What the tree now has is four independently-failing
+pins with expectations spelled out rather than read off the other port:
+`crates/rsvelte_esrap/tests/keyword_anchor_fidelity.rs` (three tests, each failing only under its
+own ablation) and `crates/rsvelte_core/tests/server_declaration_keyword_anchor.rs`. Nothing
+compares the two maps to each other, and only one of the 29 sourcemaps samples has a source line
+that separates the two rules — which is why this row was worth writing rather than the fix alone.
 
 ## Adding a row, and closing one
 

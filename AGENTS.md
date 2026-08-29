@@ -1008,9 +1008,25 @@ The `Sourcemaps` row above only compares generated `client.js` / `server.js` out
 from `packages/svelte/tests/sourcemaps` and adds two structural budgets (official segments
 reproduced; segments pointing outside the source), ratcheted shrink-only through
 `compatibility/sourcemap-known-failures.json` with per-entry justification in the paired `.md`.
-Server maps are accurate; client maps are chunk-granular (issue #1781) and are the burndown
-target — regenerate the baseline with `UPDATE_SOURCEMAP_RATCHET=1 cargo test -p rsvelte_core
---test sourcemaps_gate -- --ignored sourcemap_gate_measure`.
+The ratchet is **empty** as of 2026-08-30: all 770 official segments are reproduced and no
+segment points outside its source. Regenerate the baseline with
+`UPDATE_SOURCEMAP_RATCHET=1 cargo test -p rsvelte_core --test sourcemaps_gate -- --ignored
+sourcemap_gate_measure`.
+
+**The last two entries were one symptom over four defects, and two of them were hiding behind
+the other two.** Upstream anchors a keyword with `write_source_keyword` — `location(column)`,
+write `kind + ' '`, `location(column + keyword.length)` — and pushes one segment per `Location`
+with no collapse. rsvelte had a rsvelte-only guard dropping the end anchor when it exceeded the
+source line's length, a `push_mapping` that **overwrote** a mapping at a repeated generated
+position, keyword writers that mapped builder-made nodes upstream skips on `node.loc`, and — in
+the **server**, whose map is not built by esrap at all but by a text token scan in
+`3_transform/mod.rs` — an end anchor at `column + 3` for the token `let` rather than
+`column + 4` for the fragment `let `. Removing the collapse alone takes the gate from 2 wrong to
+13, and twelve of those thirteen are the synthesized-node anchors it had been repairing:
+**a "last write wins" rule is not a normalization, it is a repair that hides what it repaired.**
+And the two halves are two ports of one upstream function that no gate compares to each other
+(`two-ports-inventory.md` row 17) — only one of the 29 sourcemaps samples has a `let` alone on
+its source line, which is the entire reason either half was visible.
 
 ### Formatter parity corpus (svelte.dev)
 
