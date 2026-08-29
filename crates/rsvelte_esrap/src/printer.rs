@@ -1868,7 +1868,6 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             .filter(|elem| keep_empty || !elem.is_empty_stmt())
             .peekable();
         let mut prev: Option<(BodyElem<'a, 'b>, bool)> = None;
-        let mut prev_joined = false;
         let mut last_end = None;
         while let Some(elem) = elems.next() {
             let layout_mark = ctx.event_mark();
@@ -1876,11 +1875,11 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             if let Some((prev_elem, prev_multiline)) = &prev {
                 // The two kept empties of one `;;` hole are a single upstream
                 // statement, so nothing separates them — but two separate holes
-                // are two statements and take a newline.
-                // Kept empties are emitted in pairs. Their source anchors can be
-                // collapsed while a comment-free re-parsed region is remapped,
-                // so pair by sequence rather than relying on adjacent offsets.
-                let joined = !prev_joined && prev_elem.is_kept_empty() && elem.is_kept_empty();
+                // are two statements and take a newline. A pair is built at
+                // consecutive starts (`B::empty_kept(s)` / `(s + 1)`).
+                let joined = prev_elem.is_kept_empty()
+                    && elem.is_kept_empty()
+                    && elem.span_start() == prev_elem.span_start().wrapping_add(1);
                 has_margin = !joined && (*prev_multiline || !elem.same_kind(prev_elem));
                 if has_margin {
                     ctx.margin();
@@ -1888,7 +1887,6 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
                 if !joined {
                     ctx.newline();
                 }
-                prev_joined = joined;
             }
 
             let scope = ctx.begin_scope();

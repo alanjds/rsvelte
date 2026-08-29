@@ -5,7 +5,11 @@
 //! [`grass`](https://docs.rs/grass) compiler, which targets dart-sass
 //! compatibility.
 
-use std::path::PathBuf;
+use std::{
+    any::Any,
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
+};
 
 use rsvelte_core::compiler::preprocess::types::{
     AttributeValue, PreprocessAttributeMap as Map, PreprocessError, PreprocessorFn,
@@ -45,6 +49,16 @@ pub(crate) fn remove_indented_base(source: &str) -> String {
         output.push_str(newline);
     }
     output
+}
+
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic".to_string()
+    }
 }
 
 /// Options forwarded to the Sass compiler (subset of the dart-sass options
@@ -118,12 +132,28 @@ pub fn preprocess_sass(
         options = options.load_path(path);
     }
 
-    let source = if indented {
-        remove_indented_base(content)
-    } else {
-        content.to_string()
+    // Compile the original source first. Indentation is meaningful in Sass, so
+    // eagerly removing a common prefix changes otherwise-valid documents. The
+    // fallback is narrowly for grass's panic on an indented Svelte style block;
+    // dart-sass treats that common prefix as the document's base indentation.
+    let compile =
+        |source: String| catch_unwind(AssertUnwindSafe(|| grass::from_string(source, &options)));
+    let mut css = match compile(content.to_string()) {
+        Ok(result) => result.map_err(|error| error.to_string())?,
+        Err(payload) if indented => {
+            let normalized = remove_indented_base(content);
+            if normalized == content {
+                return Err(format!("grass panicked: {}", panic_message(payload)));
+            }
+            match compile(normalized) {
+                Ok(result) => result.map_err(|error| error.to_string())?,
+                Err(payload) => {
+                    return Err(format!("grass panicked: {}", panic_message(payload)));
+                }
+            }
+        }
+        Err(payload) => return Err(format!("grass panicked: {}", panic_message(payload))),
     };
-    let mut css = grass::from_string(source, &options).map_err(|e| e.to_string())?;
 
     // dart-sass's legacy `render` (which the JS package wraps) emits expanded CSS
     // without a trailing newline; `grass` appends one, so drop it to match.

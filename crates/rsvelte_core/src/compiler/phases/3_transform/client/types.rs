@@ -2179,6 +2179,27 @@ impl<'a> ComponentClientTransformState<'a> {
             .find(|binding| matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp))
     }
 
+    /// Get the prop binding which owns the reference at `start`.
+    ///
+    /// More than one same-named binding can retain a reference at the same
+    /// source position. `ScopeRoot::binding_at_reference` stores one index per
+    /// position, so a later non-prop binding can otherwise hide the prop whose
+    /// read transform produced the member expression we are mutating.
+    pub fn get_prop_binding_at_reference(&self, name: &str, start: u32) -> Option<&Binding> {
+        self.scope_root
+            .bindings_by_name
+            .get(name)?
+            .iter()
+            .filter_map(|&index| self.scope_root.bindings.get(index as usize))
+            .find(|binding| {
+                matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
+                    && binding
+                        .references
+                        .iter()
+                        .any(|reference| reference.start == start)
+            })
+    }
+
     /// Whether `scope_index` is the current scope (`self.scope`) or one of its
     /// ancestors. Used to restrict constant-folding of snippet-scoped template
     /// declarations to lexically reachable references (upstream resolves these

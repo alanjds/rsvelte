@@ -1935,8 +1935,13 @@ fn process_bind_directive<'a>(
             .and_then(|(name, start, _)| {
                 context
                     .state
-                    .scope_root
-                    .binding_at_reference(&name, start)
+                    .get_prop_binding_at_reference(&name, start)
+                    .or_else(|| {
+                        context
+                            .state
+                            .scope_root
+                            .binding_at_reference(&name, start)
+                    })
                     .or_else(|| context.state.get_prop_binding(&name))
                     .map(|binding| {
                     let is_state =
