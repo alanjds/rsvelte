@@ -252,6 +252,27 @@ start", independent of both `skip_opaque` and `find_class_header`, and
 `3_transform/server/transform_store.rs` and `server/helpers.rs` carry at least eight more inline
 `in_string` / `in_comment` machines. Their input ranges are `undetermined`.
 
+**A fourth pair is worth recording for the opposite reason: the two copies AGREED, and both were
+wrong.** `client/class_transforms.rs` splits a class body into member blocks line by line, and
+until 2026-08-29 both `parse_section_members` (`is_plain_field`, which excluded a line beginning
+`//` or `/*`) and `rejoin_class_members` (which refused to terminate a block on the same two
+prefixes) asked "is this line comment text" **per line**, so the continuation lines of a
+multi-line `/* … */` (` * text`, ` */`) were members of their own on both. The opening `/**` then
+stayed on the block above, that block is an unterminated comment, `private_class_assign_ast`
+cannot parse it and every rewrite it owns is skipped in silence — on sveltekit's
+`query/instance.svelte.js` the `??=` lowering of a private `$state.raw` field, emitting
+`$.get(this.#promise) ??= this.#run()`. Measured over the 589 corpus sources holding both `class`
+and a rune (293 compiled by both compilers), routing both through one cross-line
+`advance_block_comment` moved 40 files from divergent to byte-identical on client, 1 on
+client-dev, none the other way, and took the population's unparseable outputs from 1 to 0.
+
+The reusable part is the grade this pair would have earned. It is **[S]**, never [D]: no input
+separates the two, because they answered the same question the same wrong way — which is
+precisely the failure mode § *The one place this is already defended* names for a port-vs-port
+oracle. **A row at [S] whose two ports provably agree is not a closed row**; it is a row whose
+divergence test cannot exist, and only an independently pinned expectation (here: the official
+compiler's output) can grade it.
+
 ### 7. Does this element match this selector? — [D], one pair closed
 
 **Upstream:** `css-prune.js:243` `apply_selector` + `:291` `apply_combinator` + `:436`
