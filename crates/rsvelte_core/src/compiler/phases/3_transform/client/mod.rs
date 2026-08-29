@@ -50,6 +50,7 @@ mod rune_transforms;
 mod sanitized_props;
 mod scan_index;
 mod scope_analysis;
+mod signal_discipline;
 pub(crate) mod source_anchor;
 mod state_assigns_combined_ast;
 mod state_call_ast;
@@ -2790,6 +2791,7 @@ pub(crate) fn transform_client(
             } else {
                 code
             };
+            signal_discipline::check(&code, &analysis.name);
             return Ok(CodegenResult { code, mappings });
         } else if *CLIENT_TO_OXC_DEBUG {
             // Corpus workers share one stderr and a multi-part write interleaves,
@@ -2845,6 +2847,7 @@ pub(crate) fn transform_client(
         } else {
             code
         };
+        signal_discipline::check(&code, &analysis.name);
         Ok(CodegenResult {
             code,
             mappings: vec![],
