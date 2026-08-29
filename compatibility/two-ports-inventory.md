@@ -650,12 +650,37 @@ with `shadowed_reference_starts` for the in-place rewriters, which cannot hold a
 is degree 1 for the *shadow* question and not for the row: the instance twin
 `legacy_state_member_mutate_ast` still answers through `find_state_var_symbols` /
 `is_state_var_reference_or_unresolved`, a second primitive with a second rule, and nothing compares
-the two. The row stays open for that and because the remaining 32 text-keyed passes are
-**未測定**: several are binding-keyed too (`store_assign_ast`, `store_member_mutate_ast`,
-`store_update_ast`, `local_assign_ast`, `state_eager_ast`, `state_raw_frozen_ast`,
-`rest_prop_member_access_ast`) and none has been probed for a shadow. Degree 3 is available here
-and is the right shape for it: "no rewrite pass claims an identifier that resolves inside its own
-input" is a property, not a comparison, so the corpus becomes the detector at whatever size it is.
+the two.
+
+**Four of the remaining text-keyed passes were probed and are clean**: a `$`-prefixed parameter
+shadowing a store (`function bump($count) { $count = 1; $count++; $count.x = 1 }`, reaching
+`store_assign_ast` / `store_update_ast` / `store_member_mutate_ast`) and a parameter shadowing a
+rest-props binding (`function read(rest) { return rest.foo }`, `rest_prop_member_access_ast`)
+both compile byte-identical to official. `state_eager_ast` and `state_raw_frozen_ast` are keyed
+on the rune **call**, not on a binding name, so they are not instances of this row at all — an
+earlier draft of this row listed them and was wrong.
+
+**The same probe found a live one, which is why the row stays open.** A function-local
+`let n = $state(5)` that IS reassigned, shadowing a top-level `let n = $state(0)` that is NOT,
+compiles to
+
+```js
+let n = 0;
+function make() { let n = 5; $.set(n, 6); return n; }   // official: $.state(5) / $.get(n)
+```
+
+— `$.set` on a plain number, so the output is broken at run time rather than merely different.
+The classification is a `Vec<String>` of non-reactive **names** (`client/mod.rs:7094`), so the
+top-level binding's "never reassigned" answer reaches the inner declaration and its reads, while
+the write goes through a pass that resolves correctly. The module pipeline already has the escape
+hatch for exactly this — `ambiguous_state_names` (`client/mod.rs:5429`) re-asks
+`binding.reassigned` per symbol whenever one name carries two `$state` bindings that disagree, and
+`state_call_ast::is_non_reactive` consumes it — while the component pipeline neither computes it
+nor reaches that lowering, which makes the `$state(…)` lowering itself a second pair.
+
+The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available here and is the right
+shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
+property, not a comparison, so the corpus becomes the detector at whatever size it is.
 
 ## Adding a row, and closing one
 
