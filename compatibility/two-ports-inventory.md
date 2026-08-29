@@ -90,6 +90,7 @@ whose oracle is the other implementation is only as good as its independent expe
 | [14](#14-what-options-does-the-public-parse-run-with--d) | What options does the public `parse()` run with? | 2 bindings | **[D]** | #3688 open |
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
 | [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
+| [17](#17-where-does-a-keywords-source-map-anchor-go--d-defended-at-degree-2) | Where does a keyword's source-map anchor go? | 2 | **[D]** | defended at degree 2 |
 
 ---
 
@@ -610,6 +611,40 @@ carries all three shapes.
 cannot be made to produce the text the per-line pipeline splices. Closing this at degree 1 means
 retiring the text splice — the client instance-script pipeline AGENTS.md already names as the
 correctness hazard.
+
+### 17. Where does a keyword's source-map anchor go? — [D], defended at degree 2
+
+**Upstream:** one `write_source_keyword(context, line, column, keyword)`
+(`esrap/src/languages/ts/index.js:113`) — `location(line, column)`, write the fragment,
+`location(line, column + keyword.length)`. The fragment a declaration passes it is
+`node.kind + ' '`, so the end anchor counts the separator, and esrap's `run()`
+(`esrap/src/index.js:139-146`) pushes one segment per `Location` command with no collapse.
+
+**Ports.**
+
+- `rsvelte_esrap` `Printer::write_keyword` / `KeywordCursor::write` — the client map. Every
+  `Location` reaches `Driver::push_mapping` (`command.rs`).
+- `3_transform/mod.rs` `generate_token_mappings_inner` — the **server** map. `print_split` runs
+  the printer with `emit_locations: false`, so the server's anchors come from a text token scan
+  that matches generated tokens back against the source, not from esrap at all.
+
+**Demonstrated.** On upstream's `sourcemaps/attached-sourcemap` fixture, whose `let` is alone on
+its source line, the two ports were wrong in different ways at the same instant: the client
+emitted no end anchor (a rsvelte-only guard dropped it once `column + keyword.len()` exceeded the
+source line's length), and the server emitted one at `column + 3` (it anchored the token `let`,
+not the fragment `let `). Two further defects in the client port were invisible until the first
+was fixed — `push_mapping` **overwrote** a mapping when the generated position repeated, and
+`keyword_cursor` / `write_keyword` mapped builder-made nodes that upstream skips on `node.loc`,
+so every synthesized `var root = …` anchored at offset 0 of the `.svelte` file. All four are
+fixed; the gate went 768/770 → **770/770** with out-of-range unchanged at 0.
+
+**Defended at degree 2, not closed.** The server does not print through esrap, so there is no
+single implementation to route both through. What the tree now has is four independently-failing
+pins with expectations spelled out rather than read off the other port:
+`crates/rsvelte_esrap/tests/keyword_anchor_fidelity.rs` (three tests, each failing only under its
+own ablation) and `crates/rsvelte_core/tests/server_declaration_keyword_anchor.rs`. Nothing
+compares the two maps to each other, and only one of the 29 sourcemaps samples has a source line
+that separates the two rules — which is why this row was worth writing rather than the fix alone.
 
 ## Adding a row, and closing one
 
