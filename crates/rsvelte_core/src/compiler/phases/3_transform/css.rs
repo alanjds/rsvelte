@@ -8363,9 +8363,10 @@ fn format_simple_selector_with_scope(
             // Svelte's `PseudoClassSelector` visitor which calls `context.next()`
             // for is/where/has/not so the inner SelectorList gets scoped.
             if let Some(args) = sel.get("args") {
-                if (name == "is" || name == "not" || name == "has" || name == "where")
-                    && !selector.is_empty()
-                {
+                // Upstream descends with `context.next()` regardless of whether a
+                // modifier will be added, so a nested `:global(...)` is unwrapped
+                // even where the scope class is not (an empty `selector` here).
+                if name == "is" || name == "not" || name == "has" || name == "where" {
                     // Transform the inner selector list with appropriate scoping
                     // Per the official Svelte compiler, inner selectors inherit the
                     // specificity state from the outer context. When the outer selector
