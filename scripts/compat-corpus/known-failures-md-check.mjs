@@ -367,7 +367,9 @@ export function partitionLines(docText) {
 // Importing this module must not run the checks: a failing checker would
 // `process.exit(1)` during import and take its own test suite down with it,
 // which reads as "tests did not fail".
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main();
+// `import.meta.url` is the realpath and `path.resolve` is not, so comparing the two
+// makes an invocation through any symlinked path exit 0 having checked nothing.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main();
 
 function main() {
 // ---- 1. every ratchet JSON on disk is declared --------------------------------
