@@ -11,7 +11,7 @@ use crate::compiler::phases::phase3_transform::client::visitors::expression_conv
 use crate::compiler::phases::phase3_transform::client::visitors::fragment::collect_ids_from_expr;
 use crate::compiler::phases::phase3_transform::client::visitors::shared::utils::{
     build_expression, expression_has_await, expression_has_reactive_state, get_literal_value,
-    is_expression_defined,
+    template_chunk_value_is_defined,
 };
 use crate::compiler::phases::phase3_transform::js_ast::builders as b;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::*;
@@ -339,7 +339,7 @@ fn build_title_content(
                     );
                 }
 
-                if !is_expression_defined(&expr.expression, context) {
+                if !template_chunk_value_is_defined(&value, &expr.expression, context) {
                     return (
                         b::nullish(&context.arena, value, b::string("")),
                         has_state,
@@ -433,7 +433,7 @@ fn build_title_content(
                     // As in the single-expression path, scope.evaluate sees
                     // the memo identifier rather than the original expression.
                     expressions.push(b::nullish(&context.arena, param_ref, b::string("")));
-                } else if !is_expression_defined(&expr.expression, context) {
+                } else if !template_chunk_value_is_defined(&value, &expr.expression, context) {
                     expressions.push(b::nullish(&context.arena, value, b::string("")));
                 } else {
                     expressions.push(value);
