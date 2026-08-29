@@ -263,7 +263,11 @@ impl RestoreRawMappedSpans<'_> {
             .iter()
             .rev()
             .find(|span| span.code.end > offset)
-            .or_else(|| self.spans[..at].last().filter(|span| offset < span.code.end))?;
+            .or_else(|| {
+                self.spans[..at]
+                    .last()
+                    .filter(|span| offset < span.code.end)
+            })?;
         Some(span.source.start + offset - span.code.start)
     }
 
@@ -278,8 +282,17 @@ impl RestoreRawMappedSpans<'_> {
             .iter()
             .rev()
             .find(|span| span.code.end == offset)
-            .or_else(|| self.spans[..at].last().filter(|span| offset <= span.code.end))
-            .or_else(|| self.spans[at..after].iter().rev().find(|span| span.code.end > offset))?;
+            .or_else(|| {
+                self.spans[..at]
+                    .last()
+                    .filter(|span| offset <= span.code.end)
+            })
+            .or_else(|| {
+                self.spans[at..after]
+                    .iter()
+                    .rev()
+                    .find(|span| span.code.end > offset)
+            })?;
         Some(span.source.start + offset - span.code.start)
     }
 }

@@ -1941,6 +1941,16 @@ fn process_bind_directive<'a>(
                             .state
                             .scope_root
                             .binding_at_reference(&name, start)
+                            .filter(|binding| {
+                                crate::compiler::phases::phase3_transform::client::utils::is_state_source(
+                                    binding,
+                                    context.state.analysis,
+                                ) || matches!(
+                                    binding.kind,
+                                    crate::compiler::phases::phase2_analyze::scope::BindingKind::Prop
+                                        | crate::compiler::phases::phase2_analyze::scope::BindingKind::BindableProp
+                                )
+                            })
                     })
                     .or_else(|| context.state.get_prop_binding(&name))
                     .map(|binding| {

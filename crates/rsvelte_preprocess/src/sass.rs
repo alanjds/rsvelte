@@ -24,7 +24,9 @@ use crate::sass_fs::RecordingFs;
 /// Dart Sass treats that prefix as the document's base indentation, which is
 /// the usual shape of a `<style lang="sass">` block inside a Svelte file.
 /// Remove only the prefix shared by every non-blank line, preserving all
-/// relative indentation.
+/// relative indentation. Leading blank lines are also removed when a base
+/// prefix exists: grass's indented parser can otherwise retain the following
+/// indentation as top-level state and abort instead of returning an error.
 pub(crate) fn remove_indented_base(source: &str) -> String {
     let common = source
         .lines()
@@ -37,10 +39,15 @@ pub(crate) fn remove_indented_base(source: &str) -> String {
     }
 
     let mut output = String::with_capacity(source.len());
+    let mut saw_content = false;
     for chunk in source.split_inclusive('\n') {
         let (line, newline) = chunk
             .strip_suffix('\n')
             .map_or((chunk, ""), |line| (line, "\n"));
+        if !saw_content && line.trim().is_empty() {
+            continue;
+        }
+        saw_content = true;
         if line.trim().is_empty() {
             output.push_str(line);
         } else {
@@ -49,6 +56,25 @@ pub(crate) fn remove_indented_base(source: &str) -> String {
         output.push_str(newline);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_indented_base;
+
+    #[test]
+    fn indented_base_removes_leading_blank_lines_before_tab_indentation() {
+        assert_eq!(
+            remove_indented_base("\n\t.card\n\t\tdisplay: block\n"),
+            ".card\n\tdisplay: block\n"
+        );
+    }
+
+    #[test]
+    fn indented_base_leaves_unindented_documents_unchanged() {
+        let source = "\n.card\n  display: block\n";
+        assert_eq!(remove_indented_base(source), source);
+    }
 }
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

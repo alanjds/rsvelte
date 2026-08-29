@@ -1823,18 +1823,14 @@ impl<'a> Parser<'a> {
                     (self.index, self.index),
                 ));
             }
-            if self.eat_optional("{") {
-                let expr_start = self.index;
-                self.scan_to_closing_brace();
-                let expr_end = self.index;
-                let expr_content = &self.source[expr_start..expr_end];
-                self.advance(); // consume '}'
-                AttributeValue::Expression(ExpressionTag {
-                    start: (expr_start - 1) as u32, // include the '{'
-                    end: self.index as u32,
-                    expression: self.parse_head_expression(expr_content, expr_start, false, '}')?,
-                    metadata: Default::default(),
-                })
+            if self.current_char() == '{' {
+                // A leading expression does not necessarily end an unquoted
+                // value. For example, the upstream shorthand-directive fixer
+                // turns `style:color|important` into
+                // `style:color={color}|important`; the suffix is text in the
+                // same value. The shared attribute reader handles both that
+                // sequence and the single-expression fast path.
+                self.parse_attribute_value()?
             } else if self.eat_optional("\"") || self.eat_optional("'") {
                 // Quoted string value with potential expressions: "red{variable}"
                 let quote = if self.bytes[self.index - 1] == b'"' {
