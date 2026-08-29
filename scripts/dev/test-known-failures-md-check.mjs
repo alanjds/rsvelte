@@ -195,31 +195,30 @@ withCorpus(
 	);
 }
 
-// The shape #2500 is about: an entry cited under two clusters, with the cluster
-// totals adjusted so the doc still reads as if it summed. One addend moves up,
-// another moves down, the sum is unchanged — and only a check that compares the
-// sum against the JSON rather than against a stated total can see it.
+// The lint ratchet is currently empty, so use an impossible extra count to keep
+// proving that a stated partition sum is checked against the JSON population.
 withCorpus(
-	(d) => edit(d, 'lint-known-failures.md', 'by direction: `5`', 'by direction: `6`'),
-	(r) => check('a double-cited entry fails', [r.code, /sums to 6 \(/.test(r.out)], [1, true]),
+	(d) => edit(d, 'lint-known-failures.md', 'by direction: `0`', 'by direction: `1`'),
+	(r) => check('an extra partition count fails', [r.code, /sums to 1 \(/.test(r.out)], [1, true]),
 );
 
 withCorpus(
-	(d) => edit(d, 'lint-known-failures.md', 'Partition of `lint-known-failures.json` by repo: `5`\n', ''),
+	(d) => edit(d, 'lint-known-failures.md', 'Partition of `lint-known-failures.json` by repo: `0`\n', ''),
 	(r) => check('a deleted partition line fails', [r.code, /found 0/.test(r.out)], [1, true]),
 );
 
 // A sub-population partition must be checked against that sub-population, not
-// against the whole ratchet — `comment-slot`'s 84 is not the whole matrix ratchet.
+// against the whole ratchet. The family is currently empty, so an invented
+// count must be compared with its zero-entry prefix population.
 withCorpus(
 	(d) =>
 		edit(
 			d,
 			'matrix-known-failures.md',
-			'by seed: `16 + 8 + 8 + 8 + 20 + 24`',
-			'by seed: `18 + 8 + 8 + 8 + 20 + 24`',
+			'by seed: `0`',
+			'by seed: `2`',
 		),
-	(r) => check('a sub-population partition is bound to its prefix', [r.code, /has 84 entries/.test(r.out)], [1, true]),
+	(r) => check('a sub-population partition is bound to its prefix', [r.code, /has 0 entries/.test(r.out)], [1, true]),
 );
 
 withCorpus(
