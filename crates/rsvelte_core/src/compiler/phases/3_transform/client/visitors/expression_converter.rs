@@ -5029,6 +5029,17 @@ pub(crate) fn check_ownership_validation(
     // Get the root object name
     let root_name = get_root_identifier_from_member_json(left_val)?;
 
+    // Upstream resolves the root through the scope at the mutation, so a local
+    // declaration shadowing a prop is not a prop mutation.
+    let root_start = get_root_start_position(left_val);
+    if root_start.is_some_and(|start| {
+        context
+            .state
+            .reference_is_shadowed_non_prop(&root_name, start)
+    }) {
+        return None;
+    }
+
     // Get the binding for the root object
     let binding = context.state.get_binding(&root_name)?;
 
@@ -5049,7 +5060,7 @@ pub(crate) fn check_ownership_validation(
     let prop_alias = binding.prop_alias.clone();
 
     // Get source location from the root identifier's start position
-    let source_loc = get_root_start_position(left_val).and_then(|start| {
+    let source_loc = root_start.and_then(|start| {
         let source = &context.state.analysis.source;
         if !source.is_empty() {
             use crate::compiler::phases::phase3_transform::utils::locate_in_source;

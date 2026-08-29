@@ -2792,7 +2792,7 @@ impl<'a> ScopeBuilder<'a> {
                 // Declare let: directive bindings in the child scope
                 self.declare_let_directive_bindings(&component.attributes);
                 // Visit component children
-                self.visit_fragment(&component.fragment);
+                self.visit_component_children(old_scope, &component.fragment);
                 self.pop_scope(old_scope);
             }
             TemplateNode::ConstTag(tag) => self.visit_const_tag(tag),
@@ -2850,7 +2850,7 @@ impl<'a> ScopeBuilder<'a> {
                 let old_scope = self.push_scope();
                 self.register_template_scope(elem.start);
                 self.declare_let_directive_bindings(&elem.attributes);
-                self.visit_fragment(&elem.fragment);
+                self.visit_component_children(old_scope, &elem.fragment);
                 self.pop_scope(old_scope);
             }
             TemplateNode::SvelteComponent(elem) => {
@@ -2858,7 +2858,7 @@ impl<'a> ScopeBuilder<'a> {
                 let old_scope = self.push_scope();
                 self.register_template_scope(elem.start);
                 self.declare_let_directive_bindings(&elem.attributes);
-                self.visit_fragment(&elem.fragment);
+                self.visit_component_children(old_scope, &elem.fragment);
                 self.pop_scope(old_scope);
             }
             TemplateNode::SvelteElement(elem) => {
@@ -2882,6 +2882,24 @@ impl<'a> ScopeBuilder<'a> {
             }
             // Other nodes don't create scopes
             _ => {}
+        }
+    }
+
+    /// Upstream's `Component` scope handler forks a child carrying `slot="name"`
+    /// from the component's OWN scope, not from the `let:` scope, so a `let:`
+    /// name is not visible inside a named slot.
+    fn visit_component_children(&mut self, outer_scope: usize, fragment: &Fragment) {
+        let let_scope = self.current_scope;
+        for node in &fragment.nodes {
+            if node_slot_name(node).is_some() {
+                self.current_scope = outer_scope;
+                let saved = self.push_scope();
+                self.visit_node(node);
+                self.pop_scope(saved);
+                self.current_scope = let_scope;
+            } else {
+                self.visit_node(node);
+            }
         }
     }
 
@@ -4553,4 +4571,33 @@ fn node_start(node: &JsNode) -> Option<u32> {
         | JsNode::TemplateLiteral { start, .. } => Some(*start),
         _ => None,
     }
+}
+
+/// 写经 upstream `determine_slot`: the text value of a `slot` attribute on an
+/// element node, which decides whether a child gets its own slot scope.
+fn node_slot_name<'n>(node: &'n TemplateNode<'_>) -> Option<&'n str> {
+    use crate::ast::template::{Attribute, AttributeValue, AttributeValuePart};
+
+    let attributes = match node {
+        TemplateNode::RegularElement(elem) => &elem.attributes,
+        TemplateNode::Component(comp) => &comp.attributes,
+        TemplateNode::SvelteFragment(frag) => &frag.attributes,
+        TemplateNode::SvelteElement(elem) => &elem.attributes,
+        TemplateNode::SvelteComponent(comp) => &comp.attributes,
+        TemplateNode::SvelteSelf(elem) => &elem.attributes,
+        TemplateNode::SlotElement(slot) => &slot.attributes,
+        _ => return None,
+    };
+
+    for attr in attributes {
+        if let Attribute::Attribute(a) = attr
+            && a.name.as_str() == "slot"
+            && let AttributeValue::Sequence(parts) = &a.value
+            && let Some(AttributeValuePart::Text(text)) = parts.first()
+        {
+            return Some(text.data.as_ref());
+        }
+    }
+
+    None
 }

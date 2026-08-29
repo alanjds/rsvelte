@@ -3650,7 +3650,10 @@ pub(super) fn wrap_prop_mutation_validation(
 
             // Each mutation reports its own source position.
             let (line_num, col_num) = sites
-                .take(static_member_names(&path_parts).as_deref(), &full_expr)
+                .take(
+                    static_member_names(&path_parts).as_deref(),
+                    assigned_value(&full_expr),
+                )
                 .unwrap_or_else(|| find_prop_mutation_location(source, var_name));
 
             // Build the path array
@@ -3901,7 +3904,7 @@ pub(super) fn wrap_prop_mutation_validation(
             let (line_num, col_num) = sites
                 .take(
                     static_member_names(&path_parts).as_deref(),
-                    &full_original_expr,
+                    assigned_value(&full_original_expr),
                 )
                 .unwrap_or_else(|| find_prop_mutation_location(source, var_name));
 
@@ -3972,8 +3975,10 @@ struct PropMutationSite {
     chain: Option<Vec<String>>,
     /// The identifier-shaped words of the value it assigns.
     value_words: Vec<String>,
-    /// Whether it is written inside a `$:` statement.
-    reactive: bool,
+    /// Where the generated code for this site is emitted, which is the order
+    /// `take` walks: plain instance statement, then `$:` body (a
+    /// `legacy_pre_effect` at the end of the instance), then template.
+    region: u8,
     used: bool,
 }
 
@@ -3988,6 +3993,9 @@ pub(super) struct PropMutationSites {
 pub(super) struct PropMutationScan {
     reactive: Vec<(usize, usize)>,
     code: CodeSpans,
+    /// The offset past the last `</script>`; every site at or after it is
+    /// written in the template.
+    template_start: usize,
 }
 
 impl PropMutationScan {
@@ -3995,6 +4003,8 @@ impl PropMutationScan {
         Self {
             reactive: reactive_statement_ranges(source),
             code: CodeSpans::scan(source),
+            template_start: memchr::memmem::rfind(source.as_bytes(), b"</script>")
+                .map_or(source.len(), |at| at + "</script>".len()),
         }
     }
 }
@@ -4003,6 +4013,7 @@ impl PropMutationSites {
     pub(super) fn collect(source: &str, var_name: &str, scan: &PropMutationScan) -> Self {
         let mut sites = Vec::new();
         let reactive = &scan.reactive;
+        let template_start = scan.template_start;
         let bytes = source.as_bytes();
         let mut search = memchr::memmem::find(bytes, b"<script").unwrap_or(0);
         while search < source.len() {
@@ -4020,8 +4031,7 @@ impl PropMutationSites {
             {
                 continue;
             }
-            if let Some((after, chain, location_start)) =
-                scan_prop_mutation_target(source, start, end)
+            if let Some((after, chain)) = scan_prop_mutation_target(source, start, end)
                 && let Some(value_start) = mutation_value_start(source, after).or_else(|| {
                     // A PREFIX update (`--p.deep.c`) has its operator before
                     // the identifier; the site's position stays the identifier.
@@ -4031,42 +4041,44 @@ impl PropMutationSites {
             {
                 let (line, column) =
                     crate::compiler::phases::phase3_transform::utils::locate_in_source(
-                        source,
-                        location_start,
+                        source, start,
                     );
                 sites.push(PropMutationSite {
                     line,
                     column,
                     chain,
-                    value_words: identifier_words(
-                        &source[value_start..statement_end(bytes, after)],
-                    ),
-                    reactive: reactive
+                    value_words: identifier_words(&mutation_value_text(source, value_start)),
+                    region: if start >= template_start {
+                        2
+                    } else if reactive
                         .iter()
-                        .any(|(from, to)| (*from..*to).contains(&start)),
+                        .any(|(from, to)| (*from..*to).contains(&start))
+                    {
+                        1
+                    } else {
+                        0
+                    },
                     used: false,
                 });
             }
         }
         // A `$:` body is emitted at the end of the instance script as a
-        // `legacy_pre_effect`, so consuming reactive sites last is what keeps
-        // them lined up with the output when the value cannot tell two
-        // mutations of the same member apart.
-        sites.sort_by_key(|site| site.reactive);
+        // `legacy_pre_effect` and the template after that, so ordering the
+        // sites by emission region is what keeps them lined up with the output
+        // when the value cannot tell two mutations of the same member apart.
+        sites.sort_by_key(|site| site.region);
         Self { sites }
     }
 
-    /// The source position of the mutation that produced `expression`. Matching
-    /// on the member names and on the words of the assigned value rather than
-    /// on position is what keeps a moved statement — a `$:` body becomes a
+    /// The source position of the mutation that assigned `value`. Matching on
+    /// the member names and on the words of the assigned value rather than on
+    /// position is what keeps a moved statement — a `$:` body becomes a
     /// `legacy_pre_effect` at the end of the output — from taking the location
-    /// of whichever mutation happens to be printed before it.
-    pub(super) fn take(
-        &mut self,
-        chain: Option<&[String]>,
-        expression: &str,
-    ) -> Option<(usize, usize)> {
-        let words = identifier_words(assigned_value(expression));
+    /// of whichever mutation happens to be printed before it. `value` is the
+    /// right-hand side alone: the setter call that wraps it in the generated
+    /// code (`p(p().x = v, true)`) would otherwise contribute a `true`.
+    pub(super) fn take(&mut self, chain: Option<&[String]>, value: &str) -> Option<(usize, usize)> {
+        let words = identifier_words(value);
         let best = self
             .sites
             .iter()
@@ -4223,7 +4235,7 @@ fn scan_prop_mutation_target(
     source: &str,
     root_start: usize,
     root_end: usize,
-) -> Option<(usize, Option<Vec<String>>, usize)> {
+) -> Option<(usize, Option<Vec<String>>)> {
     let bytes = source.as_bytes();
     let chain_start = skip_non_null_assertions(bytes, root_end);
     let (mut after, mut chain, mut saw_member) = if starts_member_access(bytes, chain_start) {
@@ -4233,11 +4245,7 @@ fn scan_prop_mutation_target(
         (chain_start, Some(Vec::new()), false)
     };
 
-    let mut location_start = root_start;
-    if let Some((assertion_start, assertion_end)) =
-        parenthesized_ts_assertion_range(source, root_start, after)
-    {
-        location_start = assertion_start;
+    if let Some(assertion_end) = parenthesized_ts_assertion_end(source, root_start, after) {
         after = skip_whitespace_chars(source, assertion_end);
         if starts_member_access(bytes, after) {
             let (tail_end, tail_chain) = scan_member_chain_names(source, after)?;
@@ -4253,16 +4261,18 @@ fn scan_prop_mutation_target(
         }
     }
 
-    saw_member.then_some((after, chain, location_start))
+    saw_member.then_some((after, chain))
 }
 
-/// Return the wrapper range when `root_start..expression_end` is parenthesized
-/// around a TypeScript `as` or `satisfies` assertion.
-fn parenthesized_ts_assertion_range(
+/// Return the byte after the closing parenthesis when `root_start..expression_end`
+/// is parenthesized around a TypeScript `as` or `satisfies` assertion. Upstream
+/// never sees the wrapper — acorn-typescript erases the assertion, so the
+/// reported position is the chain root, not the `(`.
+fn parenthesized_ts_assertion_end(
     source: &str,
     root_start: usize,
     expression_end: usize,
-) -> Option<(usize, usize)> {
+) -> Option<usize> {
     let (open, ch) = source[..root_start]
         .char_indices()
         .rev()
@@ -4283,7 +4293,7 @@ fn parenthesized_ts_assertion_range(
                 .is_some_and(|ch| ch.is_whitespace() && !tail.trim().is_empty())
         })
     });
-    has_keyword.then_some((open, close + 1))
+    has_keyword.then_some(close + 1)
 }
 
 /// Whether a member access — plain, computed or optional — starts at `pos`.
@@ -4329,13 +4339,71 @@ fn mutation_value_start(source: &str, mut pos: usize) -> Option<usize> {
     Some((pos + 1).min(bytes.len()))
 }
 
-/// The offset of the `;` or newline that ends the statement starting at `pos`.
-fn statement_end(bytes: &[u8], pos: usize) -> usize {
+/// The assigned value's text, from `pos` to the end of the mutation statement.
+///
+/// A newline ends the statement only at bracket depth zero and only once some
+/// value has been read — an `=` at the end of its line opens the value on the
+/// next one — and a comment contributes nothing: the generated expression these
+/// words are matched against carries neither the source's line breaks nor its
+/// comments.
+fn mutation_value_text(source: &str, pos: usize) -> String {
+    let bytes = source.as_bytes();
+    let mut text = String::new();
+    let mut segment = pos;
+    let mut depth = 0i32;
+    let mut saw_value = false;
     let mut i = pos;
-    while i < bytes.len() && bytes[i] != b';' && bytes[i] != b'\n' {
-        i += 1;
-    }
-    i
+    let end = loop {
+        if i >= bytes.len() {
+            break bytes.len();
+        }
+        match (bytes[i], bytes.get(i + 1).copied()) {
+            (b'/', Some(b'/')) => {
+                text.push_str(&source[segment..i]);
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                segment = i;
+            }
+            (b'/', Some(b'*')) => {
+                text.push_str(&source[segment..i]);
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+                segment = i;
+            }
+            (quote @ (b'"' | b'\'' | b'`'), _) => {
+                saw_value = true;
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i = (i + 1).min(bytes.len());
+            }
+            (b'(' | b'[' | b'{', _) => {
+                saw_value = true;
+                depth += 1;
+                i += 1;
+            }
+            (b')' | b']' | b'}', _) => {
+                if depth == 0 {
+                    break i;
+                }
+                depth -= 1;
+                i += 1;
+            }
+            (b';', _) if depth == 0 => break i,
+            (b'\n', _) if depth == 0 && saw_value => break i,
+            (byte, _) => {
+                saw_value |= !byte.is_ascii_whitespace();
+                i += 1;
+            }
+        }
+    };
+    text.push_str(&source[segment..end]);
+    text
 }
 
 /// The member names `'a'`-quoted by the path builders, or `None` when any
@@ -4624,6 +4692,7 @@ fn scan_member_chain_names(source: &str, mut pos: usize) -> Option<(usize, Optio
             }
             b'[' => {
                 names = None;
+                let key_start = pos + 1;
                 let mut depth = 0usize;
                 while pos < bytes.len() {
                     match bytes[pos] {
@@ -4639,13 +4708,71 @@ fn scan_member_chain_names(source: &str, mut pos: usize) -> Option<(usize, Optio
                     }
                     pos += 1;
                 }
-                if depth != 0 {
+                if depth != 0 || !is_nameable_computed_key(source[key_start..pos - 1].trim()) {
                     return None;
                 }
             }
             _ => return Some((pos, names)),
         }
     }
+}
+
+/// Whether a computed key is one upstream's `validate_mutation` accepts: it
+/// takes a `Literal` or an `Identifier` for the property and returns the
+/// expression unwrapped for anything else, so `item[a.b] = v` is not a site.
+fn is_nameable_computed_key(key: &str) -> bool {
+    let key = strip_ts_assertion(key);
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if matches!(first, '\'' | '"') {
+        return key.len() > 1
+            && key.ends_with(first)
+            && !key[1..key.len() - 1].contains(first)
+            && !key[1..key.len() - 1].contains('\\');
+    }
+    if first.is_ascii_digit() {
+        return key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
+    }
+    (first.is_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+}
+
+/// The expression a top-level TypeScript assertion wraps, which is what acorn
+/// leaves behind: `object[attrKey as keyof typeof object]` writes `attrKey`.
+fn strip_ts_assertion(key: &str) -> &str {
+    let bytes = key.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            quote @ (b'"' | b'\'' | b'`') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            _ if depth == 0 && bytes[i].is_ascii_whitespace() => {
+                let tail = key[i..].trim_start();
+                for keyword in ["as", "satisfies"] {
+                    if tail
+                        .strip_prefix(keyword)
+                        .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+                    {
+                        return key[..i].trim_end();
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    key
 }
 
 /// Whether an assignment or update operator starts at `pos`.

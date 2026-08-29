@@ -252,6 +252,44 @@ start", independent of both `skip_opaque` and `find_class_header`, and
 `3_transform/server/transform_store.rs` and `server/helpers.rs` carry at least eight more inline
 `in_string` / `in_comment` machines. Their input ranges are `undetermined`.
 
+**A fourth pair is worth recording for the opposite reason: the two copies AGREED, and both were
+wrong.** `client/class_transforms.rs` splits a class body into member blocks line by line, and
+until 2026-08-29 both `parse_section_members` (`is_plain_field`, which excluded a line beginning
+`//` or `/*`) and `rejoin_class_members` (which refused to terminate a block on the same two
+prefixes) asked "is this line comment text" **per line**. So the continuation lines of anything
+spanning lines were members of their own on both, and the two failure modes are different
+depending on what spans:
+
+- a multi-line `/* … */` leaves its opening `/**` on the block above, that block is an
+  unterminated comment, `private_class_assign_ast` cannot parse it, and every rewrite it owns is
+  skipped in silence — on sveltekit's `query/instance.svelte.js` the `??=` lowering of a private
+  `$state.raw` field, emitting `$.get(this.#promise) ??= this.#run()`, which no JS parser accepts;
+- a multi-line **template literal** parses fine and changes *value*: the member blocks are
+  re-emitted with esrap's margins, so a blank line lands inside the string
+  (`` `a ${1} b⏎⏎c ${2} d` `` where the source has one line break).
+
+Both are fixed by routing the two through one cross-line predicate,
+`js_scan::line_starts_outside_opaque`, which is built on the same `skip_opaque` this row names as
+the shape the copies should fold into — so `class_transforms.rs` is now a *user* of that
+predicate rather than a further copy of it. Measured over the 589 corpus sources holding both
+`class` and a rune (293 compiled by both compilers): the comment half moved 40 files from
+divergent to byte-identical on client and 1 on client-dev, and took the population's unparseable
+outputs from 1 to 0; folding onto the shared predicate then moved 2 more on client-dev, 0 on
+client, and 0 either way in the other direction.
+
+The reusable part is the grade this pair would have earned. It is **[S]**, never [D]: no input
+separates the two, because they answered the same question the same wrong way — which is
+precisely the failure mode § *The one place this is already defended* names for a port-vs-port
+oracle. **A row at [S] whose two ports provably agree is not a closed row**; it is a row whose
+divergence test cannot exist, and only an independently pinned expectation (here: the official
+compiler's output) can grade it.
+
+One defect this uncovered is **not** in this file's scope and is recorded so it is not
+rediscovered here: once a chunk containing a multi-line template literal reaches the in-place AST
+rewrite, the reprint **re-indents the template's interior lines**, which is another silent value
+change. It reproduces on a binary built before any of today's fixes, so it is pre-existing and
+belongs to the printer rather than to the member scan.
+
 ### 7. Does this element match this selector? — [D], one pair closed
 
 **Upstream:** `css-prune.js:243` `apply_selector` + `:291` `apply_combinator` + `:436`
@@ -334,6 +372,32 @@ The `globals` **table** underneath these predicates was a seventh port until #34
 row [13](#13-what-does-a-call-to-one-of-upstreams-globals-keypaths-evaluate-to--d-closed-by-degree-1),
 and it is the one instance in this file where the two ports were shown to render different text
 from the same source.
+
+**Two of these ports are closed as of 2026-08-29, and the divergence they carried ran in BOTH
+directions — which is what makes the row worth re-reading rather than ticking off.** The
+`?? ''` guard on a template hole, on `$.document.title` and on `option.value` is one upstream
+decision, `scope.evaluate(value).is_defined`, read at three sites. rsvelte answered it with the
+shared estree walk in some places and with `identifier_is_defined`, a hand-written table of
+binding shapes, in others. The table admitted no function binding and no `$state` binding that is
+never written, so `{fn}`, `{arrow}` and `<option value={n || 'a'}>` were guarded where upstream
+leaves them bare; and `<title>` graded the **source** expression rather than the value it had
+just built, so a legacy `$.untrack(…)` wrapper never made the chunk unknown and the guard was
+omitted where upstream adds it. `identifier_is_defined` now delegates to `evaluate_binding_initial`
+and `title_element` grades the built value, so both sites read the one walk; the walk itself
+gained upstream's FUNCTION case, which no port had.
+
+The measurement is the reason to state the directions separately. Over a 5,041-component
+population (a deterministic 4,000-file sample of the 33,792 corpus components plus every one of
+the 1,210 holding a `<title>`, `<option>` or `<select>`), the change moved **12 client outputs and
+12 client-dev outputs and 0 server outputs**; graded against the official compiler, 11 of the 12
+go divergent → byte-identical on each target and **none** move the other way, the twelfth
+shrinking from 15 to 11 divergent lines with the residue in comment placement. A fix measured on
+one direction's population would have scored a one-directional patch green.
+
+Still open in this row: `is_expression_known_json`, `is_initial_value_literal_or_known` (the
+`memmem::find(json, b"Literal")` one), `is_value_known_defined` and `is_expression_defined_typed`
+— four `is_known` ports, untouched here, and `is_js_expr_defined` remains a structural second
+walk over the built `JsExpr` whose leaves now call the shared one.
 
 ### 10. Which line and column is byte offset N on? — [D]
 
