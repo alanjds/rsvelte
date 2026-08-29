@@ -7476,8 +7476,6 @@ fn transform_complex_selector(
     // `has_local_selectors`; whether that ancestor also carries a `:global(...)`
     // is not part of the test, so `:global(.dark) .phone` (local `.phone`) bumps.
     let mut local_specificity_bumped = parent_has_local_selectors;
-    // Track if we've seen a :global() selector - elements AFTER :global() should use direct class
-    let mut seen_global = false;
     // Track if the previous selector was scoped - for specificity bumping decisions
     let mut _previous_was_scoped = false;
 
@@ -7792,8 +7790,6 @@ fn transform_complex_selector(
                             ));
                         }
                     }
-                    // Mark that we've passed a :global() selector
-                    seen_global = true;
                     // :global() selectors don't count as scoped
                     _previous_was_scoped = false;
                 } else if has_partial_global {
@@ -7951,12 +7947,9 @@ fn transform_complex_selector(
                         });
 
                         if !first_is_global_like {
-                            // After :global(), use direct class (not :where())
-                            let should_use_where = local_specificity_bumped && !seen_global;
-                            let modifier = get_modifier(selector, &should_use_where);
+                            let modifier = get_modifier(selector, &local_specificity_bumped);
                             append_modifier(&mut selector_parts, &modifier);
                             local_specificity_bumped = true;
-                            seen_global = false;
                         }
                     }
 
@@ -8032,12 +8025,9 @@ fn transform_complex_selector(
                             && Some(idx) == last_non_pseudo_idx
                             && !has_nesting_selector
                         {
-                            let should_use_where = local_specificity_bumped && !seen_global;
-                            let modifier = get_modifier(selector, &should_use_where);
+                            let modifier = get_modifier(selector, &local_specificity_bumped);
                             append_modifier(&mut selector_parts, &modifier);
                             local_specificity_bumped = true;
-                            // After using direct class following :global(), subsequent selectors should use :where()
-                            seen_global = false;
                         }
                     }
 
