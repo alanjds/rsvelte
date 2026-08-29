@@ -989,7 +989,6 @@ fn transform_script<'a>(
     for stmt in ret.program.body.iter() {
         let stmt_span = stmt.span();
         let out_len = out.len();
-        let sink_len = import_sink.as_deref().map_or(0, Vec::len);
         // Set by every branch that re-parses the statement WHOLE from a source
         // range, to that range.
         let mut verbatim: Option<Span> = None;
@@ -1233,9 +1232,8 @@ fn transform_script<'a>(
             }
         }
 
-        let into_sink = import_sink.as_deref().is_some_and(|s| s.len() > sink_len);
         let anchor = out.iter().skip(out_len).position(anchors_a_region);
-        if !into_sink && anchor.is_none() {
+        if anchor.is_none() {
             continue;
         }
         if carried {
@@ -1271,16 +1269,10 @@ fn transform_script<'a>(
         if place.is_none() && verbatim.is_some() && !ret.program.comments.is_empty() {
             place = place_on_position(&mut state.comments, src, region_start, stmt_span, verbatim);
         }
-        if let Some(mut place) = place {
-            if into_sink {
-                if let Some(sink) = import_sink.as_deref_mut()
-                    && let Some(first) = sink.get_mut(sink_len)
-                {
-                    place.visit_statement(first);
-                }
-            } else if let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i)) {
-                place.visit_statement(first);
-            }
+        if let Some(mut place) = place
+            && let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i))
+        {
+            place.visit_statement(first);
         }
         region_start = if verbatim.is_some() || trailing_end > stmt_span.end {
             trailing_end
@@ -3761,7 +3753,6 @@ fn transform_script_legacy<'a>(
             });
         let out_len = out.len();
         let reactive_len = reactive.len();
-        let sink_len = import_sink.as_deref().map_or(0, Vec::len);
         // Set by every branch that re-parses the statement WHOLE from a source
         // range, to that range.
         let mut verbatim: Option<Span> = None;
@@ -4064,9 +4055,8 @@ fn transform_script_legacy<'a>(
             }
             continue;
         }
-        let into_sink = import_sink.as_deref().is_some_and(|s| s.len() > sink_len);
         let anchor = out.iter().skip(out_len).position(anchors_a_region);
-        if !into_sink && anchor.is_none() && reactive.len() == reactive_len {
+        if anchor.is_none() && reactive.len() == reactive_len {
             continue;
         }
         if carried
@@ -4113,17 +4103,11 @@ fn transform_script_legacy<'a>(
         {
             place = place_on_position(&mut state.comments, src, region_start, stmt_span, verbatim);
         }
-        if place.is_none() && reactive_leading_comment_pending && !into_sink && anchor.is_some() {
+        if place.is_none() && reactive_leading_comment_pending && anchor.is_some() {
             place = place_on_position(&mut state.comments, src, region_start, stmt_span, verbatim);
         }
         if let Some(mut place) = place {
-            if into_sink {
-                if let Some(sink) = import_sink.as_deref_mut()
-                    && let Some(first) = sink.get_mut(sink_len)
-                {
-                    place.visit_statement(first);
-                }
-            } else if let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i)) {
+            if let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i)) {
                 place.visit_statement(first);
             } else if let Some(entry) = reactive.get_mut(reactive_len) {
                 // Upstream rebuilds the `$` label as a loc-less `b.labeled(...)`
