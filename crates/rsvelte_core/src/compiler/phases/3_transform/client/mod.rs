@@ -3270,21 +3270,43 @@ fn bindable_prop_callee_spans(code: &str, source: &str) -> Vec<(usize, usize)> {
         .unwrap_or_default()
 }
 
+/// Pair the rest-props helper emitted for a `$props()` destructuring declaration
+/// with that rune's source location. A declaration without a rest element emits
+/// no helper, so only an equal population is safe to pair positionally.
+fn rest_props_callee_spans(code: &str, source: &str) -> Vec<(usize, usize)> {
+    use crate::compiler::phases::phase3_transform::shared::js_scan::find_code_from;
+
+    fn occurrences(code: &str, needle: &[u8]) -> Vec<usize> {
+        let mut found = Vec::new();
+        let mut from = 0;
+        while let Some(start) = find_code_from(code.as_bytes(), needle, from) {
+            found.push(start);
+            from = start + needle.len();
+        }
+        found
+    }
+
+    let generated = occurrences(code, b"$.rest_props(");
+    let props = occurrences(source, b"$props(");
+    (generated.len() == props.len())
+        .then(|| generated.into_iter().zip(props).collect())
+        .unwrap_or_default()
+}
+
 /// Replace copied mappings under a generated callee with the explicit
-/// lowering location. The endpoint marker makes the shorter `$.prop` callee
-/// end at the end of `$bindable`, while the following `(` remains mappable.
-fn overlay_bindable_prop_spans(
+/// lowering location. The endpoint marker permits generated and source callee
+/// lengths to differ, while the following `(` remains mappable.
+fn overlay_lowered_callee_spans(
     spans: &mut Vec<RawMappedSpan>,
     pairs: &[(usize, usize)],
     original_offset: u32,
     source_at_output: Option<&[Option<u32>]>,
+    generated_len: u32,
+    source_len: u32,
 ) {
-    const GENERATED_LEN: u32 = "$.prop".len() as u32;
-    const SOURCE_LEN: u32 = "$bindable".len() as u32;
-
     for &(generated, source) in pairs {
         let start = generated as u32;
-        let end = start + GENERATED_LEN;
+        let end = start + generated_len;
         let delimiter_end = end + 1;
         let mut kept = Vec::with_capacity(spans.len() + 3);
         for span in spans.drain(..) {
@@ -3313,11 +3335,11 @@ fn overlay_bindable_prop_spans(
             .and_then(|table| table.get(source).copied().flatten())
             .unwrap_or(original_offset + source as u32);
         let source_end = source_at_output
-            .and_then(|table| table.get(source + SOURCE_LEN as usize).copied().flatten())
-            .unwrap_or(source_start + SOURCE_LEN);
+            .and_then(|table| table.get(source + source_len as usize).copied().flatten())
+            .unwrap_or(source_start + source_len);
         kept.push(RawMappedSpan {
             code: start..end,
-            source: source_start..source_start + GENERATED_LEN,
+            source: source_start..source_start + generated_len,
             erased_comment_before_export_prop: false,
         });
         kept.push(RawMappedSpan {
@@ -3346,6 +3368,7 @@ fn copied_spans_for_normalized_code(
     projection: Option<&ScriptProjection>,
 ) -> Vec<RawMappedSpan> {
     let bindable_prop_spans = bindable_prop_callee_spans(code, stripped);
+    let rest_props_spans = rest_props_callee_spans(code, stripped);
     // Without TypeScript erasure the stripped script *is* the source slice, so
     // every byte projects back at its own offset: the per-byte table would hold
     // `Some(original_offset + i)` at every `i` and the split loop below could
@@ -3555,11 +3578,21 @@ fn copied_spans_for_normalized_code(
             }
         }
     }
-    overlay_bindable_prop_spans(
+    overlay_lowered_callee_spans(
         &mut spans,
         &bindable_prop_spans,
         original_offset,
         source_at_output.as_deref(),
+        "$.prop".len() as u32,
+        "$bindable".len() as u32,
+    );
+    overlay_lowered_callee_spans(
+        &mut spans,
+        &rest_props_spans,
+        original_offset,
+        source_at_output.as_deref(),
+        "$.rest_props".len() as u32,
+        "$props".len() as u32,
     );
     spans
 }
