@@ -250,50 +250,49 @@ impl<'a> VisitMut<'a> for ShiftSpans {
 /// slice of a TypeScript-stripped script.
 struct RestoreRawMappedSpans<'s> {
     spans: &'s [RawMappedSpan],
+    code: &'s [u8],
 }
 
 impl RestoreRawMappedSpans<'_> {
-    fn source_start_offset(&self, offset: u32) -> Option<u32> {
-        let at = self.spans.partition_point(|span| span.code.start < offset);
-        let after = self.spans.partition_point(|span| span.code.start <= offset);
-
-        // At a touching boundary, a node beginning here belongs to the run on
-        // the right. A zero-width entry is an end marker, never a copied byte.
-        let span = self.spans[at..after]
-            .iter()
-            .rev()
-            .find(|span| span.code.end > offset)
-            .or_else(|| {
-                self.spans[..at]
-                    .last()
-                    .filter(|span| offset < span.code.end)
-            })?;
+    fn source_offset(&self, offset: u32) -> Option<u32> {
+        let index = self
+            .spans
+            .partition_point(|span| span.code.start <= offset)
+            .checked_sub(1)?;
+        // At a touching boundary the copied run on the left owns the position.
+        // A zero-width entry at the boundary is an explicit source end marker.
+        let index = if index > 0 && self.spans[index - 1].code.end >= offset {
+            index - 1
+        } else {
+            index
+        };
+        let span = &self.spans[index];
+        if offset > span.code.end {
+            return None;
+        }
         Some(span.source.start + offset - span.code.start)
     }
 
-    fn source_end_offset(&self, offset: u32) -> Option<u32> {
-        let at = self.spans.partition_point(|span| span.code.start < offset);
-        let after = self.spans.partition_point(|span| span.code.start <= offset);
+    fn source_start_offset(&self, offset: u32) -> Option<u32> {
+        // Runtime identifiers such as `$.derived` replace a source rune at the
+        // start of the copied run on the right. This is the sole boundary where
+        // the generated token cannot belong to the run on the left.
+        if self.code.get(offset as usize) == Some(&b'$') {
+            let at = self.spans.partition_point(|span| span.code.start < offset);
+            let after = self.spans.partition_point(|span| span.code.start <= offset);
+            if let Some(span) = self.spans[at..after]
+                .iter()
+                .rev()
+                .find(|span| span.code.end > offset)
+            {
+                return Some(span.source.start + offset - span.code.start);
+            }
+        }
+        self.source_offset(offset)
+    }
 
-        // A lowering whose generated and source callee lengths differ records
-        // the source callee's end at this generated boundary. Otherwise an end
-        // at a touching boundary belongs to the copied run on the left.
-        let span = self.spans[at..after]
-            .iter()
-            .rev()
-            .find(|span| span.code.end == offset)
-            .or_else(|| {
-                self.spans[..at]
-                    .last()
-                    .filter(|span| offset <= span.code.end)
-            })
-            .or_else(|| {
-                self.spans[at..after]
-                    .iter()
-                    .rev()
-                    .find(|span| span.code.end > offset)
-            })?;
-        Some(span.source.start + offset - span.code.start)
+    fn source_end_offset(&self, offset: u32) -> Option<u32> {
+        self.source_offset(offset)
     }
 }
 
@@ -319,11 +318,14 @@ impl<'a> VisitMut<'a> for RestoreRawMappedSpans<'_> {
     }
 }
 
-fn restore_raw_mapped_spans(stmts: &mut [Statement<'_>], spans: &[RawMappedSpan]) {
+fn restore_raw_mapped_spans(stmts: &mut [Statement<'_>], spans: &[RawMappedSpan], code: &str) {
     if spans.is_empty() {
         return;
     }
-    let mut restorer = RestoreRawMappedSpans { spans };
+    let mut restorer = RestoreRawMappedSpans {
+        spans,
+        code: code.as_bytes(),
+    };
     for statement in stmts {
         restorer.visit_statement(statement);
     }
@@ -2091,7 +2093,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 // `print_with_map` maps the (transformed) instance-script lines
                 // back to the user source — mirroring the text codegen's
                 // per-block `source_offset` line mapping.
-                restore_raw_mapped_spans(&mut stmts, copied_spans);
+                restore_raw_mapped_spans(&mut stmts, copied_spans, code);
                 let sp = Span::new(*source_offset, *source_offset);
                 for s in &mut stmts {
                     if s.span().is_empty() {
@@ -2126,7 +2128,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                         return Some(stmts);
                     }
                 }
-                restore_raw_mapped_spans(&mut stmts, copied_spans);
+                restore_raw_mapped_spans(&mut stmts, copied_spans, code);
                 erase_generated_effect_call_locs(&mut stmts, effect_spans);
                 let sp = Span::new(*source_offset, *source_offset);
                 for s in &mut stmts {
@@ -3102,7 +3104,7 @@ mod tests {
     use oxc_span::{GetSpan, Span};
 
     #[test]
-    fn raw_mapping_uses_the_run_on_each_side_of_a_touching_boundary() {
+    fn raw_mapping_keeps_a_plain_touching_boundary_on_the_left() {
         let spans = [
             RawMappedSpan {
                 code: 0..4,
@@ -3115,7 +3117,33 @@ mod tests {
                 erased_comment_before_export_prop: false,
             },
         ];
-        let restorer = RestoreRawMappedSpans { spans: &spans };
+        let restorer = RestoreRawMappedSpans {
+            spans: &spans,
+            code: b"abcdefgh",
+        };
+
+        assert_eq!(restorer.source_start_offset(4), Some(104));
+        assert_eq!(restorer.source_end_offset(4), Some(104));
+    }
+
+    #[test]
+    fn raw_mapping_uses_the_right_run_for_a_generated_runtime_identifier() {
+        let spans = [
+            RawMappedSpan {
+                code: 0..4,
+                source: 100..104,
+                erased_comment_before_export_prop: false,
+            },
+            RawMappedSpan {
+                code: 4..8,
+                source: 300..304,
+                erased_comment_before_export_prop: false,
+            },
+        ];
+        let restorer = RestoreRawMappedSpans {
+            spans: &spans,
+            code: b"abcd$foo",
+        };
 
         assert_eq!(restorer.source_start_offset(4), Some(300));
         assert_eq!(restorer.source_end_offset(4), Some(104));
@@ -3140,7 +3168,10 @@ mod tests {
                 erased_comment_before_export_prop: false,
             },
         ];
-        let restorer = RestoreRawMappedSpans { spans: &spans };
+        let restorer = RestoreRawMappedSpans {
+            spans: &spans,
+            code: b"abcd$foo",
+        };
 
         assert_eq!(restorer.source_start_offset(4), Some(300));
         assert_eq!(restorer.source_end_offset(4), Some(200));
