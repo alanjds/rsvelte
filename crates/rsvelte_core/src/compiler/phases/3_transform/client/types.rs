@@ -2257,6 +2257,30 @@ impl<'a> ComponentClientTransformState<'a> {
         owners.next().is_none() && matches!(owner.kind, BindingKind::Normal)
     }
 
+    /// The names a plain `let` / `const` / `var` declaration binds and refers to
+    /// somewhere inside `[start, end)`.
+    ///
+    /// The write lowerings resolve one root, so a position answers them
+    /// (`reference_is_plain_local`). An expression has many identifiers and the
+    /// converted `JsExpr` no longer carries their positions — `JsExpr::Spanned`
+    /// exists only under `enable_sourcemap`, so keying on it would make the
+    /// generated code depend on whether a map was asked for. The source range of
+    /// the expression is available on both paths, so ask the bindings instead.
+    pub fn plain_local_names_in_range(&self, start: u32, end: u32) -> Vec<String> {
+        self.scope_root
+            .bindings
+            .iter()
+            .filter(|binding| matches!(binding.kind, BindingKind::Normal))
+            .filter(|binding| {
+                binding
+                    .references
+                    .iter()
+                    .any(|reference| reference.start >= start && reference.start < end)
+            })
+            .map(|binding| binding.name.clone())
+            .collect()
+    }
+
     /// Whether `scope_index` is the current scope (`self.scope`) or one of its
     /// ancestors. Used to restrict constant-folding of snippet-scoped template
     /// declarations to lexically reachable references (upstream resolves these

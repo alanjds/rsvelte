@@ -1157,6 +1157,20 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
             let should_proxy = Some(should_proxy_jsnode(right_node, pa, context));
 
             let assignment_left = without_outer_source_span(conv_left.clone(), context);
+            // The right-hand side is transformed eagerly below, before the outer
+            // walk that would have built a scope for it, so hand it the locals
+            // its own source range declares.
+            let right_scope = match (right_node.start(), right_node.end()) {
+                (Some(from), Some(to)) if from < to => {
+                    super::shared::utils::LocalScope::from_shadowed(
+                        context
+                            .state
+                            .plain_local_names_in_range(from, to)
+                            .into_iter(),
+                    )
+                }
+                _ => super::shared::utils::LocalScope::new(),
+            };
             let result = if let Some(transformed) = try_transform_assignment(
                 operator_str,
                 &assignment_left,
@@ -1164,7 +1178,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                 should_proxy,
                 original_root_name.as_deref(),
                 original_root_start,
-                &super::shared::utils::LocalScope::new(),
+                &right_scope,
                 context,
             ) {
                 transformed

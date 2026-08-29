@@ -730,11 +730,20 @@ corpus. `reference_is_plain_local` — the reference uniquely belongs to a `Bind
 declaration — changes exactly **1**, the file the gate flagged, with 0 violations over 34,728
 entries × client + client-dev.
 
-What the gate still cannot see is the **read** side, and that is measured rather than assumed: in
-the same handler `items.selected = data` emits `items(items().selected = data(), true)` where
-official emits `data`, because the RHS is transformed eagerly with an empty `LocalScope`. A read
-has no sink, so no signal-discipline violation exists to report; it is a separate cause and is
-open.
+What the gate cannot see is the **read** side, and that half had to be found by reading the fix
+rather than by running it: in the same handler `items.selected = data` emitted
+`items(items().selected = data(), true)` where official emits `data`, because the RHS is
+transformed eagerly — before the outer walk that would have built a scope for it — with an empty
+`LocalScope`. A read has no sink, so no signal-discipline violation exists to report.
+
+**The position for a read cannot come from where the write's came from.** `JsExpr::Spanned` is
+attached only when `enable_sourcemap` is true (`expression_converter.rs:156`), so keying a codegen
+decision on it would make the generated program depend on whether a map was asked for — the same
+option split that hides regressions from CodSpeed. An expression has many identifiers and the
+converted `JsExpr` carries none of their positions, but its **source range** is on both paths, so
+the bindings are asked which plain locals they declare inside it
+(`plain_local_names_in_range`). Reachability of the read half is **0 of 34,728 corpus entries**:
+correct, and it moves no real-world output.
 
 ## Adding a row, and closing one
 
