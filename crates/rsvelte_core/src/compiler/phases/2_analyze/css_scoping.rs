@@ -53,23 +53,6 @@ fn gather_possible_values(
                 }
             }
         }
-        "TemplateLiteral" => {
-            // Only handle template literals with no interpolations
-            let expressions = node.get("expressions").and_then(|e| e.as_array());
-            let quasis = node.get("quasis").and_then(|q| q.as_array());
-            if let (Some(exprs), Some(qs)) = (expressions, quasis)
-                && exprs.is_empty()
-                && qs.len() == 1
-                && let Some(cooked) = qs[0]
-                    .get("value")
-                    .and_then(|v| v.get("cooked"))
-                    .and_then(|c| c.as_str())
-            {
-                values.push(cooked.to_string());
-                return;
-            }
-            *unknown = true;
-        }
         "ConditionalExpression" => {
             if let Some(cons) = node.get("consequent") {
                 gather_possible_values(cons, is_class, is_nested, values, unknown);
@@ -189,7 +172,7 @@ fn get_possible_attr_values(
     if let Some(node_type) = expr.node_type() {
         let inspected = matches!(
             node_type,
-            "Literal" | "ConditionalExpression" | "LogicalExpression" | "TemplateLiteral"
+            "Literal" | "ConditionalExpression" | "LogicalExpression"
         ) || (is_class
             && matches!(node_type, "ArrayExpression" | "ObjectExpression"));
         if !inspected {
