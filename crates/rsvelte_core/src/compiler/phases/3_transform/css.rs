@@ -3814,9 +3814,13 @@ fn extract_selector_info_resolving_nesting(rel: &Value, ctx: &CssContext) -> Sel
     let mut branches: Vec<SelectorInfo> = Vec::new();
     if let Some(children) = parent.get("children").and_then(|c| c.as_array()) {
         for complex in children {
+            // `&` stands for the parent selector, and the element it names is the
+            // parent's SUBJECT — its last relative selector. Reading only a
+            // single-relative parent left `&` unresolved under `.a + .b { & + .c }`,
+            // where the sibling test then had nothing to match on.
             if let Some(rels) = complex.get("children").and_then(|c| c.as_array())
-                && rels.len() == 1
-                && let Some(sels) = rels[0].get("selectors").and_then(|s| s.as_array())
+                && let Some(last) = rels.last()
+                && let Some(sels) = last.get("selectors").and_then(|s| s.as_array())
             {
                 branches.push(extract_selector_info_from_selectors(sels));
             }
