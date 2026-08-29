@@ -5346,8 +5346,21 @@ fn try_transform_assignment(
                 .unwrap_or(false)
         };
 
+        let is_store_sub = {
+            use crate::compiler::phases::phase2_analyze::scope::BindingKind;
+            context
+                .state
+                .get_binding(&root_name)
+                .map(|b| matches!(b.kind, BindingKind::StoreSub))
+                .unwrap_or(false)
+        };
+
         let visited_left = if is_prop_binding {
             apply_transforms_to_expression_with_shadowed(left, context, local_scope)
+        } else if is_store_sub {
+            // The store root is replaced by `store_sub_mutate`, but a computed index is an
+            // ordinary read and still owes its site's transform.
+            super::shared::utils::transform_computed_indices_only(left, context, local_scope)
         } else {
             left.clone()
         };

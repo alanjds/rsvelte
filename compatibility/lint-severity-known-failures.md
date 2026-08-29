@@ -113,7 +113,7 @@ rule is SvelteKit-gated, so it does not run without it):
 ```
 
 Reported upstream in
-[`upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-crash.md).
+[`upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md).
 
 The crash is only reachable because this gate runs upstream's **default preset**:
 every other lint gate enables an explicit rule universe that excludes this rule,

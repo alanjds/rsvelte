@@ -90,6 +90,7 @@ whose oracle is the other implementation is only as good as its independent expe
 | [14](#14-what-options-does-the-public-parse-run-with--d) | What options does the public `parse()` run with? | 2 bindings | **[D]** | #3688 open |
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
 | [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
+| [17](#17-does-an-assignment-lhss-computed-index-get-its-sites-read-transform--d-closed) | Does an assignment LHS's computed index get its site's read transform? | 2 (+3 `untrack` rebuilders) | **[D]** | closed |
 
 ---
 
@@ -572,6 +573,48 @@ the C ABI suite spells the same exact messages and behaviours as independent exp
 ports remain separate because their value domains differ (JS callbacks versus JSON and native
 callbacks), so this closes the demonstrated cells rather than removing the row. A new option or
 validator kind still has to be added to all three ports and their boundary gates.
+
+### 17. Does an assignment LHS's computed index get its site's read transform? — [D], closed
+
+**Upstream** never asks. `Program.js:66-76`'s `replace()` rebuilds the member chain with
+`property: n.property` untouched, because the `mutate` callback is handed a mutation the general
+assignment transform has **already** visited — so by the time `replace()` sees it, the computed
+key already reads `groupKey()`. The invariant is "the LHS is transformed before the store root is
+swapped", and it lives in the call order, not in a function.
+
+**Ports.** rsvelte does not have that ordering, so each assignment path has to re-decide it:
+
+- `client/visitors/shared/utils.rs:1387` — has an `is_store_sub` arm calling
+  `transform_computed_indices_only`, with a comment giving the exact expected output.
+- `client/visitors/expression_converter.rs:5349` — had the `is_prop_binding` arm and **no**
+  store-sub arm, falling through to `left.clone()`.
+
+Three further functions rebuild the same `$.untrack($store)…` chain and each clones `property`
+independently: `shared/component.rs::replace_store_with_untrack` (fixed separately), and
+`replace_store_with_untracked` — which exists **twice**, in `shared/declarations.rs:458` and
+`visitors/program.rs:401`, byte-identical apart from the doc comment and how the arena type is
+spelled.
+
+**Demonstrated**, on two different read forms in one file
+(`pattern-corpus/issues/store-member-computed-key-in-event-handler.svelte`), against official
+5.56.10:
+
+| site | official | rsvelte, before |
+|---|---|---|
+| each-item key | `$.untrack($formData)[groupKey()] = e.detail` | `[groupKey]` |
+| reassigned `let` key | `$.untrack($scrollTop)[$.get(lastHref)] = e.detail` | `[lastHref]` |
+
+`client` and `client-dev` diverge; `server` and `server-dev` are byte-identical, which is what
+localises it to the client assignment path rather than to the store lowering.
+
+Found in the corpus as `appwrite-console/.../resource-form.svelte` and
+`huly/packages/panel/src/components/Panel.svelte` — both were failing on `main` and neither was
+in a ratchet, so **no gate was reporting them**; they surfaced only once the output ratchet's
+unlisted set was enumerated.
+
+**The reusable part** is that the two ports were not a copied table — one had been *fixed* and
+the other had not, and nothing relates them. The comment at `utils.rs:1387` even spells out the
+expected output, which reads as authority while the sibling path silently disagrees.
 
 ### 16. What is the read form of a name inside an `$.invalidate_inner_signals` body? — [D]
 

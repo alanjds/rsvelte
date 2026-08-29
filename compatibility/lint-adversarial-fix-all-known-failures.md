@@ -37,6 +37,20 @@ Partition of `lint-adversarial-fix-all-known-failures.json` by cause: `1`
 |---|---|
 | upstream rule crashes on text an earlier pass produced | 1 |
 
+### DoD-4 attribution — **U**
+
+`oracle-crash:no-navigation-without-base/06-template-literals.svelte` is attributed to
+[`upstream_issues/eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md).
+
+The chain is two upstream rules, not one: `no-useless-mustaches` rewrites `href={``}` to
+`href=""`, and `svelte-eslint-parser` gives an attribute written `href=""` an **empty** `value`
+array, so `no-navigation-without-base` dereferences `node.value[0]` on `undefined`. The entry is
+therefore reachable only through `--fix`, which is why the per-rule fix gate never produced it —
+that gate enables one rule per pattern.
+
+Nothing on rsvelte's side diverges here: there is no oracle output to compare against, because
+the oracle threw. The entry leaves this ratchet when eslint-plugin-svelte ships the guard.
+
 ## What this gate found on its first run
 
 **rsvelte's `--fix` and its report path resolved disable directives against

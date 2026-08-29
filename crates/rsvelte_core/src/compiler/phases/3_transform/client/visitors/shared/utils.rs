@@ -1909,7 +1909,7 @@ fn has_call_in_base_chain(
 ///
 /// This allows `mutate_value_legacy` to then replace `list` with `$.get(list)`,
 /// resulting in the correct: `$.get(list)[$.get(key)] = $$value`
-fn transform_computed_indices_only(
+pub(crate) fn transform_computed_indices_only(
     expr: &JsExpr,
     context: &ComponentContext,
     local_scope: &LocalScope,

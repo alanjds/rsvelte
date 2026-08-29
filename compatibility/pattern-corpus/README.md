@@ -46,6 +46,7 @@ Ids are `pattern/issues/<file>`, `pattern/matrix/<axis>/<file>` and
 
 | File | Issue | What it pins |
 |---|---|---|
+| `store-member-computed-key-in-event-handler.svelte` | corpus residue | A computed index in a store-member assignment LHS keeps its own site's read transform — `$.untrack($formData)[groupKey()]` for an each item and `[$.get(lastHref)]` for a reassigned `let` — while the store root is replaced by `store_sub_mutate`. |
 | `dollar-function-parameter.svelte` | corpus residue | A `$name` ordinary-function or arrow parameter resolves as that local binding even when an outer `name` binding exists. It must neither create a synthetic store subscription nor trigger `store_invalid_scoped_subscription`. |
 | `reactive-member-assignment-cycle.svelte` | corpus residue | A member assignment such as `data.size = size` does not assign the `data` binding in the legacy reactive dependency graph, avoiding a false `data ↔ size` cycle. A member update such as `data.count++` remains an assignment of the root binding, matching upstream's separate `UpdateExpression` rule. |
 | `title-memo-definedness.svelte` | corpus residue | A `<title>` template with two memoized calls keeps `?? ''` on both generated memo identifiers. Upstream tests definedness after `Memoizer.add` has replaced each call with a fresh `$N`; testing the original call instead incorrectly declares the result defined and changes the generated AST. The separate `title_call_only_memo` Rust test pins the single-expression branch. |
