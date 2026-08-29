@@ -226,7 +226,11 @@ pub(super) fn transform_reactive_statement(
             // string/template literal at the start of this line.
             let in_string_like =
                 in_single || in_double || (in_template > 0 && template_expr_depth == 0);
-            if t.starts_with('.') && !collapsed.is_empty() && !in_string_like {
+            // A chain continuation is `.name`; `...` is a spread element, and
+            // joining one onto the line above swallows it when that line ends in
+            // a `//` comment.
+            let chain_continuation = t.starts_with('.') && !t.starts_with("..");
+            if chain_continuation && !collapsed.is_empty() && !in_string_like {
                 // Append chain continuation without newline
                 collapsed.push_str(t);
             } else {

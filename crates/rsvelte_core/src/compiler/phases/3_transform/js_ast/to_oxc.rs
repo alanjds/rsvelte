@@ -292,7 +292,25 @@ impl RestoreRawMappedSpans<'_> {
     }
 
     fn source_end_offset(&self, offset: u32) -> Option<u32> {
-        self.source_offset(offset)
+        if let Some(end) = self.source_offset(offset) {
+            return Some(end);
+        }
+        // A sentinel end (`u32::MAX`, a kept `;` for a removed `$inspect`) is a
+        // marker rather than a position, and every other offset past the chunk
+        // is not a generated position either.
+        if offset as usize > self.code.len() {
+            return None;
+        }
+        // Formatting supplies a terminator the source omitted (semicolon-free
+        // style), so the generated node ends past every copied byte. Ending it
+        // at the last copied run keeps the node located; dropping the span
+        // instead loses the whole statement's source position.
+        let index = self.spans.partition_point(|span| span.code.start <= offset);
+        self.spans[..index]
+            .iter()
+            .rev()
+            .find(|span| span.code.end <= offset)
+            .map(|span| span.source.end)
     }
 }
 

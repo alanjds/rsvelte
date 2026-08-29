@@ -15,7 +15,7 @@ each sample's recorded `metadata.json` still says exactly that).
 | `map-parity` | `map-parity\t<sample>\t<target>\t<count>` | budget: official map segments that rsvelte does not reproduce, where the generated code is byte-identical (missing + wrong) |
 | `out-of-range` | `out-of-range\t<sample>\t<target>\t<count>` | budget: out-of-range segments not also emitted by the official map at the same generated and original position |
 
-**Current baseline: `sourcemap-known-failures.json`, 0 entries.** The
+**Current baseline: `sourcemap-known-failures.json`, 2 entries.** The
 before/after tables further down record what one specific change did at the time
 it landed; they are history, not the current size. Reading the newest number in
 those tables as today's count is the mistake this line exists to prevent — the
@@ -204,17 +204,71 @@ spans reaching it are real source offsets, carried through client and SSR
 lowering rather than reconstructed from a chunk. That took the gate from 73
 entries to 3, with the `anchor` and `out-of-range` classes eliminated entirely.
 
+### Fifth catch: the empty baseline was never a measurement
+
+#3896 replaced a 3-entry list with `[]` in the same commit that made parity pair
+duplicate generated columns by occurrence. That pairing is right for `effects`
+(server), whose two official segments at one column rsvelte reproduces in order,
+but on its own it also reports a *redundant* official duplicate — the same
+segment emitted twice at one column, which `basic`'s `let foo = $.prop(…)` line
+carries — as a segment rsvelte failed to reproduce. Measured on #3896's own base
+(`b734a16ac`, its `baseRefOid`), that commit's gate scores **47 missing, 7 wrong
+over 33 ratchet keys**, so `[]` describes no tree the comparison has ever run on
+— and no tree it *could* have run on, because matching a redundant duplicate
+would mean reproducing the official map byte for byte.
+
+Nothing caught it because the CI runs for #3896 and its three successors are all
+`cancelled`. This is the worked example of the rule in `CLAUDE.md`: **a cancelled
+run and a green run are indistinguishable in the branch header**, so a ratchet
+merged behind one has never been checked against anything. The gate stayed red on
+`main` for the 145 commits that followed, and the failure list at `main` is
+identical to the one on a branch cut from it — which is how a branch inherits a
+regression that reads as its own.
+
+Both defects of the comparison are now fixed together. `counterpart` still pairs
+by occurrence — an extra *leading* rsvelte segment shifts every occurrence and is
+still `wrong`, which the unit test pins — but when official has more segments at
+a column than rsvelte does, an exact match anywhere at that column satisfies the
+surplus one. A redundant duplicate resolves to the same original position for
+every consumer, so reproducing it once is reproducing it.
+
+Two compiler defects were behind the rest, both found by comparing against the
+official fixture maps rather than against the ratchet:
+
+- **The `bind:` element identifier started at `<`.** Upstream stamps
+  `element.name_loc` on the identifier it reuses for the declaration and every
+  runtime use, so `$.bind_value(input, …)` maps to the *tag name*;
+  `bind_directive.rs` spanned it from `element.start`. The sibling site
+  (`$.remove_input_defaults`) already used `element.start + 1`, and the
+  `--lib` unit test had pinned the wrong column rather than the fixture's.
+- **A source without a trailing `;` lost its whole statement span.** The
+  generated terminator has no copied byte behind it, so
+  `RestoreRawMappedSpans::source_end_offset` could not map the statement's end
+  and `visit_span` dropped the span entirely — leaving the statement in chunk
+  coordinates, where it resolves to offset 0. `export let foo = 5` and
+  `export let foo = 5;` differ in the map by exactly this one segment. The end
+  now falls back to the last copied run at or before the offset, which is where
+  upstream's own declaration span ends. An offset past the end of the chunk is
+  excluded: a kept `;` for a removed `$inspect` marks itself with
+  `span.end == u32::MAX`, and mapping that sentinel to a real position deletes
+  the marker, so the `;;` upstream prints collapses to `;`.
+
+| | before | after |
+|---|---|---|
+| official segments reproduced | 741 / 770 | **768 / 770** |
+| — of which missing / wrong | 24 / 5 | **0 / 2** |
+| out-of-range segments | 0 | 0 |
+| ratchet entries | 0 (unattainable) | **2** |
+
 ## Entries
 
 No entry is accepted as correct behaviour; all are burndown targets.
 
-There are currently no known failures.
-
-The last three entries were a comparison defect rather than compiler defects.
-The official maps themselves contain two source-backed segments at one generated
-column in `attached-sourcemap` (client and server) and `effects` (server). The gate
-iterated both official segments but compared each one with the first rsvelte
-segment at that column, so even identical ordered pairs necessarily scored one
-`wrong`. Parity now compares the first segment with the first, the second with the
-second, and so on. This is deliberately stricter than accepting any matching
-segment: an extra leading segment shifts every occurrence and remains visible.
+- **`map-parity` (2)** — `attached-sourcemap` on `client` and `server`, one
+  segment each. Official emits two segments at that generated column whose
+  original positions differ (the end of the preceding source line, then the
+  statement itself); rsvelte emits only the second, so the first scores `wrong`.
+  This is the surplus/missing-segment shape described under the root cause above
+  and is not affected by the duplicate rule, which only applies where rsvelte
+  already has an exactly equal segment at the column. `effects` (server), the
+  third pre-#3896 entry, now passes.
