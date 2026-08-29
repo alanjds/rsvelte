@@ -724,10 +724,27 @@ entries; this one moves 3**, and takes `musicat/src/lib/views/AlbumsView.svelte`
 failure on `client` and `client-dev` to a 4-target match. Reachability is a property of the
 defect, not of the class.
 
-The 44 that remain are one cause, **outside phase 3**. A write through a `catch` parameter
-or a `for…of` binding is recorded on the *component's* binding by phase 2, which shows up as a
-different `$.prop` flag word (24 vs 28), a `$$ownership_validator` upstream does not emit, and a
-store declared as `$.mutable_source(writable(…))`; which is recorded here rather than fixed.
+The third is the reason this row keeps a **server** paragraph, and it corrects a claim an earlier
+draft made here. That draft called the 44 remaining divergences "one cause, outside phase 3";
+**8 of them were phase 3**, in a port this row had not looked at. `server/ast/read_wrap.rs`
+decides whether an identifier read is a derived / store binding from a `shadowed` stack, and its
+own doc comment says the stack is populated "from function / arrow parameter patterns (the only
+shadowing the store-cluster fixtures exercise)" — the second deliberate-simplification comment in
+one row, and the second one to be load-bearing. A `catch` clause, a `for…of` / `for…in` head and a
+`for (let …;;)` head bind names and none was collected, so `catch (v) { v.n = 2 }` emitted
+`v().n = 2` and `for (let v = 0; v < 2; v++)` emitted
+`for (let v = 0; v() < 2; $.update_derived(v))` — a runtime helper called on a loop counter. The
+client had been fixed for the same five shapes one commit earlier and the server had not, which is
+the row's own subject: **fixing one port is not fixing the question**, and only a probe that
+compares all four targets separates the two. Blast radius 0 of 34,728 corpus entries on `server`
+and `server-dev`, and the four hunks are independently necessary (ablated one at a time: 6 / 2 /
+2 / 4 divergent lines).
+
+The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
+write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
+which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`
+upstream does not emit, and a store declared as `$.mutable_source(writable(…))`; recorded here
+rather than fixed.
 
 The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available here and is the right
 shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
