@@ -19,15 +19,24 @@ use rsvelte_core::compiler::preprocess::types::{
 use crate::filter::{FilterOptions, matches};
 use crate::sass_fs::RecordingFs;
 
-/// Grass rejects (and currently panics after an initial blank line on) an
-/// indented-Sass document whose whole body has a common indentation prefix.
-/// Dart Sass treats that prefix as the document's base indentation, which is
-/// the usual shape of a `<style lang="sass">` block inside a Svelte file.
-/// Remove only the prefix shared by every non-blank line, preserving all
-/// relative indentation. Leading blank lines are also removed when a base
-/// prefix exists: grass's indented parser can otherwise retain the following
-/// indentation as top-level state and abort instead of returning an error.
+/// Dart Sass treats an indentation prefix shared by every line as the
+/// document's base indentation — the usual shape of a `<style lang="sass">`
+/// block inside a Svelte file — while grass's indented parser asserts the
+/// top-level indentation is zero and aborts. Remove only the shared prefix,
+/// preserving all relative indentation.
+///
+/// The leading blank line is required, not incidental: dart Sass rejects a
+/// document whose very first line is indented (`Indenting at the beginning of
+/// the document is illegal`), and so does grass, so normalizing that shape
+/// would make rsvelte accept what dart Sass refuses.
 pub(crate) fn remove_indented_base(source: &str) -> String {
+    if !source
+        .lines()
+        .next()
+        .is_some_and(|line| line.trim().is_empty())
+    {
+        return source.to_string();
+    }
     let common = source
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -68,6 +77,13 @@ mod tests {
             remove_indented_base("\n\t.card\n\t\tdisplay: block\n"),
             ".card\n\tdisplay: block\n"
         );
+    }
+
+    #[test]
+    fn indented_base_leaves_a_document_that_starts_indented_alone() {
+        // Dart Sass rejects this shape; dedenting it would make rsvelte accept it.
+        let source = "\t.card\n\t\tdisplay: block\n";
+        assert_eq!(remove_indented_base(source), source);
     }
 
     #[test]
@@ -158,26 +174,19 @@ pub fn preprocess_sass(
         options = options.load_path(path);
     }
 
-    // Compile the original source first. Indentation is meaningful in Sass, so
-    // eagerly removing a common prefix changes otherwise-valid documents. The
-    // fallback is narrowly for grass's panic on an indented Svelte style block;
-    // dart-sass treats that common prefix as the document's base indentation.
+    // The base indentation has to be removed BEFORE grass sees the document:
+    // grass aborts on that shape, and `catch_unwind` is void under the
+    // `panic = "abort"` release profile every shipped binary but the three with
+    // an explicit `panic = "unwind"` override is built with.
+    let source = if indented {
+        remove_indented_base(content)
+    } else {
+        content.to_string()
+    };
     let compile =
         |source: String| catch_unwind(AssertUnwindSafe(|| grass::from_string(source, &options)));
-    let mut css = match compile(content.to_string()) {
+    let mut css = match compile(source) {
         Ok(result) => result.map_err(|error| error.to_string())?,
-        Err(payload) if indented => {
-            let normalized = remove_indented_base(content);
-            if normalized == content {
-                return Err(format!("grass panicked: {}", panic_message(payload)));
-            }
-            match compile(normalized) {
-                Ok(result) => result.map_err(|error| error.to_string())?,
-                Err(payload) => {
-                    return Err(format!("grass panicked: {}", panic_message(payload)));
-                }
-            }
-        }
         Err(payload) => return Err(format!("grass panicked: {}", panic_message(payload))),
     };
 
