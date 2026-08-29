@@ -5483,32 +5483,43 @@ pub(crate) fn wrap_with_legacy_invalidate(
     };
 
     let analysis = context.state.analysis;
-    let read_form = |n: &str| -> String {
+    // `build_getter` reads the SITE's transform table, so the same name reads
+    // bare in the instance script and `$.get(name)` inside an each block.
+    let read_form = |n: &str| -> JsExpr {
+        if let Some(transform) = context.state.transform.get(n)
+            && let Some(read_fn) = transform.read
+        {
+            let input = transform.replacement_id.as_deref().unwrap_or(n);
+            return read_fn(&context.arena, JsExpr::Identifier(input.into()));
+        }
         match context.state.get_binding(n) {
             Some(b)
                 if matches!(b.kind, BK::Prop | BK::BindableProp) && is_prop_source(b, analysis) =>
             {
-                format!("{n}()")
+                b::raw(format!("{n}()"))
             }
-            Some(b) if matches!(b.kind, BK::StoreSub) => format!("{n}()"),
+            Some(b) if matches!(b.kind, BK::StoreSub) => b::raw(format!("{n}()")),
             Some(b)
                 if matches!(
                     b.kind,
                     BK::State | BK::RawState | BK::Derived | BK::LegacyReactive
                 ) =>
             {
-                format!("$.get({n})")
+                b::raw(format!("$.get({n})"))
             }
-            _ => n.to_string(),
+            _ => JsExpr::Identifier(n.into()),
         }
     };
 
     let body = indirect
         .iter()
-        .map(|n| format!("{};", read_form(n)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let invalidate = b::raw(format!("$.invalidate_inner_signals(() => {{ {body} }})"));
+        .map(|n| b::stmt(&context.arena, read_form(n)))
+        .collect::<Vec<_>>();
+    let invalidate = b::call(
+        &context.arena,
+        b::member_path(&context.arena, "$.invalidate_inner_signals"),
+        vec![b::thunk_block(body)],
+    );
     b::sequence(vec![result, invalidate])
 }
 

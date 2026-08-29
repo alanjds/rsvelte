@@ -2083,12 +2083,15 @@ fn process_bind_directive<'a>(
                         transformed_expression.clone(),
                         b::id("$$value"),
                     );
+                    let mutate = b::call(
+                        &context.arena,
+                        b::member_path(&context.arena, "$.mutate"),
+                        vec![b::id(root_name.clone()), assignment],
+                    );
                     vec![b::stmt(
                         &context.arena,
-                        b::call(
-                            &context.arena,
-                            b::member_path(&context.arena, "$.mutate"),
-                            vec![b::id(root_name.clone()), assignment],
+                        crate::compiler::phases::phase3_transform::client::visitors::expression_converter::wrap_with_legacy_invalidate(
+                            mutate, &root_name, context,
                         ),
                     )]
                 }
