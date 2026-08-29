@@ -11,7 +11,9 @@ use crate::compiler::phases::phase3_transform::shared::class_body::{
     find_assignment_eq, find_class_header, has_rune_after_eq, initializer_starts_later,
     skip_ws_and_comments, split_class_members_onto_lines,
 };
-use crate::compiler::phases::phase3_transform::shared::js_scan::skip_opaque;
+use crate::compiler::phases::phase3_transform::shared::js_scan::{
+    line_starts_outside_opaque, skip_opaque,
+};
 
 /// JS-lexical-aware replacement for `find_matching_paren`: given `s` positioned
 /// just after an opening `(`, return the byte offset of the matching `)`,
@@ -258,22 +260,22 @@ pub(super) fn rejoin_class_members(
     let mut blocks: Vec<Vec<&str>> = Vec::new();
     let mut current: Vec<&str> = Vec::new();
     let mut depth = 0i32;
-    let mut in_block_comment = false;
-    for line in text.lines() {
+    let in_code = line_starts_outside_opaque(text.as_bytes());
+    let starts_code = |i: usize| in_code.get(i).copied().unwrap_or(true);
+    for (idx, line) in text.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
+        // A blank line inside a template literal is part of its value.
+        if starts_code(idx) && trimmed.is_empty() {
             continue;
         }
-        let was_in_comment = in_block_comment;
-        advance_block_comment(line, &mut in_block_comment);
         current.push(line);
-        if was_in_comment {
+        if !starts_code(idx) {
             continue;
         }
         depth += net_bracket_depth(trimmed);
         // A comment line never terminates a member: it belongs to the next one.
         if depth <= 0
-            && !in_block_comment
+            && starts_code(idx + 1)
             && !trimmed.starts_with("//")
             && !trimmed.starts_with("/*")
         {
@@ -304,48 +306,6 @@ pub(super) fn rejoin_class_members(
         prev = Some(shape);
     }
     (out, first, last)
-}
-
-/// Does `line` leave a `/* … */` open? The member scan is line-based, so a
-/// continuation line has to be read as comment text and not as a member.
-fn advance_block_comment(line: &str, open: &mut bool) {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    if *open {
-        match memmem::find(bytes, b"*/") {
-            Some(p) => {
-                i = p + 2;
-                *open = false;
-            }
-            None => return,
-        }
-    }
-    let mut prev: Option<u8> = None;
-    while i < bytes.len() {
-        if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            match memmem::find(&bytes[i + 2..], b"*/") {
-                Some(p) => i += 2 + p + 2,
-                None => {
-                    *open = true;
-                    return;
-                }
-            }
-            prev = Some(b'x');
-            continue;
-        }
-        if let Some((next, is_comment)) = skip_opaque(bytes, i, prev) {
-            if !is_comment {
-                prev = Some(b'x');
-            }
-            i = next;
-            continue;
-        }
-        let c = bytes[i];
-        if !c.is_ascii_whitespace() {
-            prev = Some(c);
-        }
-        i += 1;
-    }
 }
 
 /// Apply `line`'s `{` / `}` to a running class-body nesting depth, clamped at
@@ -1180,22 +1140,20 @@ fn transform_class_fields_client_with_options_at(
             // are never mis-classified as standalone "plain field declarations".
             // Depth increases on `{` and decreases on `}` in the PENDING accumulator.
             let mut brace_depth: i32 = 0;
-            let mut in_block_comment = false;
+            let in_code = line_starts_outside_opaque(section.as_bytes());
 
             while si < section_lines.len() {
                 let line = section_lines[si];
-                let trimmed = line.trim();
-                if in_block_comment {
+                if !in_code.get(si).copied().unwrap_or(true) {
                     pending_non_rune.push(line.to_string());
-                    advance_block_comment(line, &mut in_block_comment);
                     si += 1;
                     continue;
                 }
+                let trimmed = line.trim();
                 if trimmed.is_empty() {
                     si += 1;
                     continue;
                 }
-                let start_si = si;
 
                 // Try to parse as a rune field
                 let rune_types_list = [
@@ -1286,6 +1244,7 @@ fn transform_class_fields_client_with_options_at(
                     // in pending_non_rune to keep method bodies intact.
                     let field_trimmed = trimmed.trim_end_matches(';').trim();
                     let is_plain_field = brace_depth == 0
+                        && in_code.get(si + 1).copied().unwrap_or(true)
                         && !field_trimmed.contains('(')
                         && !field_trimmed.contains('{')
                         && !field_trimmed.starts_with("//")
@@ -1313,9 +1272,6 @@ fn transform_class_fields_client_with_options_at(
                         advance_brace_depth(trimmed, &mut brace_depth);
                         pending_non_rune.push(line.to_string());
                     }
-                }
-                for consumed in &section_lines[start_si..=si] {
-                    advance_block_comment(consumed, &mut in_block_comment);
                 }
                 si += 1;
             }

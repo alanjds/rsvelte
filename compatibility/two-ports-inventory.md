@@ -256,15 +256,26 @@ start", independent of both `skip_opaque` and `find_class_header`, and
 wrong.** `client/class_transforms.rs` splits a class body into member blocks line by line, and
 until 2026-08-29 both `parse_section_members` (`is_plain_field`, which excluded a line beginning
 `//` or `/*`) and `rejoin_class_members` (which refused to terminate a block on the same two
-prefixes) asked "is this line comment text" **per line**, so the continuation lines of a
-multi-line `/* … */` (` * text`, ` */`) were members of their own on both. The opening `/**` then
-stayed on the block above, that block is an unterminated comment, `private_class_assign_ast`
-cannot parse it and every rewrite it owns is skipped in silence — on sveltekit's
-`query/instance.svelte.js` the `??=` lowering of a private `$state.raw` field, emitting
-`$.get(this.#promise) ??= this.#run()`. Measured over the 589 corpus sources holding both `class`
-and a rune (293 compiled by both compilers), routing both through one cross-line
-`advance_block_comment` moved 40 files from divergent to byte-identical on client, 1 on
-client-dev, none the other way, and took the population's unparseable outputs from 1 to 0.
+prefixes) asked "is this line comment text" **per line**. So the continuation lines of anything
+spanning lines were members of their own on both, and the two failure modes are different
+depending on what spans:
+
+- a multi-line `/* … */` leaves its opening `/**` on the block above, that block is an
+  unterminated comment, `private_class_assign_ast` cannot parse it, and every rewrite it owns is
+  skipped in silence — on sveltekit's `query/instance.svelte.js` the `??=` lowering of a private
+  `$state.raw` field, emitting `$.get(this.#promise) ??= this.#run()`, which no JS parser accepts;
+- a multi-line **template literal** parses fine and changes *value*: the member blocks are
+  re-emitted with esrap's margins, so a blank line lands inside the string
+  (`` `a ${1} b⏎⏎c ${2} d` `` where the source has one line break).
+
+Both are fixed by routing the two through one cross-line predicate,
+`js_scan::line_starts_outside_opaque`, which is built on the same `skip_opaque` this row names as
+the shape the copies should fold into — so `class_transforms.rs` is now a *user* of that
+predicate rather than a further copy of it. Measured over the 589 corpus sources holding both
+`class` and a rune (293 compiled by both compilers): the comment half moved 40 files from
+divergent to byte-identical on client and 1 on client-dev, and took the population's unparseable
+outputs from 1 to 0; folding onto the shared predicate then moved 2 more on client-dev, 0 on
+client, and 0 either way in the other direction.
 
 The reusable part is the grade this pair would have earned. It is **[S]**, never [D]: no input
 separates the two, because they answered the same question the same wrong way — which is
@@ -272,6 +283,12 @@ precisely the failure mode § *The one place this is already defended* names for
 oracle. **A row at [S] whose two ports provably agree is not a closed row**; it is a row whose
 divergence test cannot exist, and only an independently pinned expectation (here: the official
 compiler's output) can grade it.
+
+One defect this uncovered is **not** in this file's scope and is recorded so it is not
+rediscovered here: once a chunk containing a multi-line template literal reaches the in-place AST
+rewrite, the reprint **re-indents the template's interior lines**, which is another silent value
+change. It reproduces on a binary built before any of today's fixes, so it is pre-existing and
+belongs to the printer rather than to the member scan.
 
 ### 7. Does this element match this selector? — [D], one pair closed
 
