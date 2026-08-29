@@ -73,7 +73,10 @@ pub(crate) fn rehome(
     out
 }
 
-fn standalone_tail_comment(source: &str, projection: Option<&ScriptProjection>) -> Option<&str> {
+fn standalone_tail_comment<'source>(
+    source: &'source str,
+    projection: Option<&ScriptProjection>,
+) -> Option<&'source str> {
     let ranges = js_scan::comment_ranges(source.as_bytes());
     let &(start, end) = ranges.last()?;
     // TypeScript stripping temporarily copies comments out of erased
