@@ -7086,7 +7086,19 @@ fn transform_selector_list(
                 let selector_text =
                     strip_bare_global_from_text(complex_selector, css_source, css_start);
                 if !unused_buffer.is_empty() {
-                    unused_buffer.push_str(", ");
+                    // Upstream comments the source out in place, so the separator
+                    // between two unused selectors is whatever the source had —
+                    // a `,\n\t` keeps its line break.
+                    let sep = last_unused_end
+                        .map(|prev| {
+                            (
+                                prev.saturating_sub(css_start),
+                                sel_start.saturating_sub(css_start),
+                            )
+                        })
+                        .filter(|&(a, b)| a < b && b <= css_source.len())
+                        .map_or(", ", |(a, b)| &css_source[a..b]);
+                    unused_buffer.push_str(sep);
                 }
                 unused_buffer.push_str(&selector_text);
                 last_unused_end = Some(sel_end);
