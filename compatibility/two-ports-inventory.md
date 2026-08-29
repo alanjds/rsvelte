@@ -740,6 +740,24 @@ compares all four targets separates the two. Blast radius 0 of 34,728 corpus ent
 and `server-dev`, and the four hunks are independently necessary (ablated one at a time: 6 / 2 /
 2 / 4 divergent lines).
 
+**The predicate this row introduced then over-fired, and what caught it was a unit test rather
+than any gate here.** `reference_is_plain_local` asks the `scope_root` bindings which one owns a
+reference and whether its kind is `Normal` — and phase 2 records a **second, `Normal`** entry for a
+rune declared inside a template expression's function body (the #3233 shape). So
+`let counter = $state(1); counter = 2` in an event handler answered "plain local",
+`try_transform_assignment` bailed, and the fallback emitted `$.set(counter, 2, true)` where
+official emits `$.set(counter, 2)`. **The corpus could not see it**: the client hash sweep moved 0
+of 34,728 entries across the whole series, and `template_function_rune_3233.rs` — a committed
+repro from an earlier fix — is what went red. A property gate and a corpus are both populations;
+a test written for the shape is not.
+
+The discriminator is the scope chain: a component binding is declared at instance depth and a
+local signal one function deeper, so the veto is `State` / `RawState` / `Derived` at
+`function_depth >= 2`. **Restricting it to those three kinds is load-bearing** — the first
+narrowing vetoed on any nested non-`Normal` binding, which is also true of an each item, and put
+the `$$index` parameter back on the repro two rows above. A predicate fix needs the whole set of
+repros the predicate serves re-run, not only the one that failed.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`

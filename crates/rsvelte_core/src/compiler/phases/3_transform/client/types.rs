@@ -2254,7 +2254,24 @@ impl<'a> ComponentClientTransformState<'a> {
         let Some(owner) = owners.next() else {
             return false;
         };
-        owners.next().is_none() && matches!(owner.kind, BindingKind::Normal)
+        if owners.next().is_some() || !matches!(owner.kind, BindingKind::Normal) {
+            return false;
+        }
+        // A rune declared inside a template expression's function body is a
+        // signal, and phase 2 records a second, `Normal` entry for it — so the
+        // owner alone says "plain local" about `let x = $state(1); x = 2` in a
+        // handler. The scope chain separates the two: a component binding is
+        // declared at instance depth, a local signal below one more function.
+        !self.get_binding(name).is_some_and(|scoped| {
+            matches!(
+                scoped.kind,
+                BindingKind::State | BindingKind::RawState | BindingKind::Derived
+            ) && self
+                .scope_root
+                .all_scopes
+                .get(scoped.scope_index)
+                .is_some_and(|scope| scope.function_depth >= 2)
+        })
     }
 
     /// The names a plain `let` / `const` / `var` declaration binds and refers to
