@@ -551,6 +551,39 @@ because 1a means no gate reaches this code path with `Meaningful`.
 `result.js.map`, `result.css.map`, `result.metadata` (including the `runes` flag),
 `result.ast`. **[S]** A `metadata.runes` regression produces zero corpus signal.
 
+### Blind spot 1f — the report's line number is a position in NORMALIZED text, not in either output or the source
+
+`verify.mjs:642` builds every `js-mismatch` detail with `firstDiffLine(expJs, actJs)`, and
+`verify.mjs:566-567` defines those operands as
+`stripBlankLines(readIf(<expected|actual>/<id>/<target>.js))` — files `oxfmtTree` has already
+rewritten in place. `normalize.mjs:271-280` returns `i + 1` of the first differing line. So the
+number in a divergence report addresses the **comparison-side normalized text**, which is not
+either compiler's output and is not the `.svelte` source at all.
+
+Three things follow, and only the first is obvious:
+
+1. A report line cannot be mapped back to a source line. **[S]**
+2. `firstDiffLine` stops at the FIRST differing line, so a report shows one hunk per
+   `(id, target)` however many exist. A second cause in the same file is invisible until the
+   first is fixed. **[S]**
+3. **Where a hunk appears in the report is not evidence about codegen.** oxfmt's line breaking
+   is a function of the whole file, so a change that moves a construct across the printer's
+   width threshold renumbers every later line and can reorder which divergence is "first" with
+   no change to what either compiler emitted. **[D]** — during the 2026-08-29 cluster-E work a
+   SMUI JSDoc divergence was inferred to be a fresh regression from the report's first-diff
+   ordering; rebuilding at the merge base produced identical line counts (416/357) and the same
+   hunk, so it pre-existed. The ordering argument was invalid, not merely wrong on the facts.
+
+**Point 2 is not theoretical, and it mis-assigns work.** On 2026-08-30 three of the 19 unlisted
+failing ids were routed by the line the report printed, and all three were the wrong cause: the
+`$.mutate` "over-generation" in `adventurelog/.../LodgingDetails.svelte` was actually a missing
+`$.invalidate_inner_signals(() => { $t(); })` wrapper, and `$.event(` "line splitting" in two
+`sparrow-app` files was a **symptom** of official printing six comments inside that call. Both
+were found only by diffing the whole artifact. The reusable rule: **to attribute a divergence to
+a commit, rebuild that commit and re-measure the file — never compare two reports' line numbers
+or their hunk order.** A report answers "does this pair differ", and its coordinates answer
+nothing else.
+
 ### Blind spot 1d — the compile-option surface is one point
 
 `compile.mjs:99-100`: `{ generate, dev, filename }` plus `css: 'external'` for components.
