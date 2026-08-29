@@ -652,9 +652,13 @@ impl<'a> ServerTransformState<'a> {
             // Mirrors the `should_inject_context` decision below, which is what
             // puts the component body one level deeper.
             let nested = self.options.dev || self.analysis.needs_context;
+            // Re-anchoring a statement that already owns a region would drop
+            // that region's own comments with it.
+            let keeps_own_region = self.comments.anchors(last.span());
             if let Some(base) =
                 self.comments
                     .register_component_tail(&text, &comments, nested, self.options.dev)
+                && !keeps_own_region
             {
                 let mut place = comments::Place::At(base);
                 place.visit_statement(last);
