@@ -670,6 +670,10 @@ function make() { let n = 5; $.set(n, 6); return n; }   // official: $.state(5) 
 ```
 
 — `$.set` on a plain number, so the output is broken at run time rather than merely different.
+**Its reachability is 0 on the collected corpus**: 5,521 of 34,709 sources declare a `$state`, 16
+declare one name twice, 13 of those are `.svelte.(js|ts)` modules (which run the module pipeline,
+where the escape hatch below already exists) and the 3 real components all compile byte-identical
+on all four targets. Correctness and reachability are separate questions; this row records both.
 The classification is a `Vec<String>` of non-reactive **names** (`client/mod.rs:7094`), so the
 top-level binding's "never reassigned" answer reaches the inner declaration and its reads, while
 the write goes through a pass that resolves correctly. The module pipeline already has the escape
