@@ -10,7 +10,7 @@
 use crate::ast::arena::ParseArena;
 use crate::ast::template::TemplateNode;
 use crate::compiler::phases::phase1_parse::utils::is_reserved;
-use crate::compiler::phases::phase2_analyze::scope::{Binding, Scope, ScopeRoot};
+use crate::compiler::phases::phase2_analyze::scope::{Binding, BindingKind, Scope, ScopeRoot};
 use crate::compiler::phases::phase2_analyze::types::ComponentAnalysis;
 use crate::compiler::phases::phase3_transform::client::transform_template::Template;
 use crate::compiler::phases::phase3_transform::js_ast::arena::JsArena;
