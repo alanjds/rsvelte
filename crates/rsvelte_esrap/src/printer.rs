@@ -3248,16 +3248,15 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             .return_type
             .as_ref()
             .map_or_else(|| node.body.span().start, |rt| rt.span().start);
-        // A comment-owning generated arrow can have an original-source body
-        // span, which is below `loc_base` and therefore cannot bound comments
-        // in the synthetic comment buffer. In that case the next call argument
-        // is the boundary upstream's generated arrow effectively gets. A
-        // located body (for example a header-comment carrier) remains the more
-        // precise boundary.
-        let until = if owned_comment_until.is_some() && !self.has_loc(body_start) {
-            owned_comment_until
-        } else {
-            Some(body_start)
+        // A generated arrow designated as the owner of a call argument's
+        // comments must leave a located body's leading comments for the body
+        // itself. Otherwise its empty parameter list consumes them before the
+        // `=>`. An original-source body cannot bound comments in the synthetic
+        // comment buffer, so it instead owns comments up to the next argument.
+        let until = match owned_comment_until {
+            Some(next) if !self.has_loc(body_start) => Some(next),
+            Some(_) => None,
+            None => Some(body_start),
         };
         self.formal_parameters_with_this(&node.params, None, until, ctx);
         ctx.write_ascii(b')');
