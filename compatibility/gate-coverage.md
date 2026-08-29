@@ -4225,7 +4225,7 @@ measurement of a configuration in which the changed code does not execute.
 (`--dev` exists), but `hmr`, `css`, `discloseVersion` and the `runes` override are set by
 callers and pinned by the runner, and no one has enumerated which of them gate work.
 
-## 41. Signal discipline — `RSVELTE_ASSERT_SIGNAL_DISCIPLINE`
+## 41. Signal discipline — `scripts/compat-corpus/signal-discipline-verify.mjs`
 
 **Unit.** One `(corpus entry, client mode)` compile, 34,728 x 2 of them. Like §37, nothing is
 compared against official: the gate asserts a **property of the generated program**. Every
@@ -4233,7 +4233,14 @@ compared against official: the gate asserts a **property of the generated progra
 argument the same program did not declare as an ordinary value, and every `name(<assignment>,
 true)` prop write must have a callee initialised from `$.prop` / `$.rest_props`. Violations are
 printed, never panicked — release is `panic = "abort"`. Implemented in
-`3_transform/client/signal_discipline.rs`.
+`3_transform/client/signal_discipline.rs`, run by the `Signal discipline` step of
+`corpus-compat.yml` (and `pnpm run corpus:signal-discipline`). Hard gate, no ratchet.
+
+The harness refuses a verdict three ways, because each failure mode reads exactly like a pass:
+without `RSVELTE_ASSERT_SIGNAL_DISCIPLINE` it exits 2 rather than sweeping a compiler that cannot
+report; below 1000 manifest components it exits 2; and without the compiler's own
+`RSVELTE_SIGNAL_DISCIPLINE_ARMED` line it exits 2, because a binding predating the check prints
+nothing at all.
 
 **Why it exists.** `two-ports-inventory.md` row 17: upstream resolves a write target once through
 `scope.get`, and 32 of rsvelte's 44 `*_ast.rs` passes compare identifier *text* against a
@@ -4250,10 +4257,15 @@ files, or cargo serves a stale binary) reports none. That control is not decorat
 formulation of this property passed the ablation while reporting nothing**, because it skipped
 every function parameter as unknown provenance and the defect's own container is a parameter.
 
-| tree | violations, 34,728 entries x 2 modes |
+| tree | violations |
 |---|---|
-| guards ablated (2 repro files only) | 6 |
-| this tree | 0 |
+| guards ablated, 2 repro files | 6 |
+| `try_transform_assignment`'s bail ablated, 67,612 corpus units | 2 (1 unit, exit 1) |
+| this tree, 67,612 corpus units | 0 (exit 0) |
+
+The middle row is the harness's own positive control: restoring the guard and `touch`ing the file
+(cargo will otherwise serve a stale binary and the green reads as a pass) returns the run to 0 with
+the source byte-identical.
 
 **What it cannot see `[S]`.**
 

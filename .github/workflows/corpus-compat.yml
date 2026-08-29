@@ -250,6 +250,17 @@ jobs:
           RSVELTE_ASSERT_TRANSFORM_IDEMPOTENT: '1'
         run: node scripts/compat-corpus/idempotency-verify.mjs
 
+      # The other property gate: a write lowering must not claim an identifier
+      # that resolves to a shadow in its own input. It found a defect the output
+      # ratchet structurally could not report, because the one real-world file
+      # carrying the shape is already listed for two unrelated divergences.
+      # Hard gate, no ratchet.
+      - name: Signal discipline (client write lowerings)
+        if: ${{ !cancelled() }}
+        env:
+          RSVELTE_ASSERT_SIGNAL_DISCIPLINE: '1'
+        run: node scripts/compat-corpus/signal-discipline-verify.mjs
+
       - name: Compile corpus (official svelte + rsvelte, CSR + SSR + CSR dev)
         # The parse-AST and idempotency checks are independent gates. Keep
         # compiling after either fails so the output, diagnostic, and
