@@ -654,6 +654,38 @@ cannot be made to produce the text the per-line pipeline splices. Closing this a
 retiring the text splice — the client instance-script pipeline AGENTS.md already names as the
 correctness hazard.
 
+### 18. Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? — [D], closed
+
+**Upstream:** one test, `AssignmentExpression.js:165` — `if (binding.legacy_indirect_bindings.size
+> 0)` wraps the mutation in `(mutation, $.invalidate_inner_signals(() => { … }))`. Row 16 asks what
+goes *inside* that body; this row asks which rsvelte code paths ask the question at all.
+
+**Ports.** Four, and they are reached by disjoint input shapes:
+
+- `visitors/expression_converter.rs` `wrap_with_legacy_invalidate` — template AST path.
+- `legacy_state_member_mutate_ast.rs:290,324` — instance-script state member mutation.
+- `prop_member_mutate_ast.rs` — instance-script prop member mutation.
+- `reactive_transforms.rs` — a `$:` body. This one had **no** wrap, on either of its two
+  internal routes: the simple-assignment `format!` builders, and `state_member_mutate_ast.rs`,
+  which is a second file with the same body as `legacy_state_member_mutate_ast.rs` and did not
+  take the `invalidate_bodies` map.
+
+**Demonstrated.** `<select bind:value={lodging.type}><option>{$t('hotel')}</option></select>` with
+`$: lodging.tz = allDay ? null : 'x'`: official emits the sequence, rsvelte emitted
+`$.mutate(lodging, $.get(lodging).tz = …)` alone. Reproduces on `adventurelog`'s
+`LodgingDetails.svelte`, twice, at both of that file's `$:` routes.
+
+**What made it hard to see is the shape of the first repro, not the defect.** The first minimal
+file was a *prop* root mutated from a *function body* — a cell that reaches port 1, which already
+wrapped. It went byte-identical on all four targets while the corpus file that motivated it still
+diverged. Crossing the two axes (binding kind × the statement the write sits in) put the
+discriminating cells on the table: the kind axis is flat, and every failing cell is a `$:`.
+A repro going green is evidence about that repro, never about the cause.
+
+**Closed at degree 1** for the `state_member_mutate_ast` route (it now takes the same map and
+builds the same string as its twin) and by construction for the two `format!` builders, which call
+one local helper. The two twin files remain — that is row 16's open half, not this one's.
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the
