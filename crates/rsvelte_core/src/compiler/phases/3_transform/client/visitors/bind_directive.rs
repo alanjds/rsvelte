@@ -211,7 +211,7 @@ pub fn unified_build_bind_this(
     // Upstream builds the `bind:this` setter by visiting a synthesized `expr = $$value`
     // assignment, so it passes through `validate_mutation()`; rsvelte builds it directly.
     if context.state.dev && setter_expr.is_none() {
-        set = validate_bind_this_mutation(expression, set, context);
+        set = validate_bind_this_mutation(expression, set, &each_ids, context);
     }
 
     // Apply optional chaining to getter MemberExpression nodes only
@@ -2862,6 +2862,7 @@ fn build_ast_member_path(
 fn validate_bind_this_mutation(
     expression: &Expression,
     set: JsExpr,
+    each_ids: &[EachBlockId],
     context: &mut ComponentContext,
 ) -> JsExpr {
     use crate::compiler::phases::phase2_analyze::scope::BindingKind;
@@ -2889,11 +2890,16 @@ fn validate_bind_this_mutation(
     // Official sets this before building the path, so an unbuildable path still
     // emits the `$$ownership_validator` preamble.
     context.state.needs_mutation_validation.set(true);
-    // Identity, not `read_computed_path_element`: `build_bind_this` hands the
-    // setter its own parameters, so an each-block index reaches this path as a
-    // plain binding rather than through its outer signal transform.
-    let Some(path) = build_ast_member_path(expression, &|name| JsExpr::Identifier(name.into()))
-    else {
+    // `build_bind_this` overrides `read` to identity for the each-block context
+    // variables it passes in as setter parameters, and for those only; every
+    // other name keeps the transform an ordinary reference would carry.
+    let Some(path) = build_ast_member_path(expression, &|name| {
+        if each_ids.iter().any(|id| id.name == name) {
+            JsExpr::Identifier(name.into())
+        } else {
+            read_computed_path_element(name, context)
+        }
+    }) else {
         return set;
     };
 

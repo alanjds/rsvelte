@@ -2200,6 +2200,38 @@ impl<'a> ComponentClientTransformState<'a> {
             })
     }
 
+    /// Whether the reference at `start` positively belongs to a binding that is
+    /// not a prop, which is how a local declaration shadowing a prop is told
+    /// apart from a read of the prop itself.
+    ///
+    /// Upstream resolves the root of a mutation through `state.scope`; phase 3's
+    /// current scope is the template's for an event handler, so a name lookup
+    /// alone reaches the prop. Only a reference exactly one binding claims
+    /// answers — more than one same-named binding can retain the same position,
+    /// and there the name lookup is still the better guess.
+    pub fn reference_is_shadowed_non_prop(&self, name: &str, start: u32) -> bool {
+        let Some(indices) = self.scope_root.bindings_by_name.get(name) else {
+            return false;
+        };
+        let mut owners = indices
+            .iter()
+            .filter_map(|&index| self.scope_root.bindings.get(index as usize))
+            .filter(|binding| {
+                binding
+                    .references
+                    .iter()
+                    .any(|reference| reference.start == start)
+            });
+        let Some(owner) = owners.next() else {
+            return false;
+        };
+        owners.next().is_none()
+            && !matches!(
+                owner.kind,
+                BindingKind::Prop | BindingKind::BindableProp | BindingKind::RestProp
+            )
+    }
+
     /// Whether `scope_index` is the current scope (`self.scope`) or one of its
     /// ancestors. Used to restrict constant-folding of snippet-scoped template
     /// declarations to lexically reachable references (upstream resolves these
