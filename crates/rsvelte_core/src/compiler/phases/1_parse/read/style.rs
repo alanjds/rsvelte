@@ -961,6 +961,27 @@ impl<'a> CssParser<'a> {
         let bytes = self.source.as_bytes();
         let mut i = self.index;
 
+        // A custom property's value may begin with a balanced `{ ... }`
+        // block. That brace belongs to the declaration value, not to a nested
+        // selector. Commit to the declaration once the leading custom-property
+        // name and its colon have been seen; `parse_declaration` owns the full
+        // balanced-block scan.
+        if bytes.get(i..i + 2) == Some(b"--") {
+            let mut property_end = i + 2;
+            while property_end < bytes.len()
+                && !bytes[property_end].is_ascii_whitespace()
+                && !matches!(bytes[property_end], b':' | b';' | b'{' | b'}')
+            {
+                property_end += 1;
+            }
+            while property_end < bytes.len() && bytes[property_end].is_ascii_whitespace() {
+                property_end += 1;
+            }
+            if bytes.get(property_end) == Some(&b':') {
+                return false;
+            }
+        }
+
         let mut paren_depth = 0i32;
         let mut bracket_depth = 0i32;
         let mut in_string: Option<u8> = None;

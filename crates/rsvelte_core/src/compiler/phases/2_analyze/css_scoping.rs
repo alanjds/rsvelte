@@ -1258,15 +1258,17 @@ fn truncate_globals(children: &[CssRelativeSelector]) -> &[CssRelativeSelector] 
     // is still a local relative selector which can cause the element carrying
     // `:is` to be scoped. Upstream's `truncate` uses the strict
     // `metadata.is_global` meaning here, not the recursive matcher used by
-    // selector pruning. Recompute that strict meaning because the extracted
-    // metadata also carries our global-block tail marker.
+    // selector pruning. The extracted metadata also carries our global-block
+    // tail marker, so exclude that tail explicitly and otherwise retain the
+    // child relative selector's own metadata. That metadata is what keeps a
+    // nested `&:hover` local after substituting a fully-global parent.
     let scoped_prefix_end = children
         .iter()
         .position(is_bare_global_relative)
         .unwrap_or(children.len());
     let last_non_global = children[..scoped_prefix_end]
         .iter()
-        .rposition(|rel| !compute_is_global(&rel.selectors) && !rel.is_global_like);
+        .rposition(|rel| !rel.is_global && !rel.is_global_like);
     match last_non_global {
         Some(idx) => &children[..=idx],
         None => &[],
