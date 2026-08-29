@@ -1447,21 +1447,51 @@ fn validate_bind_setter_mutation(
     )
 }
 
+/// Upstream visits the synthesized `expression = $$value` with the component
+/// node on the path, and `SvelteSelf` is absent from the `$.assign` exemption
+/// list that `Component` / `SvelteComponent` are on — so the dev wrap survives
+/// wherever `build_assignment` reaches it: the root has a binding and no
+/// `mutate` transform (a `mutate` returns the mutation before the wrap).
 fn synthesized_self_member_assign(
     bind: &BindDirective<'_>,
-    raw: &JsExpr,
+    expression: &JsExpr,
     context: &ComponentContext,
 ) -> Option<JsExpr> {
     if !context.state.dev {
         return None;
     }
-    let JsExpr::Member(member) = raw else {
+    let (root, root_start, _) =
+        crate::compiler::phases::phase3_transform::client::visitors::bind_directive::get_ast_root_identifier_span(
+            &bind.expression,
+        )?;
+    let binding = context
+        .state
+        .scope_root
+        .binding_at_reference(&root, root_start)
+        .or_else(|| context.state.get_binding(&root))?;
+    // `EachBlock.js` gives an item and every destructured path a `mutate`
+    // that this table does not carry, so the kind stands in for it.
+    if matches!(
+        binding.kind,
+        crate::compiler::phases::phase2_analyze::scope::BindingKind::EachItem
+    ) || context
+        .state
+        .transform
+        .get(root.as_str())
+        .is_some_and(|transform| transform.mutate.is_some())
+    {
+        return None;
+    }
+    let JsExpr::Member(member) = expression else {
         return None;
     };
-    let (JsMemberProperty::Identifier(property)
-    | JsMemberProperty::SpannedIdentifier { name: property, .. }) = &member.property
-    else {
-        return None;
+    let key = match &member.property {
+        JsMemberProperty::Identifier(property)
+        | JsMemberProperty::SpannedIdentifier { name: property, .. } => {
+            b::string(property.as_str())
+        }
+        JsMemberProperty::Expression(property) => context.arena.get_expr(*property).clone(),
+        JsMemberProperty::PrivateIdentifier(_) => return None,
     };
     let start = bind.expression.start()? as usize;
     let (line, col) = crate::compiler::phases::phase3_transform::utils::locate_in_source(
@@ -1481,7 +1511,7 @@ fn synthesized_self_member_assign(
         b::member_path(&context.arena, "$.assign"),
         vec![
             context.arena.get_expr(member.object).clone(),
-            b::string(property.as_str()),
+            key,
             b::string("="),
             b::id("$$value"),
             b::string(&location),
@@ -1997,7 +2027,18 @@ fn process_bind_directive<'a>(
             None
         };
 
-        if let Some((root_name, is_state, is_prop)) = member_root_info {
+        // `build_assignment` reaches the dev `$.assign` wrap only after the
+        // `mutate` branches have declined, so this outranks the dispatch below.
+        let self_dev_assign = if is_svelte_self {
+            synthesized_self_member_assign(bind, &transformed_expression, context)
+        } else {
+            None
+        };
+
+        if let Some(assign) = self_dev_assign {
+            let assign = validate_bind_setter_mutation(assign, bind, ignored_codes, context);
+            vec![b::stmt(&context.arena, assign)]
+        } else if let Some((root_name, is_state, is_prop)) = member_root_info {
             // Check for reactive import first - these take priority over state/prop
             // because import bindings can be promoted to State by legacy analysis,
             // but they still need the reactive_import mutation pattern.
@@ -2046,35 +2087,18 @@ fn process_bind_directive<'a>(
                 );
                 let wrapped = validate_bind_setter_mutation(wrapped, bind, ignored_codes, context);
                 vec![b::stmt(&context.arena, wrapped)]
-            } else if is_state
-                || (is_svelte_self
-                    && context.state.analysis.runes
-                    && context.state.get_binding(&root_name).is_some_and(|binding| {
-                        matches!(
-                            binding.kind,
-                            crate::compiler::phases::phase2_analyze::scope::BindingKind::State
-                                | crate::compiler::phases::phase2_analyze::scope::BindingKind::RawState
-                        )
-                    }))
-            {
+            } else if is_state {
                 if context.state.analysis.runes {
-                    if is_svelte_self
-                        && let Some(assign) =
-                            synthesized_self_member_assign(bind, &raw_expression, context)
-                    {
-                        vec![b::stmt(&context.arena, assign)]
-                    } else {
-                        // In runes mode, replace the root with $.get(root) in the assignment:
-                        // $.get(value).a = $$value
-                        let assignment = b::assign(
-                            &context.arena,
-                            transformed_expression.clone(),
-                            b::id("$$value"),
-                        );
-                        let assignment =
-                            validate_bind_setter_mutation(assignment, bind, ignored_codes, context);
-                        vec![b::stmt(&context.arena, assignment)]
-                    }
+                    // In runes mode, replace the root with $.get(root) in the assignment:
+                    // $.get(value).a = $$value
+                    let assignment = b::assign(
+                        &context.arena,
+                        transformed_expression.clone(),
+                        b::id("$$value"),
+                    );
+                    let assignment =
+                        validate_bind_setter_mutation(assignment, bind, ignored_codes, context);
+                    vec![b::stmt(&context.arena, assignment)]
                 } else {
                     // In legacy mode, wrap in $.mutate():
                     // $.mutate(value, $.get(value).a = $$value)
