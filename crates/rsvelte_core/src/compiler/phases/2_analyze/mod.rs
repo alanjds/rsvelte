@@ -2673,6 +2673,37 @@ fn collect_reactive_refs(
             locals.truncate(locals_mark);
             path.pop();
         }
+        // A switch body is a single block scope shared by every case, so a `let`
+        // in any case shadows the outer binding for the whole statement.
+        JsNode::SwitchStatement {
+            discriminant,
+            cases,
+            ..
+        } => {
+            path.push(reactive_path_entry(node, arena));
+            collect_reactive_refs(
+                arena.get_js_node(*discriminant),
+                arena,
+                path,
+                locals,
+                order,
+                included,
+            );
+            let locals_mark = locals.len();
+            let case_nodes = arena.get_js_children(*cases);
+            for case in case_nodes {
+                if let JsNode::SwitchCase { consequent, .. } = case {
+                    for s in arena.get_js_children(*consequent) {
+                        collect_block_local_decls(s, arena, locals);
+                    }
+                }
+            }
+            for case in case_nodes {
+                collect_reactive_refs(case, arena, path, locals, order, included);
+            }
+            locals.truncate(locals_mark);
+            path.pop();
+        }
         JsNode::SwitchCase {
             test, consequent, ..
         } => {
