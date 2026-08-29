@@ -1925,14 +1925,11 @@ fn process_bind_directive<'a>(
         }
     } else {
         // Check if this is a member expression binding where the root is a prop or state
-        let member_root_info = if let JsExpr::Member(_) = &raw_expression {
-            // Extract the root identifier from the member expression. Identifier
-            // nodes can carry source-map spans, so walking only bare Member and
-            // Identifier variants loses prop roots such as `data().pingEval`.
-            crate::compiler::phases::phase3_transform::client::visitors::bind_directive::get_expression_root_identifier(
-                &raw_expression,
-                &context.arena,
-            )
+        let member_root_info = if bind.expression.is_member_expression() {
+            // Use the source AST as the authority for the root. The converted
+            // tree may already contain a getter call or an in-band source-map
+            // wrapper, neither of which changes which binding owns the write.
+            get_ast_root_identifier(&bind.expression)
             .and_then(|name| {
                 context.state.get_binding(&name).map(|binding| {
                     let is_state =

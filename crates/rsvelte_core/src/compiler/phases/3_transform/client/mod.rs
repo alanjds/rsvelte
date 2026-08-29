@@ -3313,7 +3313,7 @@ fn overlay_lowered_callee_spans(
         let end = start + generated_len;
         let delimiter_end = end + 1;
         let mut kept = Vec::with_capacity(spans.len() + 3);
-        for span in spans.drain(..) {
+        for mut span in spans.drain(..) {
             // A zero-width resynchronization marker at the callee start has no
             // copied byte to preserve. Keeping it beside the explicit overlay
             // makes `source_offset` prefer the stale marker for the generated
@@ -3324,7 +3324,16 @@ fn overlay_lowered_callee_spans(
             {
                 continue;
             }
-            if span.code.end <= start || span.code.start >= delimiter_end {
+            // `RestoreRawMappedSpans` normally gives a copied run precedence
+            // at a touching endpoint. This overlay is more specific, so keep
+            // every copied byte before it but drop that run's synthetic end
+            // position; otherwise the callee's `$` inherits the old mapping
+            // while only its property name receives the lowering location.
+            if span.code.start < start && span.code.end == start {
+                span.code.end -= 1;
+                span.source.end = span.source.end.saturating_sub(1);
+            }
+            if span.code.end < start || span.code.start >= delimiter_end {
                 kept.push(span);
                 continue;
             }

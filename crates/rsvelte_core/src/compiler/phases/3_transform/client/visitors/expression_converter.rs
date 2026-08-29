@@ -5308,6 +5308,16 @@ fn try_transform_assignment(
 
         let mutation_expr = b::assign_op(&context.arena, operator, visited_left, visited_right);
 
+        let mutate_fn = context
+            .state
+            .get_binding(&root_name)
+            .filter(|binding| {
+                !context.state.analysis.runes
+                    && matches!(binding.kind, BindingKind::Prop | BindingKind::BindableProp)
+            })
+            .map_or(mutate_fn, |_| {
+                super::shared::declarations::prop_bindable_mutate
+            });
         let result = mutate_fn(transform, &context.arena, b::id(&root_name), mutation_expr);
         let result = apply_store_ref_transform(result, &root_name, context);
         // If the mutated prop carries `legacy_indirect_bindings` (a legacy

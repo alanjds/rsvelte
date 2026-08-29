@@ -2196,6 +2196,28 @@ impl<'a> ComponentClientTransformState<'a> {
             || self.scope_chain_contains(scope_index)
     }
 
+    /// Whether `scope_index` is a snippet body or is nested inside one.
+    ///
+    /// Position-based reference resolution is useful for template scopes that
+    /// Phase 3 does not enter, but a snippet is a separate generated function:
+    /// declarations from one snippet must never be folded into a sibling.
+    pub fn scope_is_within_snippet(&self, mut scope_index: usize) -> bool {
+        loop {
+            if self.scope_root.snippet_scope_indices.contains(&scope_index) {
+                return true;
+            }
+            let Some(parent) = self
+                .scope_root
+                .all_scopes
+                .get(scope_index)
+                .and_then(|scope| scope.parent)
+            else {
+                return false;
+            };
+            scope_index = parent;
+        }
+    }
+
     /// Look up a local variable's init expression AST node type.
     /// Searches all active local scope frames (innermost first).
     pub fn get_local_var_init_type(&self, name: &str) -> Option<&str> {

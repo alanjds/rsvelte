@@ -299,7 +299,7 @@ fn prop_mutate(
 /// For bindable props, mutations need to notify the parent.
 /// Transforms `x.prop = value` to `x(x.prop = value, true)`
 /// The callee uses `JsExpr::Raw` to prevent double-transformation.
-fn prop_bindable_mutate(
+pub(crate) fn prop_bindable_mutate(
     _transform: &IdentifierTransform,
     arena: &JsArena,
     node: JsExpr,
