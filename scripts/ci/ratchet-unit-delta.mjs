@@ -8,6 +8,11 @@
 //   node scripts/ci/ratchet-unit-delta.mjs <ratchet.json> [base-ref]
 //
 // Exits 1 when a unit is genuinely new, so this can gate a re-baseline.
+//
+// Deliberately NOT wired into a workflow yet: `lsp-known-failures.json` carries 4
+// genuinely-new units today, so a hard gate would block every PR before the entries
+// it names are closed. Run it at each re-baseline and publish the four numbers; wire
+// it as a required check once the ratchets it inspects are clean.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
