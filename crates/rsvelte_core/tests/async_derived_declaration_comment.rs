@@ -113,18 +113,15 @@ fn an_uncommented_declaration_is_unchanged() {
 }
 
 /// CONTROL — one declarator takes the same hoist path, and every property this
-/// file is about must hold there too. It is asserted separately from the byte
-/// string because rsvelte and upstream disagree on ONE thing here and only one:
-/// upstream indents the continuation line (`\n\ta;`) and rsvelte writes it at
-/// column 0. That divergence predates this fix and is unmoved by it — measured
-/// by running this file against the tree with the fix reverted, where the four
-/// subject tests fail and this one fails identically. The shape matrix scores
-/// the cell `match`, because its oxfmt normalization absorbs the indent.
+/// file is about must hold there too. The byte string is the full upstream
+/// shape again: the continuation line used to sit at column 0 while upstream
+/// indents it, which was pinned as its own test here until the restore-side
+/// insertion started reading the `var` line's own indent.
 #[test]
 fn a_single_declarator_keeps_its_own_hoist_shape() {
     let out = client("// svelte-ignore await_waterfall\n\tconst a = $derived(await p);");
     assert!(
-        out.contains("\tvar // svelte-ignore await_waterfall\n"),
+        out.contains("\tvar // svelte-ignore await_waterfall\n\ta;"),
         "{out}"
     );
     assert!(
@@ -137,19 +134,6 @@ fn a_single_declarator_keeps_its_own_hoist_shape() {
     assert_eq!(
         out.matches("svelte-ignore await_waterfall").count(),
         1,
-        "{out}"
-    );
-}
-
-/// The one divergence the row above carries, pinned on its own so that closing
-/// it turns THIS test red rather than passing unnoticed. Upstream emits
-/// `\n\ta;`; when that stops being true, delete this test and put the byte
-/// string back above.
-#[test]
-fn a_single_declarators_continuation_line_is_not_yet_indented() {
-    let out = client("// svelte-ignore await_waterfall\n\tconst a = $derived(await p);");
-    assert!(
-        out.contains("\tvar // svelte-ignore await_waterfall\na;"),
         "{out}"
     );
 }
