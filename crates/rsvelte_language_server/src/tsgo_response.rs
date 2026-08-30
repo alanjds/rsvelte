@@ -1289,6 +1289,57 @@ mod tests {
     }
 
     #[test]
+    fn a_definition_link_survives_an_enclosing_range_that_touches_generated_code() {
+        let source = "<script>let value;</script><p>{value}</p>";
+        let (_workspace, path, overlay) = overlay(source);
+        let shadow = overlay.shadow_for_source(&path).unwrap();
+        let shadow_path = uri_to_path(shadow.shadow_uri.as_str());
+        let index = crate::text::LineIndex::new(&shadow.text);
+        let selection = overlay
+            .map_source_range(&path, source_range(source, "value"))
+            .unwrap();
+        // tsgo reports the enclosing declaration, which here runs into the
+        // `Ωignore` region upstream never carries in a `LocationLink`.
+        let marker = shadow
+            .text
+            .find("/*\u{03A9}ignore_start\u{03A9}*/")
+            .unwrap();
+        let enclosing = Range::new(
+            selection.start,
+            index.position(
+                &shadow.text,
+                marker + "/*\u{03A9}ignore_start\u{03A9}*/".len(),
+            ),
+        );
+        assert!(overlay.is_generated_range(&shadow_path, enclosing));
+
+        let link = || {
+            json!([{
+                "targetUri": shadow.shadow_uri.as_str(),
+                "targetRange": json_range(enclosing),
+                "targetSelectionRange": json_range(selection)
+            }])
+        };
+        let mapper = TsgoResponseMapper::new(&overlay);
+
+        let mut forwarded = link();
+        assert!(mapper.map_response("textDocument/definition", &mut forwarded));
+        assert!(
+            forwarded.as_array().unwrap().is_empty(),
+            "the enclosing range takes the whole link with it"
+        );
+
+        let mut collapsed = link();
+        normalize_definition_result(&mut collapsed);
+        assert!(mapper.map_response("textDocument/definition", &mut collapsed));
+        assert_eq!(collapsed.as_array().unwrap().len(), 1);
+        assert_eq!(
+            parse_range(&collapsed[0]["targetSelectionRange"]),
+            Some(source_range(source, "value"))
+        );
+    }
+
+    #[test]
     fn semantic_tokens_decode_map_filter_sort_and_reencode_utf16() {
         let source = "<script lang=\"ts\">\nconst 💡name = 1;\nconsole.log(💡name);\n</script>";
         let (_workspace, path, overlay) = overlay(source);
