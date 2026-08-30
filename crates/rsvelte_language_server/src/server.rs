@@ -69,7 +69,7 @@ use crate::tsgo_rename::{
 };
 use crate::tsgo_response::{
     RequestDocumentContext, TsgoResponseMapper, normalize_definition_result,
-    normalize_hover_result, tsgo_unmapped_result,
+    normalize_hover_result, tsgo_unmapped_result, widen_hover_range_over_string_quotes,
 };
 use crate::uri::{path_to_uri, uri_to_path};
 use crate::worker::{FileReferenceSource, Job, Outcome, PreprocessedAnalysis, Worker};
@@ -3212,7 +3212,14 @@ impl Server {
                             }
                         }
                         "textDocument/definition" => normalize_definition_result(result),
-                        "textDocument/hover" => normalize_hover_result(result),
+                        "textDocument/hover" => {
+                            normalize_hover_result(result);
+                            if let Some(document) =
+                                source_uri.as_ref().and_then(|uri| self.documents.get(uri))
+                            {
+                                widen_hover_range_over_string_quotes(result, document.text());
+                            }
+                        }
                         _ => {}
                     }
                     rewrite_visible_tsgo_response(result);

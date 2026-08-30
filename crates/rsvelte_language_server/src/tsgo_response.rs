@@ -721,6 +721,33 @@ fn upstream_hover_text(value: &str) -> String {
     }
 }
 
+/// TypeScript's quick info spans a whole string-literal token; tsgo spans only
+/// the text between its quotes, so a hover on a module specifier or a quoted
+/// property key comes back one character short at each end.
+pub fn widen_hover_range_over_string_quotes(result: &mut Value, text: &str) {
+    let Some(range) = result.get("range").and_then(parse_range) else {
+        return;
+    };
+    let index = LineIndex::new(text);
+    let start = index.offset(text, range.start);
+    let end = index.offset(text, range.end);
+    if start == 0 || end < start || end >= text.len() {
+        return;
+    }
+    let bytes = text.as_bytes();
+    let quote = bytes[start - 1];
+    if !matches!(quote, b'"' | b'\'' | b'`') || bytes[end] != quote {
+        return;
+    }
+    let widened = Range::new(
+        index.position(text, start - 1),
+        index.position(text, end + 1),
+    );
+    if let Some(value) = result.get_mut("range") {
+        write_range(value, widened);
+    }
+}
+
 /// The result an editor gets when a request never reaches tsgo. Upstream still
 /// answers `[]` for a definition request it cannot map.
 #[must_use]
@@ -1393,5 +1420,34 @@ mod tests {
             documented["contents"],
             json!("```typescript\nfunction $props(): any\n```\n---\nDeclares the props.")
         );
+    }
+
+    #[test]
+    fn a_hover_on_a_string_literal_spans_its_quotes() {
+        let text = "import type { Foo } from \"./types.js\";\nconst o = { 'kk': 1 };\n";
+        let mut module = json!({
+            "contents": "```typescript\nmodule \"./types.js\"\n```",
+            "range": { "start": { "line": 0, "character": 26 }, "end": { "line": 0, "character": 36 } }
+        });
+        widen_hover_range_over_string_quotes(&mut module, text);
+        assert_eq!(module["range"]["start"]["character"], json!(25));
+        assert_eq!(module["range"]["end"]["character"], json!(37));
+
+        let mut key = json!({
+            "contents": "```typescript\n(property) 'kk': number\n```",
+            "range": { "start": { "line": 1, "character": 13 }, "end": { "line": 1, "character": 15 } }
+        });
+        widen_hover_range_over_string_quotes(&mut key, text);
+        assert_eq!(key["range"]["start"]["character"], json!(12));
+        assert_eq!(key["range"]["end"]["character"], json!(16));
+
+        // An identifier is not surrounded by matching quotes, so it is left alone.
+        let mut identifier = json!({
+            "contents": "```typescript\ntype Foo\n```",
+            "range": { "start": { "line": 0, "character": 14 }, "end": { "line": 0, "character": 17 } }
+        });
+        widen_hover_range_over_string_quotes(&mut identifier, text);
+        assert_eq!(identifier["range"]["start"]["character"], json!(14));
+        assert_eq!(identifier["range"]["end"]["character"], json!(17));
     }
 }
