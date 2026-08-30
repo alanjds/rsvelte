@@ -1556,6 +1556,17 @@ fn is_complex_selector_global_like(complex: &Value) -> bool {
     }
 }
 
+/// A relative selector that is nothing but `:global` / `:global(...)`.
+fn relative_selector_is_only_global(rel: &Value) -> bool {
+    rel.get("selectors")
+        .and_then(|s| s.as_array())
+        .is_some_and(|sels| {
+            sels.len() == 1
+                && sels[0].get("type").and_then(|t| t.as_str()) == Some("PseudoClassSelector")
+                && sels[0].get("name").and_then(|n| n.as_str()) == Some("global")
+        })
+}
+
 /// Check if a relative selector is global or global-like
 fn is_relative_selector_global_like(rel: &Value) -> bool {
     if let Some(selectors) = rel.get("selectors").and_then(|s| s.as_array()) {
@@ -1748,6 +1759,19 @@ fn is_complex_selector_unused_impl(complex: &Value, ctx: &CssContext) -> bool {
     // scoped and is pruned normally; a `&` under a SCOPED parent likewise.
     if let Some(rel_selectors) = complex.get("children").and_then(|c| c.as_array())
         && nesting_resolves_to_global_parent(rel_selectors, ctx)
+    {
+        return false;
+    }
+
+    // A rule whose whole selector is `:global(...)` matches outside this
+    // component, so an unused ancestor cannot make it unused: upstream keeps it
+    // used and prints the ancestor `(unused)` rather than `(empty)`. A `:global`
+    // that shares its compound (`:global(img).k`) or its chain (`.zz :global(img)`)
+    // with a local part is reported as usual.
+    if complex
+        .get("children")
+        .and_then(|c| c.as_array())
+        .is_some_and(|rels| rels.len() == 1 && relative_selector_is_only_global(&rels[0]))
     {
         return false;
     }
