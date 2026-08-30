@@ -6798,7 +6798,27 @@ fn transform_instance_script_for_visitors(
         std::borrow::Cow::Borrowed(script)
     } else {
         super::profile::record_pn(super::profile::PN_INV_COMMENTS);
-        let out = rehome_reactive_statement_comments(script);
+        // Only the `$.invalidate_inner_signals` kill is consulted: the
+        // destructure-IIFE targets live in the visitor state the caller holds,
+        // and a re-home after one of those is the behaviour this had before.
+        let invalidate_targets: Vec<String> = analysis
+            .root
+            .bindings
+            .iter()
+            .filter(|binding| !binding.legacy_indirect_bindings.is_empty())
+            .map(|binding| binding.name.clone())
+            .collect();
+        let liveness = (!invalidate_targets.is_empty()
+            && (memmem::find(script.as_bytes(), b"//").is_some()
+                || memmem::find(script.as_bytes(), b"/*").is_some()))
+        .then(|| {
+            dead_comments::cursor_liveness(
+                script,
+                dead_comments::Rules::component(false, &[], &invalidate_targets),
+            )
+        })
+        .flatten();
+        let out = rehome_reactive_statement_comments(script, liveness.as_ref());
         #[cfg(feature = "measure-pa-split")]
         if out != script {
             super::profile::record_pn(super::profile::PN_CHG_COMMENTS);

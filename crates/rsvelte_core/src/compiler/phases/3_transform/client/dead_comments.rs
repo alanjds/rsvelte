@@ -159,33 +159,7 @@ fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Opt
         return None;
     }
 
-    // Upstream replaces each with `b.empty` and appends the effect after the
-    // whole instance body, so the subtree neither flushes nor revives here.
-    let reactive_spans: Vec<(u32, u32)> = if rules.legacy_reactive_effects {
-        program
-            .body
-            .iter()
-            .filter_map(|statement| match statement {
-                Statement::LabeledStatement(labeled) if labeled.label.name == "$" => {
-                    Some((labeled.span.start, labeled.span.end))
-                }
-                _ => None,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let mut collector = EventCollector {
-        events: Vec::new(),
-        reactive_events: Vec::new(),
-        in_reactive: None,
-        rune_accessors: rules.rune_accessors,
-        destructure_iife_targets: rules.destructure_iife_targets,
-        invalidate_inner_signals_targets: rules.invalidate_inner_signals_targets,
-        reactive_spans: &reactive_spans,
-        src,
-    };
-    collector.visit_program(program);
+    let (reactive_spans, mut collector) = collect_events(src, program, rules);
     // Held out of the event list rather than pushed at offset 0: a `Revive` there
     // would sort ahead of it under the kill-wins tie-break below.
     let seeded = if rules.program_unlocated {
@@ -272,6 +246,85 @@ fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Opt
     Some(out)
 }
 
+/// The `$:` spans and the walk's events, shared by the strip and the liveness
+/// query below.
+fn collect_events<'p>(
+    src: &'p str,
+    program: &Program<'_>,
+    rules: Rules<'p>,
+) -> (Vec<(u32, u32)>, EventCollector<'p>) {
+    // Upstream replaces each with `b.empty` and appends the effect after the
+    // whole instance body, so the subtree neither flushes nor revives here.
+    let reactive_spans: Vec<(u32, u32)> = if rules.legacy_reactive_effects {
+        program
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::LabeledStatement(labeled) if labeled.label.name == "$" => {
+                    Some((labeled.span.start, labeled.span.end))
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut collector = EventCollector {
+        events: Vec::new(),
+        reactive_events: Vec::new(),
+        in_reactive: None,
+        rune_accessors: rules.rune_accessors,
+        destructure_iife_targets: rules.destructure_iife_targets,
+        invalidate_inner_signals_targets: rules.invalidate_inner_signals_targets,
+        reactive_spans: Vec::new(),
+        src,
+    };
+    collector.reactive_spans = reactive_spans.clone();
+    collector.visit_program(program);
+    (reactive_spans, collector)
+}
+
+/// Whether esrap's cursor is alive at a given offset of the FIRST printing
+/// pass — the question `rehome_reactive_statement_comments` has to answer
+/// before it copies a `$:`'s comments onto the statement that follows it.
+pub(crate) struct CursorLiveness {
+    events: Vec<(u32, Event)>,
+    seeded: Event,
+}
+
+impl CursorLiveness {
+    pub(crate) fn alive_at(&self, offset: u32) -> bool {
+        let idx = self.events.partition_point(|&(pos, _)| pos <= offset);
+        let last = if idx > 0 {
+            self.events[idx - 1].1
+        } else {
+            self.seeded
+        };
+        last == Event::Revive
+    }
+}
+
+/// `None` when the script does not parse, so the caller keeps its old rule.
+pub(crate) fn cursor_liveness(src: &str, rules: Rules<'_>) -> Option<CursorLiveness> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, src, SourceType::mjs()).parse();
+    if !ret.diagnostics.is_empty() {
+        return None;
+    }
+    let (_, mut collector) = collect_events(src, &ret.program, rules);
+    collector
+        .events
+        .sort_by_key(|&(pos, kind)| (pos, kind == Event::Kill));
+    Some(CursorLiveness {
+        events: collector.events,
+        seeded: if rules.program_unlocated {
+            Event::Kill
+        } else {
+            Event::Revive
+        },
+    })
+}
+
 struct EventCollector<'s> {
     events: Vec<(u32, Event)>,
     /// Events from inside a top-level `$:`, tagged with its index: they belong
@@ -285,7 +338,7 @@ struct EventCollector<'s> {
     /// Top-level `$:` statements, whose subtree is printed in upstream's second
     /// pass; `body()` skips the `EmptyStatement` left behind, so nothing inside
     /// one moves the cursor for a comment outside it.
-    reactive_spans: &'s [(u32, u32)],
+    reactive_spans: Vec<(u32, u32)>,
     src: &'s str,
 }
 
