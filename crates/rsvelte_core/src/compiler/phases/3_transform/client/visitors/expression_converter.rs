@@ -5443,6 +5443,16 @@ pub(crate) fn transform_synthesized_assignment_with_shadowed(
     apply_transforms_to_expression_with_shadowed(&assignment, context, local_scope)
 }
 
+/// The root of a member mutation that upstream routes through the each block's
+/// `transform.mutate` — which returns before `build_assignment`'s dev `$.assign`
+/// wrap, so that wrap must not fire here either.
+pub(crate) fn is_each_item_mutation_root(root_name: &str, context: &ComponentContext) -> bool {
+    !context.state.shadowed_prop_names.contains(root_name)
+        && context.state.each_binding_context.iter().rev().any(|each| {
+            each.item_name == root_name || each.destructured_update_paths.contains_key(root_name)
+        })
+}
+
 /// Preserve the sequence that upstream's each-item `mutate` transform always
 /// builds, including when its invalidation tail is empty. A plain mutation is
 /// equivalent at runtime, but esrap prints the one-element sequence with
@@ -5463,12 +5473,7 @@ pub(crate) fn preserve_each_mutation_sequence(
     let Some(root_name) = original_root_name else {
         return result;
     };
-    let is_each_item = !context.state.shadowed_prop_names.contains(root_name)
-        && context.state.each_binding_context.iter().rev().any(|each| {
-            each.item_name == root_name || each.destructured_update_paths.contains_key(root_name)
-        });
-
-    if is_each_item {
+    if is_each_item_mutation_root(root_name, context) {
         // A one-element sequence is treated by the recursive transform walk as a
         // synthesized, already-transformed node. Apply the each-item read/mutate
         // transform before adding that marker; otherwise `item.v = 1` is frozen
@@ -5720,6 +5725,12 @@ fn try_dev_assign_wrap_typed(
         return None;
     }
 
+    if extract_root_identifier_from_jsnode(left_node, pa)
+        .is_some_and(|root| is_each_item_mutation_root(&root, context))
+    {
+        return None;
+    }
+
     let (left_start, computed) = match left_node {
         JsNode::MemberExpression {
             start, computed, ..
@@ -5860,6 +5871,13 @@ fn try_coercive_assignment_transform(
     let left_json = obj.get("left")?.as_object()?;
     let left_type = left_json.get("type")?.as_str()?;
     if left_type != "MemberExpression" {
+        return None;
+    }
+
+    if let Some(left_value) = obj.get("left")
+        && extract_root_identifier_from_json(left_value)
+            .is_some_and(|root| is_each_item_mutation_root(&root, context))
+    {
         return None;
     }
 

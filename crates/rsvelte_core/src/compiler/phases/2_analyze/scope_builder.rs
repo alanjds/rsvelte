@@ -1327,9 +1327,17 @@ impl<'a> ScopeBuilder<'a> {
                     self.process_binding_pattern_typed(elem, None, decl_kind);
                 }
             }
-            JsNode::AssignmentPattern { left, .. } => {
+            JsNode::AssignmentPattern { left, right, .. } => {
                 let left_node = self.arena.get_js_node(*left);
                 self.process_binding_pattern_typed(left_node, init, decl_kind);
+                // Upstream walks a default expression like any other, so every
+                // `scope.declare` inside it still reaches `root.conflicts`.
+                let arena = self.arena;
+                collect_declared_names_in_expression(
+                    arena.get_js_node(*right),
+                    arena,
+                    &mut self.nested_declared_names,
+                );
             }
             JsNode::RestElement { argument, .. } => {
                 let arg_node = self.arena.get_js_node(*argument);
@@ -4099,11 +4107,19 @@ impl<'a> ScopeBuilder<'a> {
                     self.declare_decl_tag_bindings_node(elem, decl_kind, binding_kind);
                 }
             }
-            JsNode::AssignmentPattern { left, .. } => {
+            JsNode::AssignmentPattern { left, right, .. } => {
                 self.declare_decl_tag_bindings_node(
                     self.arena.get_js_node(*left),
                     decl_kind,
                     binding_kind,
+                );
+                // Upstream walks a default expression like any other, so every
+                // `scope.declare` inside it still reaches `root.conflicts`.
+                let arena = self.arena;
+                collect_declared_names_in_expression(
+                    arena.get_js_node(*right),
+                    arena,
+                    &mut self.nested_declared_names,
                 );
             }
             JsNode::RestElement { argument, .. } => {
@@ -4232,8 +4248,16 @@ impl<'a> ScopeBuilder<'a> {
                     self.process_binding_pattern_from_node(elem);
                 }
             }
-            JsNode::AssignmentPattern { left, .. } => {
+            JsNode::AssignmentPattern { left, right, .. } => {
                 self.process_binding_pattern_from_node(self.arena.get_js_node(*left));
+                // Upstream walks a default expression like any other, so every
+                // `scope.declare` inside it still reaches `root.conflicts`.
+                let arena = self.arena;
+                collect_declared_names_in_expression(
+                    arena.get_js_node(*right),
+                    arena,
+                    &mut self.nested_declared_names,
+                );
             }
             JsNode::RestElement { argument, .. } => {
                 self.process_binding_pattern_from_node(self.arena.get_js_node(*argument));
