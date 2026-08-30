@@ -6,7 +6,7 @@ entirely (neither matched nor failed). Each entry carries a `"class"`
 (`oracle-bug` | `invalid-input` | `migrate` | `engine-divergence`) and a
 `"reason"`; this file records the class-level rationale.
 
-**Current baseline: `fmt-oracle-excluded.json`, 29 entries.**
+**Current baseline: `fmt-oracle-excluded.json`, 27 entries.**
 
 `fmt-verify.mjs` warns if an excluded id is no longer in the parity set (can be
 deleted) and notices if an excluded id now matches byte-for-byte (the oracle bug
@@ -22,17 +22,41 @@ Attribution of `fmt-oracle-excluded.json`:
 |---|---|---|
 | 3 | [`deliberate-divergences`](deliberate-divergences.md#a-props-line-comment-keeps-the-separator-slot-the-compiler-reads) | the `$props()` comment slot the #3515 repros depend on |
 | 4 | [`deliberate-divergences`](deliberate-divergences.md#the-formatters-javascript-engine-is-oxc-not-prettier) | `engine-divergence` — oxc's line-breaking, not prettier's |
-| 6 | [`deliberate-divergences`](deliberate-divergences.md#the-formatter-declines-an-input-its-own-parser-rejects) | `invalid-input` and `migrate` — inputs no compiler accepts, and Svelte 4 migrator output |
+| 5 | [`deliberate-divergences`](deliberate-divergences.md#the-formatter-declines-an-input-its-own-parser-rejects) | `invalid-input` and `migrate` — inputs no compiler accepts, and Svelte 4 migrator output |
+| 5 | [`deliberate-divergences`](deliberate-divergences.md#a-formatter-difference-the-compiler-cannot-see) | both texts compile to byte-identical client and server `js` **and** `css` |
+| 3 | [`deliberate-divergences`](deliberate-divergences.md#the-formatters-css-engine-is-oxc-not-prettiers-postcss) | rsvelte reproduces `oxfmt <file>.css` byte-for-byte; the oracle's Svelte path disagrees with oxfmt itself |
 | 2 | [`upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md`](../upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md) | `oracle-bug` — the `{#each}` head drops a nested pattern's property key |
 | 1 | [`upstream_issues/oxfmt-svelte-css-eats-a-css-escape-terminator-space.md`](../upstream_issues/oxfmt-svelte-css-eats-a-css-escape-terminator-space.md) | `oracle-bug` — a CSS escape's terminator space is eaten, and a live rule becomes dead |
 | 3 | [`upstream_issues/oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md`](../upstream_issues/oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md) | `oracle-bug` — source tabs survive on a comment-bearing selector under `useTabs: false` |
 
-The remaining **10** `oracle-bug` entries are **deliberately absent from this table**. Listing
-them against a report that does not cover them would make the gate green on a citation, which is
-the failure mode a citation is most likely to hide. Each gets a row when its own report is filed
-with both outputs measured.
+**One entry carries no target: `shadcn-svelte/.../theme-customizer-code.svelte`.** It is the only
+one of the 27 where the two formatted texts compile to *different* output, and the reason it is
+not attributed is that neither side is the source's own rendering. Compiling all three with
+`submodules/svelte/.../compiler/index.js`: the oracle's text and rsvelte's text each differ from
+the **unformatted source**, in different places — both formatters move whitespace inside a
+whitespace-sensitive `<span>` when the line overflows at that nesting depth, and they pick
+different break points. So this is not a divergence with a correct side to record; it is a defect
+`rsvelte-fmt` shares with the oracle, and the DoD-4 answer for it is a fix rather than a
+citation. The recorded cross-platform claim (macOS collapses, Linux attribute-wraps) is
+**unmeasured** here — only the macOS oracle was run.
 
-## All sixteen were re-measured on 2026-08-30, and **six recorded reasons do not reproduce**
+## Re-measured twice: **six reasons did not reproduce on 2026-08-30, and the 2026-08-31 pass closed nine of the ten**
+
+On 2026-08-31 the ten entries that had carried no attribution target were run through
+`scripts/compat-corpus/fmt-one.mjs` against the current `rsvelte-fmt`, and both texts of each were
+compiled for `client` and `server` and compared on `js.code` **and** `css.code`:
+
+- **`textarea-content` now matches the oracle byte-for-byte** (720 bytes on each side) and has been
+  removed from the list. CI's Linux run reports the same for it and for `snippet-rest-args`
+  (`[fmt-verify] NOTICE: excluded id now matches oracle`), which is also removed — 29 entries → 27.
+- **Five compile to byte-identical output on all four comparisons** and are now recorded under
+  [`deliberate-divergences`](deliberate-divergences.md#a-formatter-difference-the-compiler-cannot-see).
+- **Three are the CSS engine**, and `rsvelte-fmt` reproduces `oxfmt <file>.css` byte-for-byte on
+  every one, so the oracle is the same tool answering differently —
+  [`deliberate-divergences`](deliberate-divergences.md#the-formatters-css-engine-is-oxc-not-prettiers-postcss).
+- **One is left open**, for the reason stated above the table.
+
+## The 2026-08-30 pass: **six recorded reasons do not reproduce**
 
 Every `oracle-bug` entry was re-run through the pinned oracle (`oxfmt@0.64.0` with
 `scripts/fixtures/fmt-corpus.oxfmtrc.json`, the same in-place invocation `fmt.mjs` uses), and
