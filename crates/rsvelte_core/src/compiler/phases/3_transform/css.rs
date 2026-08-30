@@ -2530,26 +2530,6 @@ fn is_nesting_compound_unused(rel_selectors: &[Value], ctx: &CssContext) -> bool
                 .filter(|branches| !branches.is_empty())
                 .unwrap_or_else(|| vec![(Vec::new(), Vec::new(), Vec::new())]);
 
-            // If dynamic classes exist, we can't be sure about class constraints
-            if ctx.has_dynamic_classes
-                && (!required_classes.is_empty()
-                    || parent_branches
-                        .iter()
-                        .any(|(classes, _, _)| !classes.is_empty()))
-            {
-                continue;
-            }
-
-            // If dynamic elements exist, we can't be sure about element constraints
-            if ctx.has_dynamic_elements
-                && (!required_elements.is_empty()
-                    || parent_branches
-                        .iter()
-                        .any(|(_, _, elements)| !elements.is_empty()))
-            {
-                continue;
-            }
-
             // Each comma-separated parent selector is an alternative. The current
             // compound is AND-ed with one parent branch, while the branches remain
             // OR-ed (`.copy, .export { &.success {} }`). Flattening the branches
@@ -2561,19 +2541,34 @@ fn is_nesting_compound_unused(rel_selectors: &[Value], ctx: &CssContext) -> bool
                         ctx.dom_structure.elements.iter().any(|elem| {
                             // A class may be carried statically (`class="..."`), via a
                             // `class:NAME` directive, or potentially via a spread.
+                            // Whether an element can carry a class is a property of
+                            // THAT element: a `class={expr}` on some other element
+                            // used to disable the whole check through a
+                            // whole-component flag, so a `&.x` under a matching
+                            // parent was never pruned in any real template.
+                            let class_is_open = elem.has_spread
+                                || elem
+                                    .dynamic_attribute_names
+                                    .iter()
+                                    .any(|n| n.eq_ignore_ascii_case("class"));
                             let classes_match = parent_classes
                                 .iter()
                                 .chain(required_classes.iter())
                                 .all(|class| {
-                                    elem.has_spread
+                                    class_is_open
                                         || elem.classes.contains(class.as_str())
                                         || elem.class_directive_names.contains(class.as_str())
                                 });
 
+                            let id_is_open = elem.has_spread
+                                || elem
+                                    .dynamic_attribute_names
+                                    .iter()
+                                    .any(|n| n.eq_ignore_ascii_case("id"));
                             let ids_match = parent_ids
                                 .iter()
                                 .chain(required_ids.iter())
-                                .all(|id| elem.id.as_deref() == Some(id.as_str()));
+                                .all(|id| id_is_open || elem.id.as_deref() == Some(id.as_str()));
 
                             let elements_match = parent_elements
                                 .iter()
