@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { refuseUnrepresentativeBaseline } from "../compat-corpus/baseline-guard.mjs";
 import { svelteVersionForServer } from "./pin-official-svelte.mjs";
+import { projectionFailures } from "./projection-preflight.mjs";
 import {
   calibrationView,
   normalizeExpected,
@@ -225,6 +226,42 @@ const population = loadCases(ROOT, selectedSuites, selectedRepos);
 const cases = shardCorpusCases(population.cases, SHARD);
 assertNonemptySuites(cases, selectedSuites);
 const measuredPopulation = corpusPopulation(cases);
+
+// A run is allowed a residue: `svelte2tsx` legitimately refuses a handful of
+// real components. What it is not allowed is a systematically wrong parser —
+// under Svelte 4 the rate on bits-ui is 64.8%, which is why no meaningful
+// ceiling could exist before the oracle was pinned.
+const PROJECTION_FAILURE_CEILING = 0.05;
+
+// A document the official server cannot project is compared anyway: `svelte2tsx`
+// throws, `DocumentSnapshot.ts:291` keeps the instance script alone, and the
+// answer that produces is well formed enough to enrol into a shrink-only
+// ratchet. Asserted before any request is sent, so a degraded oracle costs no
+// measurement, and therefore before the current artifact exists at all.
+{
+  const script = officialCommand.find((argument) => argument.endsWith(".js"));
+  const { failures, total, version } = script
+    ? projectionFailures(script, cases)
+    : { failures: [], total: 0, version: null };
+  if (total) {
+    const rate = failures.length / total;
+    console.log(
+      `[lsp-verify] official server projects ${total - failures.length}/${total} of this run's components with svelte ${version} (${failures.length} fail, ${(rate * 100).toFixed(1)}%)`,
+    );
+    // Asserted on the corpus only. The fixture and upstream suites are chosen
+    // inputs and include documents written to be unparseable — 45 of 154 —
+    // so a ceiling there would measure the suite's intent, not the oracle's
+    // health. The rate is printed for every run either way.
+    if (
+      selectedSuites.includes("corpus") &&
+      rate > PROJECTION_FAILURE_CEILING
+    ) {
+      throw new Error(
+        `the official server fails to project ${failures.length}/${total} (${(rate * 100).toFixed(1)}%) of this run's components, above the ${(PROJECTION_FAILURE_CEILING * 100).toFixed(0)}% ceiling; it would answer those documents from the instance script alone, so every divergence they produce is against a reference that never saw a template. First: ${failures.slice(0, 3).join(", ")}`,
+      );
+    }
+  }
+}
 const universeIds = population.cases.map((entry) => entry.id);
 const populationFile = path.join(
   ROOT,
@@ -443,11 +480,105 @@ function oracleCalibrationReport() {
   };
 }
 
+/// Drive upstream's own snapshots against the official server alone.
+///
+/// Calibration used to be a by-product of running `upstream-features`, so the
+/// suite that produces two thirds of the ratchet — `corpus` — never asked
+/// whether its oracle was sane.
+///
+/// It runs in a SECOND official process with the workspace an `upstream-features`
+/// run would give it. Reusing the measured run's process reproduces 75/92 where
+/// that suite reproduces 88/92, because the snapshots' `checkJs` and `tsconfig`
+/// settings come from workspace folders a fixtures- or corpus-scoped run does not
+/// declare — and adding them to the measured run would move the population this
+/// gate exists to compare. A preflight that measures a different number than the
+/// suite it stands in for is not a calibration.
+async function calibrationPreflight() {
+  if (selectedSuites.includes("upstream-features")) return;
+  const { cases: snapshots } = loadCases(ROOT, ["upstream-features"], []);
+  const featuresRoot = path.join(
+    ROOT,
+    "submodules/language-tools/packages/language-server/test/plugins/typescript/features",
+  );
+  const roots = [
+    featuresRoot,
+    path.join(featuresRoot, "diagnostics/fixtures/style-directive"),
+  ];
+  const server = new LspProcess("oracle calibration", officialCommand, {
+    cwd: ROOT,
+  });
+  // `clientRequest` answers `workspace/workspaceFolders` from one module-level
+  // value, so the measured run's folders would be handed to this server.
+  const measuredWorkspaceFolders = initializedWorkspaceFolders;
+  let id = 0;
+  initializedWorkspaceFolders = roots.map((workspace) => ({
+    name: path.basename(workspace),
+    uri: pathToFileURL(workspace).href,
+  }));
+  const request = async (method, params, timeoutMs) => {
+    const messageId = ++id;
+    server.send({ jsonrpc: "2.0", id: messageId, method, params });
+    return await server.response(messageId, clientRequest, timeoutMs);
+  };
+  try {
+    await request("initialize", {
+      processId: process.pid,
+      rootUri: pathToFileURL(featuresRoot).href,
+      workspaceFolders: initializedWorkspaceFolders,
+      capabilities,
+      initializationOptions,
+    });
+    server.send({ jsonrpc: "2.0", method: "initialized", params: {} });
+    for (const entry of snapshots) {
+      if (!entry.expected) continue;
+      const text = entry.text ?? entry.loadText();
+      server.send({
+        jsonrpc: "2.0",
+        method: "textDocument/didOpen",
+        params: {
+          textDocument: {
+            uri: entry.uri,
+            languageId: "svelte",
+            version: 1,
+            text,
+          },
+        },
+      });
+      const requests =
+        typeof entry.requests === "function"
+          ? entry.requests(entry.uri, text)
+          : entry.requests;
+      for (const each of requests) {
+        let message;
+        try {
+          message = await request(each.method, each.params, REQUEST_TIMEOUT_MS);
+        } catch {
+          continue;
+        }
+        if (entry.expected.method !== each.method) continue;
+        calibrateOracle(
+          entry,
+          each.method,
+          normalizeExpected(each.method, entry.expected.value, entry.root),
+          normalizeResponse(each.method, message, entry.root),
+        );
+      }
+      server.send({
+        jsonrpc: "2.0",
+        method: "textDocument/didClose",
+        params: { textDocument: { uri: entry.uri } },
+      });
+    }
+  } finally {
+    initializedWorkspaceFolders = measuredWorkspaceFolders;
+    server.child.kill();
+  }
+}
+
 function assertOracleCalibration(calibration) {
-  if (!selectedSuites.includes("upstream-features")) return;
   if (!calibration.total) {
     throw new Error(
-      "upstream-features was selected but no expected snapshot was compared against the official server",
+      "no upstream expected snapshot was compared against the official server; the run measured divergence against an uncalibrated oracle",
     );
   }
   for (const [suite, bucket] of Object.entries(calibration.suites)) {
@@ -738,6 +869,8 @@ async function main() {
   };
   official.send(positiveClose);
   rsvelte.send(positiveClose);
+
+  await calibrationPreflight();
 
   for (const entry of cases) {
     const text = entry.text ?? entry.loadText();

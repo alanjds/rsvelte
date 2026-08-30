@@ -557,6 +557,35 @@ job's runtime on every one of the 16 shards — rather than reading anything fro
 **Unmeasured:** whether the corpus shards' official servers are in fact degraded. Nothing here
 measures that; the claim is only that no instrument in the corpus job would report it.
 
+**Closed.** `calibrationPreflight` drives the 125 snapshots against the official command whenever
+`upstream-features` is not among the selected suites, so `--suites corpus` is now calibrated too;
+the early return survives only as the guard that stops the suite being measured twice. The estimate
+above — that it "costs the fixture job's runtime on every one of the 16 shards" — was wrong by an
+order of magnitude: it is 502 requests against a shard's 8,760, and the shards run for an hour.
+
+Two things it cost to make the number mean anything, both measured rather than reasoned. Sending
+only the snapshot's own method reproduces **75/92** where the suite reproduces 88/92, because
+upstream answers a pull diagnostic before its program has the document; the preflight sends the
+case's whole request set. And running it in the measured run's own server *also* reproduces 75/92,
+because the snapshots' `checkJs` and `tsconfig` settings come from workspace folders a fixtures- or
+corpus-scoped run does not declare (`verify.mjs` adds them only when `upstream-features` is
+selected) — and declaring them in the measured run would move the population this gate exists to
+compare. The preflight therefore uses a second official process with the workspace an
+`upstream-features` run would give it. Measured both ways on the same oracle: **115/125, and the
+same ten misses** — the sets are equal, not only the counts. The `typescript-diagnostics` bucket
+moves by ±1 between runs, so read the floor as a floor, not as a fingerprint.
+
+**A second precondition covers what the snapshots cannot.** The 125 snapshots say the oracle
+behaves like its own test suite; they say nothing about whether it can project the documents *this
+run* is about to compare. `projection-preflight.mjs` runs the predicate 27m uses — `svelte2tsx`
+with the `parse` and `version` the official server itself resolves — over the run's own case list,
+prints `projects N/M`, and aborts above a **5%** ceiling before any request is sent. Measured on
+bits-ui: **400/617 fail under 4.2.20 and 0/617 under 5.56.10**; on a 9-component shard the ablated
+version check leaves 6/9 (66.7%) and the ceiling fires with the failing ids named. The ceiling is
+asserted on the corpus only: the fixture and upstream suites are chosen inputs and include
+documents written to be unparseable (45 of 154), so a ceiling there would measure the suite's
+intent rather than the oracle's health.
+
 ### Blind spot 27l — the corpus repositories are never installed, so two thirds of the ratchet is measured on unresolved imports [D]
 
 `verify.mjs:303-308` names the hazard in a comment — "a server started against the wrong
