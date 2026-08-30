@@ -24,29 +24,41 @@ Attribution of `fmt-oracle-excluded.json`:
 | 4 | [`deliberate-divergences`](deliberate-divergences.md#the-formatters-javascript-engine-is-oxc-not-prettier) | `engine-divergence` — oxc's line-breaking, not prettier's |
 | 6 | [`deliberate-divergences`](deliberate-divergences.md#the-formatter-declines-an-input-its-own-parser-rejects) | `invalid-input` and `migrate` — inputs no compiler accepts, and Svelte 4 migrator output |
 | 2 | [`upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md`](../upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md) | `oracle-bug` — the `{#each}` head drops a nested pattern's property key |
+| 1 | [`upstream_issues/oxfmt-svelte-css-eats-a-css-escape-terminator-space.md`](../upstream_issues/oxfmt-svelte-css-eats-a-css-escape-terminator-space.md) | `oracle-bug` — a CSS escape's terminator space is eaten, and a live rule becomes dead |
+| 3 | [`upstream_issues/oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md`](../upstream_issues/oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md) | `oracle-bug` — source tabs survive on a comment-bearing selector under `useTabs: false` |
 
-The remaining **14** `oracle-bug` entries are **deliberately absent from this table**. Listing
+The remaining **10** `oracle-bug` entries are **deliberately absent from this table**. Listing
 them against a report that does not cover them would make the gate green on a citation, which is
 the failure mode a citation is most likely to hide. Each gets a row when its own report is filed
 with both outputs measured.
 
-**Two facts about this set were measured on 2026-08-30 and neither was known when it was
-written.** Re-running the pinned oracle (`oxfmt@0.64.0`, `fmt-corpus.oxfmtrc.json`) over all
-sixteen and feeding each result back to `svelte@5.56.10`'s `parse({modern: true})`:
+## All sixteen were re-measured on 2026-08-30, and **six recorded reasons do not reproduce**
 
-- **Exactly 2 of 16 still produce text the official compiler rejects** — the two
-  `{#each}` nested-pattern files above, one cause, now filed. The other 14 produce
-  output that *parses*, which is not the same as output that is correct: the recorded
-  defects there are semantic (a dropped variable, collapsed whitespace-significant
-  `<textarea>` content) or cosmetic (indentation), and **the parse oracle cannot see
-  either class**. Read the 2 as "confirmed by an instrument", not the 14 as "cleared".
-- **At least one stated reason no longer reproduces.**
-  `runtime-legacy/samples/block-expression-assign/main.svelte` is recorded as "oxfmt drops
-  the closing paren in `{@const x = (h = 0)}`, producing `{@const x = (h = 0}` — invalid".
-  Under 0.64.0 the output is `{@const x = h = 0}`, which parses and is semantically
-  identical (`=` is right-associative). Whether the entry would now *match* rsvelte-fmt
-  byte-for-byte — and so should be deleted rather than re-worded — is unmeasured; it needs
-  a built `rsvelte-fmt`.
+Every `oracle-bug` entry was re-run through the pinned oracle (`oxfmt@0.64.0` with
+`scripts/fixtures/fmt-corpus.oxfmtrc.json`, the same in-place invocation `fmt.mjs` uses), and
+where the recorded reason claimed a *semantic* loss the two texts were additionally compiled with
+`submodules/svelte/packages/svelte/src/compiler/index.js` and their outputs compared.
+
+| entry | recorded reason | measured 2026-08-30 |
+|---|---|---|
+| `await-then-destruct-array-nested-rest` | drops nested rest → `...[...undefined]` | **does not reproduce** — `{:then [a, b, ...[, , c, ...{ length }]]}` is preserved |
+| `block-expression-assign` | emits invalid `{@const x = (h = 0}` | **does not reproduce** — emits valid `{@const x = h = 0}`; it *adds* parens to `{#if a = 0}` |
+| `textarea-content` | collapses whitespace-significant content | **does not reproduce** |
+| `whitespace-after-script-tag` | reads an empty script and **loses the body** | **does not reproduce** — `let name = "world";` survives |
+| `whitespace-after-style-tag` | loses `div { color: red; }` | **does not reproduce** — it survives |
+| `parser-legacy/textarea-end-tag` | collapses whitespace the textarea renders | **does not reproduce as a semantic defect.** Trailing `</textarea` text and blank lines *are* deleted from the file, but both texts compile to a **byte-identical** `<textarea>` body — the deleted run is past where Svelte closes the element |
+| `css/comment-html`, `comments-after-last-selector`, `parser-modern/css-pseudo-classes` | mixed tab/space indentation | **reproduces**, and it is one cause, now filed — see the table above |
+| `css/unicode-identifier` | a cosmetic space before `{` | **reproduces, and is worse than recorded** — the escape-terminator collapse turns a used scoped rule into a pruned one; filed |
+| `css/css-vars` | `--bar: !important;` gains a second space | **reproduces**; the compiled CSS differs only in that space |
+| `adversarial/css/css-custom-property-values` | the same value formatted two ways | **reproduces**, and is cosmetic: `--sel: a > b ~ c` → `a > b ~c` (whitespace around a combinator is optional, so the selector is unchanged) and `url('/x.png')` → `url("/x.png")` |
+| `shadcn-svelte/theme-customizer-code` | platform-dependent output | the **platform axis was not re-measured**; the output does carry 61 tab-bearing lines under `useTabs: false` |
+| `svelte.dev/.../+layout.svelte` | `calc()` wrap position | **not re-verified in this pass** |
+
+Two things this cost, and both generalize. **A reason can be stale in either direction**: five of
+the six above overstate the defect, and `unicode-identifier` *under*states it — the entry was
+filed as a space before a brace and is in fact a selector whose meaning changes. And **"the
+formatter deleted text" is not "the output is wrong"**: `textarea-end-tag` reads as content loss
+and compiles identically, which only a compile of both texts can tell you.
 
 **This exclusion list is permanent, so nothing re-checks it.** The ratchets are two-sided and a
 listed entry that starts passing fails CI; an *exclusion* has no such pressure, and its

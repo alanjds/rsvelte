@@ -95,6 +95,8 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `oxfmt-each-pattern-default-unknown-node-type.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
 | `oxfmt-single-quoted-attribute-containing-a-double-quote.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
 | `oxfmt-style-terminator-inside-a-css-string.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
+| `oxfmt-svelte-css-eats-a-css-escape-terminator-space.md` | oxc-project/oxc (`oxfmt`, `svelte: true`) | — | unrecorded |
+| `oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md` | oxc-project/oxc (`oxfmt`, `svelte: true`) | — | unrecorded |
 | `svelte-bind-group-unresolved-identifier-crash.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte-class-index-signature-crash.md` | sveltejs/svelte | #3422 | unrecorded |
 | `svelte-class-static-block-shares-the-instance-scope.md` | sveltejs/svelte | — | unrecorded |
