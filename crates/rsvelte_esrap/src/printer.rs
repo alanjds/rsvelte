@@ -4027,6 +4027,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     fn static_member(&mut self, node: &StaticMemberExpression, ctx: &mut Context<DIRECT>) {
         self.member_object_with_parens(&node.object, ctx);
         ctx.write(if node.optional { "?." } else { "." });
+        // Upstream reaches the property through `context.visit`, which performs
+        // the leading flush; `write_node` only emits locations.
+        self.flush_leading(ctx, node.property.span.start);
         self.write_node(ctx, node.property.span, node.property.name.as_str());
     }
 
