@@ -67,7 +67,10 @@ use crate::tsgo_rename::{
     PrepareRenamePlan, RenameDocument, merge_workspace_edits, prepare_rename_plan,
     rewrite_prepare_response, rewrite_workspace_edit,
 };
-use crate::tsgo_response::{RequestDocumentContext, TsgoResponseMapper};
+use crate::tsgo_response::{
+    RequestDocumentContext, TsgoResponseMapper, normalize_definition_result,
+    normalize_hover_result, tsgo_unmapped_result,
+};
 use crate::uri::{path_to_uri, uri_to_path};
 use crate::worker::{FileReferenceSource, Job, Outcome, PreprocessedAnalysis, Worker};
 
@@ -1935,7 +1938,7 @@ impl Server {
         if !self.settings.tsgo_method_enabled(&request.method) {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         }
@@ -1961,7 +1964,7 @@ impl Server {
         let Some(runtime) = &self.tsgo else {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         };
@@ -1977,7 +1980,7 @@ impl Server {
         if !mapper.map_request(&request.method, &mut request.params) {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         }
@@ -3208,6 +3211,8 @@ impl Server {
                                 }
                             }
                         }
+                        "textDocument/definition" => normalize_definition_result(result),
+                        "textDocument/hover" => normalize_hover_result(result),
                         _ => {}
                     }
                     rewrite_visible_tsgo_response(result);

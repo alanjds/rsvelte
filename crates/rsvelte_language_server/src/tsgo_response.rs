@@ -660,6 +660,78 @@ fn is_range_field(key: &str) -> bool {
     )
 }
 
+/// Upstream spells "no definitions" as `[]` (`TypeScriptPlugin.getDefinitions`
+/// returns `[]`), and gives `targetRange` the same span as
+/// `targetSelectionRange` — `LocationLink.create(uri, defLocation.range,
+/// defLocation.range, ...)` — where tsgo reports the enclosing declaration.
+pub fn normalize_definition_result(result: &mut Value) {
+    if result.is_null() {
+        *result = Value::Array(Vec::new());
+        return;
+    }
+    let Some(links) = result.as_array_mut() else {
+        return;
+    };
+    for link in links {
+        let Some(object) = link.as_object_mut() else {
+            continue;
+        };
+        let Some(selection) = object.get("targetSelectionRange").cloned() else {
+            continue;
+        };
+        if object.contains_key("targetRange") {
+            object.insert("targetRange".to_string(), selection);
+        }
+    }
+}
+
+/// Upstream builds a hover body itself — `['```typescript', declaration,
+/// '```']` joined with `['---', documentation]` — and returns it as a bare
+/// string. tsgo returns the same two parts as `MarkupContent` with only a
+/// newline between them.
+pub fn normalize_hover_result(result: &mut Value) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let Some(value) = object
+        .get("contents")
+        .and_then(|contents| contents.get("value"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let text = upstream_hover_text(value);
+    object.insert("contents".to_string(), Value::String(text));
+}
+
+fn upstream_hover_text(value: &str) -> String {
+    const FENCE: &str = "```typescript\n";
+    let Some(rest) = value.strip_prefix(FENCE) else {
+        return value.trim_end_matches('\n').to_string();
+    };
+    let Some(end) = rest.find("\n```") else {
+        return value.trim_end_matches('\n').to_string();
+    };
+    let declaration = &rest[..end];
+    let documentation = rest[end + "\n```".len()..].trim_start_matches('\n');
+    if documentation.trim().is_empty() {
+        format!("{FENCE}{declaration}\n```")
+    } else {
+        format!("{FENCE}{declaration}\n```\n---\n{documentation}")
+    }
+}
+
+/// The result an editor gets when a request never reaches tsgo. Upstream still
+/// answers `[]` for a definition request it cannot map.
+#[must_use]
+pub fn tsgo_unmapped_result(method: &str) -> Value {
+    if method == "textDocument/definition" {
+        Value::Array(Vec::new())
+    } else {
+        Value::Null
+    }
+}
+
 fn is_semantic_tokens_method(method: &str) -> bool {
     method == "textDocument/semanticTokens/full" || method == "textDocument/semanticTokens/range"
 }
@@ -1272,5 +1344,54 @@ mod tests {
         let mapper = TsgoResponseMapper::new(&overlay);
         assert!(mapper.map_response("completionItem/resolve", &mut value));
         assert_eq!(value, original);
+    }
+
+    #[test]
+    fn a_definition_link_takes_its_selection_span_as_the_target_range() {
+        let mut result = json!([{
+            "originSelectionRange": { "start": { "line": 1, "character": 10 }, "end": { "line": 1, "character": 18 } },
+            "targetRange": { "start": { "line": 1, "character": 1 }, "end": { "line": 1, "character": 42 } },
+            "targetSelectionRange": { "start": { "line": 1, "character": 10 }, "end": { "line": 1, "character": 18 } },
+            "targetUri": "file:///a.svelte"
+        }]);
+        normalize_definition_result(&mut result);
+        assert_eq!(result[0]["targetRange"], result[0]["targetSelectionRange"]);
+        assert_eq!(
+            result[0]["targetRange"]["start"]["character"],
+            json!(10),
+            "the declaration span must not survive"
+        );
+    }
+
+    #[test]
+    fn no_definition_is_an_empty_list_not_null() {
+        let mut result = Value::Null;
+        normalize_definition_result(&mut result);
+        assert_eq!(result, json!([]));
+        assert_eq!(tsgo_unmapped_result("textDocument/definition"), json!([]));
+        assert_eq!(tsgo_unmapped_result("textDocument/hover"), Value::Null);
+    }
+
+    #[test]
+    fn a_hover_body_is_a_string_with_upstreams_separator() {
+        let mut result = json!({
+            "contents": { "kind": "markdown", "value": "```typescript\nconst greeting: \"hi\"\n```\n" },
+            "range": { "start": { "line": 1, "character": 7 }, "end": { "line": 1, "character": 15 } }
+        });
+        normalize_hover_result(&mut result);
+        assert_eq!(
+            result["contents"],
+            json!("```typescript\nconst greeting: \"hi\"\n```")
+        );
+        assert!(result.get("range").is_some(), "the range must survive");
+
+        let mut documented = json!({
+            "contents": { "kind": "markdown", "value": "```typescript\nfunction $props(): any\n```\nDeclares the props." }
+        });
+        normalize_hover_result(&mut documented);
+        assert_eq!(
+            documented["contents"],
+            json!("```typescript\nfunction $props(): any\n```\n---\nDeclares the props.")
+        );
     }
 }
