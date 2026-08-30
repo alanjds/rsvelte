@@ -3,7 +3,7 @@
  * Assert that rsvelte's generated client program never hands a signal helper
  * something the same program declared as an ordinary value.
  *
- * `two-ports-inventory.md` row 17: upstream resolves a write target once through
+ * `two-ports-inventory.md` row 21: upstream resolves a write target once through
  * `scope.get`, while 32 of rsvelte's 44 `*_ast.rs` passes compare identifier text
  * against a `Vec<String>` — so each answers the shadow question separately and a
  * disagreement only reaches output equality where a collected file carries the

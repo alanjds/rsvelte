@@ -12,8 +12,35 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DOC = 'compatibility/deliberate-divergences.md';
-const text = fs.readFileSync(DOC, 'utf8');
+// The doc is consolidated into `GATES.md` at the end of the campaign, where it
+// becomes one anchored section and every heading is demoted a level. Resolving
+// both shapes here keeps this a machine-facing read rather than a link to patch.
+const ANCHOR = 'deliberate-divergences';
+function locate() {
+  const own = `compatibility/${ANCHOR}.md`;
+  if (fs.existsSync(own)) {
+    return { doc: own, text: fs.readFileSync(own, 'utf8'), heading: /^## /, cut: 3, offset: 0 };
+  }
+  const merged = 'compatibility/GATES.md';
+  const all = fs.readFileSync(merged, 'utf8').split('\n');
+  const start = all.findIndex((l) => l.trim() === `<a id="${ANCHOR}"></a>`);
+  if (start === -1) {
+    console.error(`[deliberate-divergences-check] neither ${own} nor a \`${ANCHOR}\` anchor in ${merged}`);
+    process.exit(1);
+  }
+  let end = all.length;
+  for (let i = start + 1; i < all.length; i++) {
+    if (/^<a id="[^"]+"><\/a>$/.test(all[i].trim())) { end = i; break; }
+  }
+  return {
+    doc: merged,
+    text: all.slice(start, end).join('\n'),
+    heading: /^### /,
+    cut: 4,
+    offset: start,
+  };
+}
+const { doc: DOC, text, heading: HEADING, cut: CUT, offset: OFFSET } = locate();
 
 const PIN = /`((?:crates|compatibility|apps|packages|scripts)\/[A-Za-z0-9._@/-]+?\.(?:rs|svelte|svelte\.js|svelte\.ts|mjs|ts))`/g;
 const isPin = (p) =>
@@ -31,8 +58,8 @@ for (const [i, line] of lines.entries()) {
     if (current) current.body.push(line);
     continue;
   }
-  if (/^## /.test(line)) {
-    current = { title: line.slice(3).trim(), line: i + 1, body: [] };
+  if (HEADING.test(line)) {
+    current = { title: line.slice(CUT).trim(), line: OFFSET + i + 1, body: [] };
     sections.push(current);
   } else if (current) {
     current.body.push(line);
@@ -56,7 +83,7 @@ for (const s of sections) {
 }
 
 if (sections.length === 0) {
-  console.error('[deliberate-divergences-check] no `## ` sections found — the parser or the doc changed');
+  console.error(`[deliberate-divergences-check] no sections found in ${DOC} — the parser or the doc changed`);
   process.exit(1);
 }
 
