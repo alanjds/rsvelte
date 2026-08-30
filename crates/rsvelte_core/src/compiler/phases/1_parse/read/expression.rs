@@ -5546,6 +5546,15 @@ fn convert_class_element_for_expr(
             );
             obj.set_field("value", value.as_json().clone());
 
+            push_member_modifiers(
+                &mut obj,
+                method.accessibility,
+                &[
+                    ("override", method.r#override),
+                    ("optional", method.optional),
+                ],
+            );
+
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -5568,6 +5577,18 @@ fn convert_class_element_for_expr(
             } else {
                 obj.set_field("value", Value::Null);
             }
+
+            push_member_modifiers(
+                &mut obj,
+                prop.accessibility,
+                &[
+                    ("declare", prop.declare),
+                    ("definite", prop.definite),
+                    ("optional", prop.optional),
+                    ("override", prop.r#override),
+                    ("readonly", prop.readonly),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
