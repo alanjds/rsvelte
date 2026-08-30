@@ -119,16 +119,8 @@ fn split_declaration(
     // and esrap flushes its leading comments at the first located node inside
     // it — the declarator, which prints after the keyword. A comment trailing
     // the previous statement's line belongs to that statement and stays put.
-    // An `await` declarator is rewritten again downstream by the async lowering,
-    // which reads this pass's TEXT: a comment placed after the keyword lands in
-    // the generated callback's parameter list, so that one keeps its own line.
-    // A hit inside a string or comment only declines the move, which is safe.
-    let awaits = js_scan::contains_identifier(&script[start..statement.end as usize], "await");
-    let (leading_start, leading_comments) = if awaits {
-        (start, Vec::new())
-    } else {
-        leading_own_line_comments(script, start, comments, removed)
-    };
+    let (leading_start, leading_comments) =
+        leading_own_line_comments(script, start, comments, removed);
     let keyword_start = declaration.span.start as usize;
     if !script[keyword_start..].starts_with(keyword) {
         return None;
