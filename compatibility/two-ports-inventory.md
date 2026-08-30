@@ -834,6 +834,21 @@ is function-scoped**: `{ var v = 2; } return typeof v;` binds `v` in the enclosi
 every registrar here treats a block's declarations as the block's — that one is 6 comparisons and
 is the only member of this family that **also reproduces on the server**.
 
+The hoisting half is fixed too, and the interesting part is what the repro found rather than what
+the fix does. `ast_state_transform.rs` now registers a block's declarations in a pre-pass over the
+statement list, through the same method the walk uses — a second copy of "which declarations
+register no names" is exactly the shape this row exists to catch, so the `$props()` guard is
+extracted from the rewrite that owns it and both callers read it. All four declaration kinds are
+registered, not only the genuinely hoisted `function` / `var`: a read above a `let` or a `class` is
+a TDZ error, but upstream still resolves it to the local, and byte equality is the goal. Ablated,
+the variable half and the function/class half are 6 comparisons each. **And the repro's first draft
+found a live defect in a third port that none of this touches**: rsvelte wraps `console.log(a)` in
+`$.log_if_contains_state` for a handler-LOCAL `a`, where official wraps only an argument that
+references a component binding — `const a = 1; console.log(a)` reproduces it with no shadowing
+anywhere, and `console.log(v)` on the real `$derived` matches, so the divergence is
+over-instrumentation of a local rather than a scope-resolution error. It is dev-mode only, it is
+not in any probe set written for this row, and it is recorded here rather than fixed.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`

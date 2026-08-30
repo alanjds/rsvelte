@@ -533,6 +533,26 @@ impl<'a, 's> StateVarCollector<'a, 's> {
                 .any(|scope| scope.contains(name))
     }
 
+    /// Register the names a variable declaration binds, classified the way a state
+    /// declaration has to be: it must not register its own names, or `is_shadowed`
+    /// would return true and suppress every transform for them.
+    fn register_declaration_names(&mut self, decl: &VariableDeclaration<'_>) {
+        if self.is_props_destructuring_declaration(decl) {
+            return;
+        }
+        for declarator in &decl.declarations {
+            if self.is_known_transform_declaration(declarator) {
+                if self.is_reactive_transform_declaration(declarator) {
+                    self.collect_active_state_binding_names(&declarator.id);
+                } else {
+                    self.collect_binding_names_skip_state(&declarator.id);
+                }
+            } else {
+                self.collect_binding_names(&declarator.id);
+            }
+        }
+    }
+
     /// Declare a variable in the current scope.
     fn declare_in_current_scope(&mut self, name: &str) {
         if let Some(scope) = self.scoped_vars.last_mut() {
@@ -2035,10 +2055,10 @@ impl<'a, 's> StateVarCollector<'a, 's> {
     /// detection replaces the per-statement byte scan
     /// `memmem::find(result.as_bytes(), b"$props()")` that used to live
     /// in `transform_client_runes_with_skip_and_state`.
-    fn try_rewrite_props_destructuring_declaration(
-        &mut self,
-        decl: &VariableDeclaration<'_>,
-    ) -> bool {
+    /// Whether `try_rewrite_props_destructuring_declaration` owns this declaration,
+    /// and so whether it registers no names. Shared with the hoisting pre-pass, which
+    /// must skip exactly the same declarations or it shadows the props themselves.
+    fn is_props_destructuring_declaration(&self, decl: &VariableDeclaration<'_>) -> bool {
         if decl.declarations.len() != 1 {
             return false;
         }
@@ -2046,7 +2066,7 @@ impl<'a, 's> StateVarCollector<'a, 's> {
         let Some(init) = &declarator.init else {
             return false;
         };
-        let (init, init_span) = init_without_parens(init);
+        let (init, _) = init_without_parens(init);
         let Expression::CallExpression(call) = init else {
             return false;
         };
@@ -2059,20 +2079,36 @@ impl<'a, 's> StateVarCollector<'a, 's> {
         if ident.name != "$props" || self.is_shadowed("$props") {
             return false;
         }
-        // The text helper needs `ComponentAnalysis` for binding-kind /
-        // accessor / immutable lookups. Unit-test paths construct the
-        // visitor with `analysis: None` and therefore bypass this
-        // migration, falling back to whatever the unit test set up.
+        // The text helper needs `ComponentAnalysis` for binding-kind / accessor /
+        // immutable lookups. Unit-test paths construct the visitor with
+        // `analysis: None` and therefore bypass this migration.
+        if self.analysis.is_none() {
+            return false;
+        }
+        matches!(
+            &declarator.id,
+            BindingPattern::BindingIdentifier(_) | BindingPattern::ObjectPattern(_)
+        )
+    }
+
+    fn try_rewrite_props_destructuring_declaration(
+        &mut self,
+        decl: &VariableDeclaration<'_>,
+    ) -> bool {
+        if !self.is_props_destructuring_declaration(decl) {
+            return false;
+        }
+        let declarator = &decl.declarations[0];
+        let Some(init) = &declarator.init else {
+            return false;
+        };
+        let (init, init_span) = init_without_parens(init);
+        let Expression::CallExpression(call) = init else {
+            return false;
+        };
         let Some(analysis) = self.analysis else {
             return false;
         };
-        let is_supported_pattern = matches!(
-            &declarator.id,
-            BindingPattern::BindingIdentifier(_) | BindingPattern::ObjectPattern(_)
-        );
-        if !is_supported_pattern {
-            return false;
-        }
 
         // Walk inner expressions (default-value sub-trees, etc.) so any
         // state-var refs register their `$.get(...)` replacements. We
@@ -2994,20 +3030,7 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
             return;
         }
 
-        // Register declared names in the current scope for shadowing detection.
-        // A state declaration must not register its own names — that would make
-        // `is_shadowed()` true and suppress every transform for them.
-        for declarator in &decl.declarations {
-            if self.is_known_transform_declaration(declarator) {
-                if self.is_reactive_transform_declaration(declarator) {
-                    self.collect_active_state_binding_names(&declarator.id);
-                } else {
-                    self.collect_binding_names_skip_state(&declarator.id);
-                }
-            } else {
-                self.collect_binding_names(&declarator.id);
-            }
-        }
+        self.register_declaration_names(decl);
         // Then walk the declaration normally (to visit initializers, etc.)
         walk::walk_variable_declaration(self, decl);
     }
@@ -3163,6 +3186,26 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
                 stmts,
                 self.source,
             ));
+        // Upstream resolves a reference against a scope that already holds every
+        // declaration of its block, so a name shadows above its own declaration too.
+        // Registering only on the way past the declarator left
+        // `const r = typeof v; function v() {}` reading the component's binding.
+        for stmt in stmts {
+            match stmt {
+                Statement::VariableDeclaration(decl) => self.register_declaration_names(decl),
+                Statement::FunctionDeclaration(func) => {
+                    if let Some(id) = &func.id {
+                        self.declare_in_current_scope(&id.name);
+                    }
+                }
+                Statement::ClassDeclaration(class) => {
+                    if let Some(id) = &class.id {
+                        self.declare_in_current_scope(&id.name);
+                    }
+                }
+                _ => {}
+            }
+        }
         walk::walk_statements(self, stmts);
     }
 
