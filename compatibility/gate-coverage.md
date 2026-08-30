@@ -1184,6 +1184,27 @@ recorded set to shrink deliberately rather than silently. The hazard the field i
 it can also hide a real divergence; only "official's output for this target does not parse"
 justifies it, and nothing enforces that rule mechanically.
 
+**And the opt-out is written per (declaration, container) pair, so it is exactly as wide as the
+axis values its author enumerated.** `rune-statement-container` excluded
+`state-let × switch-case-bare` on the client for #3420 — a lexical rune declared bare in a `case`
+clause, which official lowers while leaving its references untransformed. The same defect applies
+to `$derived`, and **the family had no `derived-let` row at all**, so that half was neither
+excluded nor compared: it was invisible, not tolerated. **[D]** It surfaced only when a probe run
+for an unrelated fix widened the declaration axis to seven values and found official returning the
+`Derived` object itself. An exclusion is a statement about the cells that exist; the cells that do
+not exist are a separate question, and the ratchet cannot ask it.
+
+**A related discipline about the write-up rather than the gate.** An upstream defect recorded here
+is usually summarised from the first shape that reproduced it, and that summary becomes the pin.
+`grass`'s slash divergence was first written as "a nested rule whose compound selector carries
+`:not()`", which is right about the reproducer and wrong about the rule twice over — the trigger is
+the Sass `not` **keyword** followed by `(` (`:nots(`, `:xnot(`, `:is(` all agree), and the effect
+leaks to every later slash list in the file, including a top-level rule after the block. Written
+the narrow way, the pin passes on a build that fixes either half alone. **Do not write an upstream
+bug's summary until the trigger has been narrowed from BOTH sides — one input that fires it and one
+that removes each condition and does not.** A one-sided summary does not merely under-describe; as
+a pin it manufactures green.
+
 ### Blind spot 5n — `constant-fold` compares text, so it cannot see what the folded code *does*
 
 Family `constant-fold` (17 expression kinds × 15 `EXPRESSION_SLOTS`, plus 2 `const`
