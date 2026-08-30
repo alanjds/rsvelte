@@ -22,9 +22,22 @@ if (!file) {
 	process.exit(2);
 }
 
+// Two of the 64 ratchets hold OBJECTS, not strings, and `String(entry)` collapses
+// every one of them to `[object Object]` — which reported scss's 315 entries and
+// fmt-oracle-excluded's 29 as a single unit that can never be new. Free prose is
+// dropped so a reworded justification is not a new unit; every other field is identity.
+const PROSE = new Set(['reason', 'justification', 'note', 'comment']);
+const identity = (entry) => {
+	if (typeof entry !== 'object' || entry === null) return String(entry);
+	return Object.keys(entry)
+		.sort()
+		.filter((k) => !PROSE.has(k))
+		.map((k) => `${k}=${entry[k]}`)
+		.join('|');
+};
 const keysOf = (text) => {
 	const j = JSON.parse(text);
-	return Array.isArray(j) ? j.map(String) : Object.keys(j);
+	return Array.isArray(j) ? j.map(identity) : Object.keys(j);
 };
 // Two ways a key carries its CONTENT rather than its identity, and both end it:
 // the `[count=…,hash=…]` / `[official=…,rsvelte=…]` bracket, and the corpus
