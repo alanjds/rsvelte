@@ -440,6 +440,19 @@ Five of the 21 clear **zero** requests on their own — they only ever co-occur 
 signature by occurrence (`completion | /items : missing-rsvelte`, 436) clears 8 requests when
 closed in greedy order, while the largest by *coverage* clears 231.
 
+**Both sweeps are measured on a population 27m shows is majority-degraded, and that changes what
+the numbers mean.** Their file selection is an evenly-spaced sample of bits-ui's 617 components,
+so it inherits the repository's composition: replaying the selection against 27m's classification,
+**34 of the 50** signature-sweep files and **14 of the 25** coverage-curve files are ones upstream
+cannot project at all. The signature *set* is still a set — a cause seen on a degraded file is
+still a cause — but the shares, the 98.5% completion divergence rate, and the greedy curve are
+weighted by an oracle that is answering from the instance script alone. Two projectable files
+measured the same day point the other way and are worth stating as the contrast rather than as a
+result: on them 1 of 34 definition divergences has `official == []`, against **46 of 61** on four
+degraded files, and their residue is almost entirely `missing-rsvelte` (24/24 and 9/10) — the
+opposite direction from the degraded population's `extra-rsvelte`. n=2; treat it as a reason to
+re-run the sweep on a filtered population, not as the answer.
+
 ### Blind spot 27h — the oracle is calibrated against upstream's snapshots, and the floor is loose [D]
 
 Every positive control this gate had was satisfied by an official server that answers *something*:
