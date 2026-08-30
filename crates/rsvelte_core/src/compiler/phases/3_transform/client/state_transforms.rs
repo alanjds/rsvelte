@@ -1657,6 +1657,37 @@ fn tag_legacy_source(call: String, name: &str, dev: bool) -> String {
     }
 }
 
+/// Split `<indent><keyword> ` / the comment run that follows it / the declarator,
+/// for a declaration `declaration_split` rebuilt. `None` when the keyword is
+/// followed directly by its declarator, which is every other declaration.
+fn split_keyword_comment_run(line: &str) -> Option<(&str, &str, &str)> {
+    let indent_len = line.len() - line.trim_start().len();
+    let trimmed = &line[indent_len..];
+    let keyword = ["let ", "const ", "var "]
+        .into_iter()
+        .find(|keyword| trimmed.starts_with(keyword))?;
+    let head_len = indent_len + keyword.len();
+    let mut at = head_len;
+    let bytes = line.as_bytes();
+    let mut found = false;
+    loop {
+        while bytes.get(at).is_some_and(|b| matches!(b, b' ' | b'\t')) {
+            at += 1;
+        }
+        if line[at..].starts_with("//") {
+            at += line[at..].find('\n')? + 1;
+        } else if line[at..].starts_with("/*") {
+            at += line[at..].find("*/")? + 2;
+        } else if bytes.get(at) == Some(&b'\n') && found {
+            at += 1;
+        } else {
+            break;
+        }
+        found = true;
+    }
+    found.then(|| (&line[..head_len], &line[head_len..at], &line[at..]))
+}
+
 /// Is `pos` at the statement's own brace depth, rather than inside a function or
 /// block the statement contains?
 ///
@@ -1698,6 +1729,21 @@ pub(super) fn transform_legacy_state_declarations<'a>(
 ) -> Cow<'a, str> {
     if legacy_state_vars.is_empty() {
         return Cow::Borrowed(line);
+    }
+
+    // `declaration_split` prints a rebuilt declaration's comments between the
+    // keyword and the declarator, and every needle below is the literal
+    // `"<keyword> <var> ="`. Transform the comment-free form and print the
+    // comments back, or a commented declaration silently keeps its raw value
+    // and loses its reactivity.
+    if let Some((head, comments, tail)) = split_keyword_comment_run(line) {
+        let inner = format!("{head}{tail}");
+        let transformed =
+            transform_legacy_state_declarations(&inner, legacy_state_vars, immutable, dev);
+        return match transformed.strip_prefix(head) {
+            Some(rest) => Cow::Owned(format!("{head}{comments}{rest}")),
+            None => Cow::Owned(transformed.into_owned()),
+        };
     }
 
     // Handle multi-declarator statements like `let a = 1, b = 2, c = 3;`

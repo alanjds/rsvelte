@@ -852,6 +852,9 @@ fn collect_binding_writes(
             && let AstKind::VariableDeclaration(var_decl) =
                 semantic.nodes().parent_kind(declaration_node.id())
             && var_decl.kind == oxc_ast::ast::VariableDeclarationKind::Let
+            // ESLint merges a redeclared `let` into one variable carrying two
+            // write references, which its single-writer check then rejects.
+            && scoping.symbol_redeclarations(id).is_empty()
         {
             let init_span = init.span();
             // ESLint reports the binding through its declarator, so a TypeScript

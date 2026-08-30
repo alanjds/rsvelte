@@ -85,6 +85,44 @@ Whoever picks this up should also read the Linux caveat above as a constraint on
 measure*, not only on what they can commit: a local macOS run reports a different set, so it can
 produce a classification but not a count.
 
+## The 42-vs-42 question is answered, and the cluster is one question about `$name`
+
+Measured 2026-08-31 on the 123 listed ids by running both implementations directly with the
+options `svelte2tsx-compile.mjs` passes (`{filename, isTsFile, mode:'ts', namespace:'html',
+version:'5'}`) and taking the first differing line after blank-line normalization. The bucket
+sizes reproduce this file's own table exactly — 42 extra-marker, 8 missing-marker, 16
+`ensureType` — which is the evidence that the *classification* is stable even though a macOS run
+cannot be trusted for a count.
+
+**They are not the same 42.** `svelte-lexical` contributes 42 entries and the extra-marker cluster
+holds 42, but the intersection is **36**: six `svelte-lexical` entries are in the tail, and the
+cluster's other six come from `svelte-inspect-value` (4), `sveltekit` (1) and `trakt-web` (1). So
+it is neither one repository's pattern nor a coincidence — it is an emitter-wide defect that one
+repository concentrates.
+
+**And the marker is a symptom, not the cause.** In 41 of the 42, rsvelte emits a
+`let $<name> = __sveltets_2_store_get(<name>);` declaration — inside the `/*Ωignore_startΩ*/`
+region, which is why the region marker is what the first differing line shows — and **official
+emits no `__sveltets_2_store_get` at all** in the same file. The question is therefore *when does
+`$name` become a store subscription*, one level below the marker. Splitting the 41 by whether the
+component is in runes mode and by where the `$name` text actually occurs:
+
+| n | component | where `$name` occurs | example |
+|---|---|---|---|
+| 28 | runes | in code | `svelte-lexical/…/TypeAheadMenu.svelte` — `$getSelection`, `$isRangeSelection` imported from `lexical` |
+| 9 | legacy | in code | `svelte-lexical/…/FontSizeDropDown.svelte` — same names, legacy component |
+| 4 | runes | **only inside a string literal** | `svelte-inspect-value/…/+layout.svelte` — the only `$types` in the file is `from './$types.js'` |
+
+The four string-literal cases are a scan reading a quoted import path, which the *compiler's* copy
+of this decision already excludes (`2_analyze/store_subscriptions.rs` skips object keys, member
+properties, string literals and comments). A fifth file, `trakt-web/…/Switch.svelte`, has its only
+`$color` inside a `<style lang="scss">` block, where it is an SCSS variable. So this is another
+instance of [`two-ports-inventory.md`](two-ports-inventory.md)'s shape: the svelte2tsx port carries
+its own answer to a question the compiler already answers, and no gate compares the two.
+
+The runes rows are the larger half and the same family as #3127/#3128: in runes mode `$name` is
+never a store subscription, and 32 of the 41 are components official reads as runes.
+
 
 
 The former `pattern/issues/3200-asi-reactive-block.svelte` entry was removed when

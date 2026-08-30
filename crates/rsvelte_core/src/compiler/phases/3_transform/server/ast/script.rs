@@ -989,7 +989,6 @@ fn transform_script<'a>(
     for stmt in ret.program.body.iter() {
         let stmt_span = stmt.span();
         let out_len = out.len();
-        let sink_len = import_sink.as_deref().map_or(0, Vec::len);
         // Set by every branch that re-parses the statement WHOLE from a source
         // range, to that range.
         let mut verbatim: Option<Span> = None;
@@ -1233,9 +1232,8 @@ fn transform_script<'a>(
             }
         }
 
-        let into_sink = import_sink.as_deref().is_some_and(|s| s.len() > sink_len);
         let anchor = out.iter().skip(out_len).position(anchors_a_region);
-        if !into_sink && anchor.is_none() {
+        if anchor.is_none() {
             continue;
         }
         if carried {
@@ -1271,16 +1269,10 @@ fn transform_script<'a>(
         if place.is_none() && verbatim.is_some() && !ret.program.comments.is_empty() {
             place = place_on_position(&mut state.comments, src, region_start, stmt_span, verbatim);
         }
-        if let Some(mut place) = place {
-            if into_sink {
-                if let Some(sink) = import_sink.as_deref_mut()
-                    && let Some(first) = sink.get_mut(sink_len)
-                {
-                    place.visit_statement(first);
-                }
-            } else if let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i)) {
-                place.visit_statement(first);
-            }
+        if let Some(mut place) = place
+            && let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i))
+        {
+            place.visit_statement(first);
         }
         region_start = if verbatim.is_some() || trailing_end > stmt_span.end {
             trailing_end
@@ -3779,7 +3771,6 @@ fn transform_script_legacy<'a>(
             });
         let out_len = out.len();
         let reactive_len = reactive.len();
-        let sink_len = import_sink.as_deref().map_or(0, Vec::len);
         // Set by every branch that re-parses the statement WHOLE from a source
         // range, to that range.
         let mut verbatim: Option<Span> = None;
@@ -3790,6 +3781,35 @@ fn transform_script_legacy<'a>(
         // flush point, which matters once a `$:` statement is reordered past it.
         let mut rebuilt_but_located = false;
         let mut defer_block_reactive_trailing = false;
+        // A SPLIT declaration is rebuilt statement-per-declarator upstream, so a
+        // comment ahead of a declarator flushes at that declarator rather than
+        // before the keyword. Carry them onto the region only when every comment
+        // in it sits in a GAP — before the first declarator or between two of
+        // them. One inside a declarator's own span would need the init to keep
+        // its coordinates, which this lowering blanks, and one past the last
+        // declarator belongs inside the `$.fallback(...)` call upstream builds.
+        let stmt_trailing_end = trailing_comment_end(src, &ret.program.comments, stmt_span.end);
+        let carry_leading = matches!(
+            stmt,
+            Statement::VariableDeclaration(_) | Statement::ExportDeclaration(_)
+        ) && multi_declarator_gaps(stmt).is_some_and(|(last_start, spans)| {
+            let mut carried_comments = 0usize;
+            for c in &ret.program.comments {
+                if c.span.start < region_start || c.span.end > stmt_trailing_end {
+                    continue;
+                }
+                if c.span.end > last_start
+                    || spans
+                        .iter()
+                        .any(|d| c.span.start < d.end && c.span.end > d.start)
+                {
+                    return false;
+                }
+                carried_comments += 1;
+            }
+            carried_comments > 0
+        });
+        let mut carried = false;
 
         'emit: {
             match stmt {
@@ -3852,6 +3872,8 @@ fn transform_script_legacy<'a>(
                                 true,
                                 &mut array_counter,
                                 &mut verbatim,
+                                carry_leading,
+                                &mut carried,
                             );
                             if verbatim.is_none() {
                                 rebuilt_but_located = true;
@@ -3894,6 +3916,8 @@ fn transform_script_legacy<'a>(
                         false,
                         &mut array_counter,
                         &mut verbatim,
+                        carry_leading,
+                        &mut carried,
                     );
                     if verbatim.is_none() {
                         rebuilt_but_located = true;
@@ -3933,16 +3957,17 @@ fn transform_script_legacy<'a>(
                         // `loc` while the declaration around it has none — and
                         // the hoist is printed FIRST, which makes it the flush
                         // point for every comment written before that target.
-                        let decl_anchor =
-                            if decl_names.is_empty() || ret.program.comments.is_empty() {
-                                None
-                            } else {
-                                state.comments.register_anchor()
-                            };
+                        // The anchor is taken AFTER this statement's own leading
+                        // region is registered, at the end of the loop: the hoist is
+                        // printed first, so a comment registered after the anchor
+                        // flushes at the NEXT declarator instead of this one.
+                        let wants_decl_anchor =
+                            !decl_names.is_empty() && !ret.program.comments.is_empty();
                         reactive.push(ReactiveEntry {
                             stmt: rehomed,
                             decl_names,
-                            decl_anchor,
+                            decl_anchor: None,
+                            wants_decl_anchor,
                             assigns,
                             deps,
                         });
@@ -4049,9 +4074,35 @@ fn transform_script_legacy<'a>(
             }
             continue;
         }
-        let into_sink = import_sink.as_deref().is_some_and(|s| s.len() > sink_len);
         let anchor = out.iter().skip(out_len).position(anchors_a_region);
-        if !into_sink && anchor.is_none() && reactive.len() == reactive_len {
+        if anchor.is_none() && reactive.len() == reactive_len {
+            continue;
+        }
+        if carried
+            && let Some(base) = register_comment_region(
+                &mut state.comments,
+                src,
+                &ret.program.comments,
+                region_start,
+                stmt_trailing_end,
+            )
+        {
+            // A region survives only if the walk reaches it at a STATEMENT
+            // position; reached first from inside an expression it is read
+            // as a fragment of a dropped statement and discarded. The
+            // rebuilt statement is location-less, so anchor it at the head
+            // of the region — before every comment in it, which is what
+            // leaves them to flush at the declarator.
+            if let Some(first) = out.get_mut(out_len)
+                && let Statement::VariableDeclaration(v) = first
+            {
+                v.span = Span::new(region_start, region_start + 1);
+            }
+            let mut place = comments::Place::Shift(base - region_start);
+            for emitted in out.iter_mut().skip(out_len) {
+                place.visit_statement(emitted);
+            }
+            region_start = stmt_trailing_end;
             continue;
         }
         // Anchor the region on the first statement this source statement emitted
@@ -4071,17 +4122,11 @@ fn transform_script_legacy<'a>(
         {
             place = place_on_position(&mut state.comments, src, region_start, stmt_span, verbatim);
         }
-        if place.is_none() && reactive_leading_comment_pending && !into_sink && anchor.is_some() {
+        if place.is_none() && reactive_leading_comment_pending && anchor.is_some() {
             place = place_on_position(&mut state.comments, src, region_start, stmt_span, verbatim);
         }
         if let Some(mut place) = place {
-            if into_sink {
-                if let Some(sink) = import_sink.as_deref_mut()
-                    && let Some(first) = sink.get_mut(sink_len)
-                {
-                    place.visit_statement(first);
-                }
-            } else if let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i)) {
+            if let Some(first) = anchor.and_then(|i| out.get_mut(out_len + i)) {
                 place.visit_statement(first);
             } else if let Some(entry) = reactive.get_mut(reactive_len) {
                 // Upstream rebuilds the `$` label as a loc-less `b.labeled(...)`
@@ -4113,6 +4158,12 @@ fn transform_script_legacy<'a>(
                 );
                 state.mark_deferred_tail_comment_landed(index);
             }
+        }
+        if let Some(entry) = reactive.get_mut(reactive_len)
+            && entry.wants_decl_anchor
+        {
+            entry.decl_anchor = state.comments.register_anchor();
+            entry.wants_decl_anchor = false;
         }
         if is_reactive && reactive_leading_comment {
             reactive_leading_comment_pending = true;
@@ -4193,6 +4244,9 @@ struct ReactiveEntry<'a> {
     /// anchored at, standing in for the source `loc` of the `$:` assignment
     /// target upstream carries onto them.
     decl_anchor: Option<u32>,
+    /// Set at collection; the anchor itself is registered once the statement's
+    /// leading comments are in the buffer, so they sort before it.
+    wants_decl_anchor: bool,
     /// Instance-scope binding indices this statement assigns to.
     assigns: Vec<usize>,
     /// Instance-scope binding indices this statement depends on (reads), with
@@ -4379,8 +4433,22 @@ impl<'a> oxc_ast_visit::Visit<'a> for ReactiveScopedCollector {
     }
 
     fn visit_update_expression(&mut self, it: &oxc_ast::ast::UpdateExpression<'a>) {
-        if let oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = &it.argument {
-            self.push_assign(id.name.as_str());
+        match &it.argument {
+            oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
+                self.push_assign(id.name.as_str());
+            }
+            // `UpdateExpression.js` takes `object(node.argument)`, so `o.x++`
+            // assigns `o` — where `o.x = …` assigns nothing, because
+            // `AssignmentExpression.js` filters `extract_identifiers` to
+            // Identifiers and a member target is not one.
+            other => {
+                if let Some(name) = other
+                    .as_member_expression()
+                    .and_then(update_target_root_name)
+                {
+                    self.push_assign(name);
+                }
+            }
         }
         oxc_ast_visit::walk::walk_update_expression(self, it);
     }
@@ -4517,6 +4585,8 @@ fn lower_legacy_var_decl<'a>(
     is_export: bool,
     array_counter: &mut u32,
     verbatim: &mut Option<Span>,
+    carry: bool,
+    carried: &mut bool,
 ) -> Vec<Statement<'a>> {
     if vd.declarations.first().is_some_and(|d| {
         let mut leaves: Vec<String> = Vec::new();
@@ -4533,6 +4603,13 @@ fn lower_legacy_var_decl<'a>(
     }
 
     let b = state.b;
+    // Comment-carry: upstream SPLITS a multi-declarator declaration into one
+    // builder-made statement per declarator, so the statement has no `loc` and
+    // esrap flushes the declaration's leading comments at the first located node
+    // inside it — the binding pattern, which prints AFTER the keyword. Only the
+    // identifier-prop shape below can be given that node here; every other
+    // branch poisons the carry and keeps the collapse-onto-one-address form.
+    let mut poisoned = !carry;
     let kind = match vd.kind {
         VariableDeclarationKind::Const => VariableDeclarationKind::Const,
         VariableDeclarationKind::Var => VariableDeclarationKind::Var,
@@ -4577,9 +4654,20 @@ fn lower_legacy_var_decl<'a>(
         if has_props {
             let pat_span = d.id.span();
             let pat_slice = &src[pat_span.start as usize..pat_span.end as usize];
-            let Some(pat) = state.reparse_pattern(pat_slice) else {
+            let Some(mut pat) = state.reparse_pattern(pat_slice) else {
                 continue;
             };
+            if !poisoned && matches!(pat, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
+                // `reparse_pattern` wraps as `let <slice> = 0;` (offset 4), so the
+                // pattern's spans have to be put back on source coordinates for
+                // the region shift to land them after the leading comments.
+                ShiftBy {
+                    delta: i64::from(pat_span.start) - 4,
+                }
+                .visit_binding_pattern(&mut pat);
+            } else {
+                poisoned = true;
+            }
 
             if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &pat {
                 // `let x = $$props['alias']` or `… = $.fallback($$props['alias'], …)`.
@@ -4600,10 +4688,19 @@ fn lower_legacy_var_decl<'a>(
                         )
                     }
                 };
+                let mut init = init;
+                if !poisoned {
+                    // Only the pattern is a located node upstream keeps here;
+                    // the `$.fallback(...)` wrapper is builder-made. A re-parsed
+                    // init carries slice-relative spans, which the shift would
+                    // scatter across the region, so blank them.
+                    BlankSpans.visit_expression(&mut init);
+                }
                 decls.push((pat, Some(init)));
                 // A single identifier declarator → one statement.
                 out.push(b.var_decl_from_pairs(kind, decls));
             } else {
+                poisoned = true;
                 // Destructured export: `export let { x: foo, z: [bar] } = …` —
                 // the LEAVES are the prop names. Emit `tmp = init`, then one
                 // `leaf = $.fallback($$props[alias], <access>)` per path (写经
@@ -4628,13 +4725,24 @@ fn lower_legacy_var_decl<'a>(
         if has_state {
             let pat_span = d.id.span();
             let pat_slice = &src[pat_span.start as usize..pat_span.end as usize];
-            let Some(pat) = state.reparse_pattern(pat_slice) else {
+            let Some(mut pat) = state.reparse_pattern(pat_slice) else {
                 continue;
             };
-            let init_expr = d
+            if !poisoned && matches!(pat, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
+                ShiftBy {
+                    delta: i64::from(pat_span.start) - 4,
+                }
+                .visit_binding_pattern(&mut pat);
+            } else {
+                poisoned = true;
+            }
+            let mut init_expr = d
                 .init
                 .as_ref()
                 .map(|init| reparse_init_read_wrapped(init, src, state));
+            if !poisoned && let Some(e) = init_expr.as_mut() {
+                BlankSpans.visit_expression(e);
+            }
             if matches!(pat, oxc_ast::ast::BindingPattern::BindingIdentifier(_)) {
                 // `let x = <init>` where `x` is reactive legacy state — kept
                 // verbatim (the reactivity is handled by `$:`-driven reruns).
@@ -4657,7 +4765,19 @@ fn lower_legacy_var_decl<'a>(
         // Plain declarator (no prop / no state leaves). Re-parse the whole
         // declarator and route its init through read-wrapping.
         let slice = &src[d.span.start as usize..d.span.end as usize];
-        if let Some((pat, mut init)) = state.reparse_declarator(slice, kind) {
+        if let Some((mut pat, mut init)) = state.reparse_declarator(slice, kind) {
+            if !poisoned {
+                // The whole declarator was re-parsed, so both halves can go back
+                // on source coordinates — `reparse_declarator` wraps as
+                // `let <slice>;`, offset 4.
+                let mut shift = ShiftBy {
+                    delta: i64::from(d.span.start) - 4,
+                };
+                shift.visit_binding_pattern(&mut pat);
+                if let Some(e) = init.as_mut() {
+                    shift.visit_expression(e);
+                }
+            }
             if let Some(init) = init.as_mut() {
                 super::read_wrap::wrap_reads(
                     init,
@@ -4671,7 +4791,41 @@ fn lower_legacy_var_decl<'a>(
         }
     }
 
+    *carried = !poisoned && !out.is_empty();
     out
+}
+
+/// For a declaration upstream SPLITS — more than one top-level declarator,
+/// reached through an `export` wrapper or directly — the last declarator's start
+/// and every declarator's span. `None` for anything else, which upstream emits
+/// as one statement that keeps its `loc`. The bound is the DECLARATOR, not the
+/// declaration: a comment between the keyword and the name is one esrap also
+/// flushes at the pattern, and it is the source's own line break there that
+/// decides how it prints.
+fn multi_declarator_gaps(stmt: &Statement<'_>) -> Option<(u32, Vec<Span>)> {
+    let vd = match stmt {
+        Statement::VariableDeclaration(vd) => vd.as_ref(),
+        Statement::ExportDeclaration(exp) => match &exp.declaration {
+            oxc_ast::ast::Declaration::VariableDeclaration(vd) => vd.as_ref(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if vd.declarations.len() < 2 {
+        return None;
+    }
+    let last_start = vd.declarations.last()?.span.start;
+    Some((last_start, vd.declarations.iter().map(|d| d.span).collect()))
+}
+
+/// Make every span location-less, so a builder-made subtree stays invisible to
+/// esrap's comment cursor after a region shift.
+struct BlankSpans;
+
+impl VisitMut<'_> for BlankSpans {
+    fn visit_span(&mut self, span: &mut Span) {
+        *span = Span::new(0, 0);
+    }
 }
 
 /// Whether the legacy instance binding `name` is a component PROP
@@ -4925,6 +5079,21 @@ fn collect_legacy_reactive_decls(
 
 /// Extract identifier names from an assignment target (simple id, or destructure
 /// array/object pattern leaves).
+/// The identifier a member chain bottoms out at, or `None` when it does not —
+/// upstream's `object()`, which returns null for a chain rooted at a call.
+fn update_target_root_name<'a>(expr: &'a oxc_ast::ast::MemberExpression<'a>) -> Option<&'a str> {
+    let mut object = expr.object();
+    loop {
+        match object {
+            oxc_ast::ast::Expression::Identifier(id) => return Some(id.name.as_str()),
+            oxc_ast::ast::Expression::StaticMemberExpression(m) => object = &m.object,
+            oxc_ast::ast::Expression::ComputedMemberExpression(m) => object = &m.object,
+            oxc_ast::ast::Expression::PrivateFieldExpression(m) => object = &m.object,
+            _ => return None,
+        }
+    }
+}
+
 fn collect_assignment_target_idents(
     target: &oxc_ast::ast::AssignmentTarget,
     out: &mut Vec<String>,

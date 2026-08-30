@@ -202,7 +202,9 @@ where
 
             AttributeValuePart::ExpressionTag(expr_tag) => {
                 // Try to evaluate at compile time (constant folding)
-                if let Some(lit_value) = get_literal_value(&expr_tag.expression, context) {
+                if let Some(lit_value) =
+                    get_literal_value(&expr_tag.expression, &expr_tag.metadata.expression, context)
+                {
                     // Successfully evaluated - fold into current text
                     if let Some(val) = lit_value {
                         current_text.push_str(&val);
@@ -946,9 +948,11 @@ fn build_style_attribute_value_with_memoization(
                         // - Literal nodes are inlined directly (lines 121-124)
                         // - Identifiers referencing constant bindings are evaluated via
                         //   scope.evaluate() and inlined if is_known (lines 135-163)
-                        if let Some(lit_value) =
-                            super::utils::get_literal_value(&expr_tag.expression, context)
-                        {
+                        if let Some(lit_value) = super::utils::get_literal_value(
+                            &expr_tag.expression,
+                            &expr_tag.metadata.expression,
+                            context,
+                        ) {
                             if let Some(val) = lit_value {
                                 current_text.push_str(&val);
                             }

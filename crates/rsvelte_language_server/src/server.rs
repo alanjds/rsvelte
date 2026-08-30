@@ -48,9 +48,10 @@ use crate::tsgo_code_actions::{
     TsgoCodeActionContext, document_has_parser_error, rewrite_code_action_response,
 };
 use crate::tsgo_completion::{
-    CompletionAction, CompletionRewriteContext, CompletionSite, completion_action,
+    CompletionAction, CompletionRewriteContext, CompletionSite, adopt_upstream_completion_data,
+    adopt_upstream_item_data, completion_action, restore_tsgo_completion_data,
     rewrite_completion_item_for_context, rewrite_completion_response_for_context,
-    rewrite_visible_tsgo_response,
+    rewrite_visible_tsgo_response, upstream_completion_data_site,
 };
 use crate::tsgo_component_info::{
     ComponentCompletionSite, ComponentInfoAction, ComponentInfoQuery, ComponentInfoRequestId,
@@ -66,7 +67,10 @@ use crate::tsgo_rename::{
     PrepareRenamePlan, RenameDocument, merge_workspace_edits, prepare_rename_plan,
     rewrite_prepare_response, rewrite_workspace_edit,
 };
-use crate::tsgo_response::{RequestDocumentContext, TsgoResponseMapper};
+use crate::tsgo_response::{
+    RequestDocumentContext, TsgoResponseMapper, empty_completion_list, normalize_definition_result,
+    normalize_hover_result, tsgo_unmapped_result, widen_hover_range_over_string_quotes,
+};
 use crate::uri::{path_to_uri, uri_to_path};
 use crate::worker::{FileReferenceSource, Job, Outcome, PreprocessedAnalysis, Worker};
 
@@ -323,6 +327,8 @@ struct PendingTsgoRequest {
     component_references: Option<Uri>,
     file_rename: Option<PendingFileRename>,
     code_lens_resolve: Option<PendingCodeLensResolve>,
+    /// The source document and position an adopted completion `data` names.
+    completion_site_data: Option<(String, serde_json::Value)>,
 }
 
 struct PendingComponentQuery {
@@ -526,6 +532,11 @@ struct Server {
     linted: HashMap<String, u64>,
     pending: HashMap<RequestId, Pending>,
     pending_tsgo: HashMap<RequestId, PendingTsgoRequest>,
+    /// tsgo's own completion `data`, by entry name, for the sites whose items
+    /// currently carry upstream's `{name, uri, position}` payload instead.
+    completion_data: HashMap<String, HashMap<String, serde_json::Value>>,
+    /// Insertion order of `completion_data`, oldest first.
+    completion_order: Vec<String>,
     rename_aggregates: HashMap<RequestId, RenameAggregate>,
     component_queries: HashMap<RequestId, PendingComponentQuery>,
     component_query_requests: HashMap<RequestId, (RequestId, ComponentInfoRequestId)>,
@@ -581,6 +592,8 @@ impl Server {
             linted: HashMap::new(),
             pending: HashMap::new(),
             pending_tsgo: HashMap::new(),
+            completion_data: HashMap::new(),
+            completion_order: Vec::new(),
             rename_aggregates: HashMap::new(),
             component_queries: HashMap::new(),
             component_query_requests: HashMap::new(),
@@ -819,12 +832,12 @@ impl Server {
             Ok(params) => params.text_document_position,
             Err(err) => {
                 log::warn(format_args!("textDocument/completion: {err}"));
-                self.respond_nothing(id);
+                self.respond(Response::new_ok(id, empty_completion_list()));
                 return;
             }
         };
         if !self.settings.completion_enable {
-            self.respond_nothing(id);
+            self.respond(Response::new_ok(id, empty_completion_list()));
             return;
         }
         if !self.settings.native_completion_enabled() {
@@ -988,6 +1001,7 @@ impl Server {
             component_references: None,
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         let child = Request::new(id.clone(), method.to_string(), params);
         if let Err(error) = runtime.client.forward(child.into()) {
@@ -1096,6 +1110,7 @@ impl Server {
             component_references: Some(source_uri),
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         if runtime.client.forward(child.into()).is_ok() {
             self.pending_tsgo.insert(request.id, pending);
@@ -1186,6 +1201,7 @@ impl Server {
                 new_shadow,
             }),
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         if runtime.client.forward(child.into()).is_ok() {
             self.pending_tsgo.insert(request.id, pending);
@@ -1481,6 +1497,7 @@ impl Server {
                 kind,
                 source_uri,
             }),
+            completion_site_data: None,
         };
         if runtime.client.forward(child.into()).is_ok() {
             self.pending_tsgo.insert(id, pending);
@@ -1921,10 +1938,16 @@ impl Server {
         if !self.settings.tsgo_method_enabled(&request.method) {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         }
+        let Ok(completion_site_data) = self.completion_data_site(&mut request) else {
+            // Without tsgo's payload the child rejects the request outright; the
+            // unresolved item is still a valid response to the editor.
+            self.respond(Response::new_ok(request.id, request.params));
+            return;
+        };
         let completion_site = self.completion_site(&request);
         if completion_site == Some(CompletionSite::BlockMarker)
             && fallback_result.is_none()
@@ -1933,7 +1956,7 @@ impl Server {
             // An unfinished unknown `{#...` now makes the compiler reject the
             // projection. Preserve the pre-diagnostic completion response when
             // the native provider also has nothing to offer.
-            self.respond_nothing(request.id);
+            self.respond(Response::new_ok(request.id, empty_completion_list()));
             return;
         }
         let component_site = self.component_completion_site(&request);
@@ -1941,7 +1964,7 @@ impl Server {
         let Some(runtime) = &self.tsgo else {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         };
@@ -1957,7 +1980,7 @@ impl Server {
         if !mapper.map_request(&request.method, &mut request.params) {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         }
@@ -1973,13 +1996,16 @@ impl Server {
             component_references: None,
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data,
         };
         let id = request.id.clone();
         if let Err(error) = runtime.client.forward(request.into()) {
             log::warn(format_args!("could not forward request to tsgo: {error}"));
             self.respond(Response::new_ok(
                 id,
-                pending.fallback_result.unwrap_or(serde_json::Value::Null),
+                pending
+                    .fallback_result
+                    .unwrap_or_else(|| tsgo_unmapped_result(&pending.method)),
             ));
             return;
         }
@@ -2027,12 +2053,59 @@ impl Server {
             component_references: None,
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         if runtime.client.forward(request.into()).is_ok() {
             self.pending_tsgo.insert(id, pending);
         } else {
             self.publish(uri, version, native_fallback);
         }
+    }
+
+    /// The source site a completion request is for. On a resolve, the item the
+    /// editor sends back carries upstream's payload, so tsgo's own `data` has
+    /// to go back on it first — everything downstream reads `data.fileName`.
+    /// `Err` means the payload is unrecoverable and the child must not be asked.
+    fn completion_data_site(
+        &mut self,
+        request: &mut Request,
+    ) -> Result<Option<(String, serde_json::Value)>, ()> {
+        match request.method.as_str() {
+            "textDocument/completion" => Ok(request
+                .params
+                .pointer("/textDocument/uri")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .zip(request.params.get("position").cloned())),
+            "completionItem/resolve" => {
+                let Some(site) = upstream_completion_data_site(&request.params) else {
+                    return Ok(None);
+                };
+                let key = completion_data_key(&site.0, &site.1);
+                if self
+                    .completion_data
+                    .get(&key)
+                    .is_some_and(|stash| restore_tsgo_completion_data(&mut request.params, stash))
+                {
+                    Ok(Some(site))
+                } else {
+                    Err(())
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn remember_completion_data(&mut self, key: String, stash: HashMap<String, serde_json::Value>) {
+        // Keep the most recent sites rather than dropping the current one: a
+        // resolve arrives right after the completion it belongs to.
+        while self.completion_order.len() >= 8 {
+            let oldest = self.completion_order.remove(0);
+            self.completion_data.remove(&oldest);
+        }
+        self.completion_order.retain(|entry| entry != &key);
+        self.completion_order.push(key.clone());
+        self.completion_data.insert(key, stash);
     }
 
     fn completion_site(&self, request: &Request) -> Option<CompletionSite> {
@@ -3055,6 +3128,7 @@ impl Server {
                     component_references,
                     file_rename,
                     code_lens_resolve,
+                    completion_site_data,
                 } = pending;
                 let source_path = document
                     .as_ref()
@@ -3064,7 +3138,15 @@ impl Server {
                     .map(|document| document.source_uri().clone());
                 let completion_context =
                     CompletionRewriteContext::new(source_path.as_deref(), true);
+                let mut adopted_completion_data = None;
                 if let Ok(result) = &mut response.response_result {
+                    // Upstream never carries tsgo's enclosing-declaration span:
+                    // `LocationLink.create(uri, defLocation.range, defLocation.range, …)`.
+                    // Collapsing it before the mapping also keeps a link whose
+                    // enclosing statement merely touches an `Ωignore` region.
+                    if method == "textDocument/definition" {
+                        normalize_definition_result(result);
+                    }
                     if let Some(runtime) = &self.tsgo {
                         let mut mapper = TsgoResponseMapper::for_overlays_with_default_document(
                             &runtime.overlays,
@@ -3082,18 +3164,27 @@ impl Server {
                     match method.as_str() {
                         "textDocument/completion" => {
                             rewrite_completion_response_for_context(result, completion_context);
+                            if let Some((uri, position)) = &completion_site_data {
+                                adopted_completion_data = Some((
+                                    completion_data_key(uri, position),
+                                    adopt_upstream_completion_data(result, uri, position),
+                                ));
+                            }
                             if let Some(site) = completion_site {
                                 let (count, first_is_member) = completion_result_shape(result);
                                 if !matches!(
                                     completion_action(site, count, first_is_member),
                                     CompletionAction::Forward
                                 ) {
-                                    *result = serde_json::Value::Null;
+                                    *result = empty_completion_list();
                                 }
                             }
                         }
                         "completionItem/resolve" => {
                             rewrite_completion_item_for_context(result, completion_context);
+                            if let Some((uri, position)) = &completion_site_data {
+                                adopt_upstream_item_data(result, uri, position);
+                            }
                         }
                         "textDocument/codeAction" => {
                             if let Some(uri) = source_uri.as_ref()
@@ -3127,6 +3218,14 @@ impl Server {
                                 {
                                     lenses.push(component_reference_code_lens(uri));
                                 }
+                            }
+                        }
+                        "textDocument/hover" => {
+                            normalize_hover_result(result);
+                            if let Some(document) =
+                                source_uri.as_ref().and_then(|uri| self.documents.get(uri))
+                            {
+                                widen_hover_range_over_string_quotes(result, document.text());
                             }
                         }
                         _ => {}
@@ -3208,6 +3307,18 @@ impl Server {
                     }
                 } else if let Some(fallback) = fallback_result {
                     response.response_result = Ok(fallback);
+                }
+                // tsgo answers `null` where it has nothing; upstream's plugins do
+                // too, but `PluginHost.getCompletions` still returns the
+                // `CompletionList.create([], false)` its signature promises.
+                if method == "textDocument/completion"
+                    && let Ok(result) = &mut response.response_result
+                    && result.is_null()
+                {
+                    *result = empty_completion_list();
+                }
+                if let Some((key, stash)) = adopted_completion_data {
+                    self.remember_completion_data(key, stash);
                 }
                 if let Some((uri, version)) = push_diagnostics {
                     let diagnostics = response
@@ -3510,6 +3621,7 @@ impl Server {
                         component_references: None,
                         file_rename: None,
                         code_lens_resolve: None,
+                        completion_site_data: None,
                     };
                     requests.push((child_id, request, child_pending));
                 }
@@ -4068,6 +4180,11 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
         }
         _ => {}
     }
+}
+
+/// The cache key for one completion site.
+fn completion_data_key(uri: &str, position: &serde_json::Value) -> String {
+    format!("{uri}|{position}")
 }
 
 fn completion_result_shape(result: &serde_json::Value) -> (usize, bool) {

@@ -3,7 +3,7 @@
 //! A port of the official language server's
 //! `plugins/svelte/features/getHoverInfo.ts`.
 
-use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+use lsp_types::{Hover, HoverContents, MarkedString, MarkupContent, MarkupKind};
 
 use crate::context::{EmbeddedRegions, attribute_context};
 use crate::html_data::attribute as html_attribute;
@@ -32,21 +32,30 @@ const ELSE: &str = ":else";
 
 #[must_use]
 pub fn hover(text: &str, offset: usize) -> Option<Hover> {
-    if EmbeddedRegions::new(text).contains(offset) {
+    let embedded = EmbeddedRegions::new(text);
+    if embedded.in_style(offset) {
         return crate::css::hover(text, offset).map(markdown);
+    }
+    // A script body belongs to tsgo; answering it here spells an import path as
+    // a CSS property.
+    if embedded.in_script(offset) {
+        return None;
     }
     let (window_start, window) = around(text, offset);
 
     if opens_a_tag(window) {
         let tag = tag_at(text, window_start, window, offset)?;
-        return Some(markdown(tag.documentation().to_string()));
+        return Some(plain(tag.documentation().to_string()));
     }
 
     let attribute = attribute_context(text, offset)?;
     if attribute.in_value && attribute.name == "style" {
         return crate::css::hover(text, offset).map(markdown);
     }
+    // `HTMLPlugin.doHover` bails on `possiblyComponent(node)`, so a component's
+    // attributes get no HTML description.
     if !attribute.in_value
+        && !attribute.on_a_component()
         && let Some(data) = html_attribute(attribute.element_tag, attribute.name)
     {
         return Some(markdown(data.description.to_string()));
@@ -57,7 +66,7 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     let modifier = MODIFIERS.iter().find(|modifier| {
         around_offset(attribute.name_start, attribute.name, modifier.name, offset)
     })?;
-    Some(markdown(modifier.documentation()))
+    Some(plain(modifier.documentation()))
 }
 
 /// The `WINDOW` characters before `offset` plus what follows them, as the
@@ -119,6 +128,15 @@ fn around_offset(haystack_start: usize, haystack: &str, needle: &str, offset: us
     start <= offset && start + needle.len() >= offset
 }
 
+/// `getHoverInfo.ts` hands back `{ contents: <string> }`; a `MarkupContent`
+/// wrapper around the same text is a different response on the wire.
+const fn plain(value: String) -> Hover {
+    Hover {
+        contents: HoverContents::Scalar(MarkedString::String(value)),
+        range: None,
+    }
+}
+
 const fn markdown(value: String) -> Hover {
     Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -135,11 +153,14 @@ mod tests {
 
     fn hovered_tag(content: &str, offset: usize) -> Option<String> {
         let hover = hover(content, offset)?;
-        let HoverContents::Markup(content) = hover.contents else {
-            panic!("expected markdown hover");
-        };
-        assert_eq!(content.kind, MarkupKind::Markdown);
-        Some(content.value)
+        match hover.contents {
+            HoverContents::Scalar(MarkedString::String(value)) => Some(value),
+            HoverContents::Markup(content) => {
+                assert_eq!(content.kind, MarkupKind::Markdown);
+                Some(content.value)
+            }
+            _ => panic!("expected a hover body"),
+        }
     }
 
     fn expect_tag(content: &str, offset: usize, tag: SvelteTag) {
@@ -267,5 +288,29 @@ mod tests {
     fn a_tag_inside_a_script_body_is_left_alone() {
         let text = "<script>\n  const a = `{#if}`;\n</script>";
         expect_none(text, text.find("{#if}").unwrap() + 3);
+    }
+
+    #[test]
+    fn a_css_property_name_in_a_script_is_not_a_css_hover() {
+        let text = "<script>\n  import type { A } from \"../types.js\";\n</script>";
+        expect_none(text, text.find("types.js").unwrap() + 1);
+    }
+
+    #[test]
+    fn a_style_body_is_still_answered_from_css() {
+        let text = "<style>\n  h1 { color: red }\n</style>";
+        assert!(hovered_tag(text, text.find("color").unwrap() + 1).is_some());
+    }
+
+    #[test]
+    fn a_components_attribute_has_no_html_description() {
+        let element = "<div class=\"a\">x</div>";
+        assert!(hovered_tag(element, element.find("class").unwrap() + 1).is_some());
+        let component = "<Widget class=\"a\">x</Widget>";
+        expect_none(component, component.find("class").unwrap() + 1);
+        // A `style` value is the CSS plugin's, which upstream does not gate on
+        // the tag being a component.
+        let styled = "<Widget style=\"color: red\">x</Widget>";
+        assert!(hovered_tag(styled, styled.find("color").unwrap() + 1).is_some());
     }
 }

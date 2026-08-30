@@ -90,7 +90,11 @@ whose oracle is the other implementation is only as good as its independent expe
 | [14](#14-what-options-does-the-public-parse-run-with--d) | What options does the public `parse()` run with? | 2 bindings | **[D]** | #3688 open |
 | [15](#15-how-are-public-compile-options-validated--d) | How are public compile options validated? | 3 bindings | **[D]** | #3664 defended at degree 2 |
 | [16](#16-what-is-the-read-form-of-a-name-inside-an-invalidate_inner_signals-body--d) | What is the read form of a name inside an `$.invalidate_inner_signals` body? | 2 | **[D]** | no |
-| [17](#17-does-this-write-target-resolve-to-the-components-binding-or-to-a-shadow--d) | Does this write target resolve to the component's binding, or to a shadow? | 44 rewrite passes, 8 scope-aware | **[D]** | 4 ports closed at degree 1 |
+| [17](#17-does-an-assignment-lhss-computed-index-get-its-sites-read-transform--d-closed) | Does an assignment LHS's computed index get its site's read transform? | 2 (+3 `untrack` rebuilders) | **[D]** | closed |
+| [18](#18-does-a-mutation-of-a-legacy_indirect_bindings-root-get-the-invalidate-wrap-at-all--d-closed) | Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? | 4 | **[D]** | closed |
+| [19](#19-where-does-a-keywords-source-map-anchor-go--d-defended-at-degree-2) | Where does a keyword's source-map anchor go? | 2 | **[D]** | defended at degree 2 |
+| [20](#20-what-does-a--reactive-statement-assign--d-closed) | What does a `$:` reactive statement assign? | 2 | **[D]** | closed |
+| [21](#21-does-this-write-target-resolve-to-the-components-binding-or-to-a-shadow--d) | Does this write target resolve to the component's binding, or to a shadow? | 44 rewrite passes, 8 scope-aware | **[D]** | 4 ports closed at degree 1 |
 
 ---
 
@@ -395,6 +399,30 @@ go divergent → byte-identical on each target and **none** move the other way, 
 shrinking from 15 to 11 divergent lines with the residue in comment placement. A fix measured on
 one direction's population would have scored a one-directional patch green.
 
+**The `is_known` half of the same source-vs-built split closed on 2026-08-30, and its
+population is disjoint from the `is_defined` one above.** `build_template_chunk` folds a chunk
+whose evaluation is known, and upstream evaluates the value it BUILT
+(`memoize(build_expression(...))`). In legacy mode `build_expression` wraps any chunk carrying a
+call, a member expression or an assignment in `(deps…, $.untrack(() => value))`, and
+`scope.evaluate` has no `SequenceExpression` case — so no such chunk is ever known, however
+constant its **source** reads. rsvelte graded the source, so
+`style="margin-bottom:{a.id === b ? '0px' : '0px'}"` folded to a constant and the write was
+hoisted out of `$.template_effect`: the attribute freezes at its first-render value, the output
+parses, and the client and the server agree with each other. `get_literal_value` now declines
+where `build_expression` will wrap, which covers all three chunk builders
+(`shared/utils.rs`, `shared/element.rs`, `title_element.rs`) in one place because they share it.
+
+Two things worth keeping. The guard has to see the **repaired** metadata, not phase 2's raw
+flags: rsvelte's directive paths drop `has_member_expression` / `has_assignment` and the sites
+restore them before `build_expression` reads them, so a guard on the raw flags would let the
+fold and the wrap disagree about one tree. And the measurement is small and one-directional —
+over all 34,709 corpus sources × 3 targets (104,127 compiled units) exactly **6 (id, target)
+pairs move, across 3 ids**, and every one moves toward official: `huly`'s `IconStarted.svelte`
+goes divergent → byte-identical on client and client-dev, and the two `sparrow-app` files shrink
+(53 → 25 and 101 → 87 diverging lines) with **100% of the residue in comment placement**, a
+different defect. Zero server outputs move, which is the positive control for
+`get_literal_value` being client-only.
+
 Still open in this row: `is_expression_known_json`, `is_initial_value_literal_or_known` (the
 `memmem::find(json, b"Literal")` one), `is_value_known_defined` and `is_expression_defined_typed`
 — four `is_known` ports, untouched here, and `is_js_expr_defined` remains a structural second
@@ -574,6 +602,48 @@ ports remain separate because their value domains differ (JS callbacks versus JS
 callbacks), so this closes the demonstrated cells rather than removing the row. A new option or
 validator kind still has to be added to all three ports and their boundary gates.
 
+### 17. Does an assignment LHS's computed index get its site's read transform? — [D], closed
+
+**Upstream** never asks. `Program.js:66-76`'s `replace()` rebuilds the member chain with
+`property: n.property` untouched, because the `mutate` callback is handed a mutation the general
+assignment transform has **already** visited — so by the time `replace()` sees it, the computed
+key already reads `groupKey()`. The invariant is "the LHS is transformed before the store root is
+swapped", and it lives in the call order, not in a function.
+
+**Ports.** rsvelte does not have that ordering, so each assignment path has to re-decide it:
+
+- `client/visitors/shared/utils.rs:1387` — has an `is_store_sub` arm calling
+  `transform_computed_indices_only`, with a comment giving the exact expected output.
+- `client/visitors/expression_converter.rs:5349` — had the `is_prop_binding` arm and **no**
+  store-sub arm, falling through to `left.clone()`.
+
+Three further functions rebuild the same `$.untrack($store)…` chain and each clones `property`
+independently: `shared/component.rs::replace_store_with_untrack` (fixed separately), and
+`replace_store_with_untracked` — which exists **twice**, in `shared/declarations.rs:458` and
+`visitors/program.rs:401`, byte-identical apart from the doc comment and how the arena type is
+spelled.
+
+**Demonstrated**, on two different read forms in one file
+(`pattern-corpus/issues/store-member-computed-key-in-event-handler.svelte`), against official
+5.56.10:
+
+| site | official | rsvelte, before |
+|---|---|---|
+| each-item key | `$.untrack($formData)[groupKey()] = e.detail` | `[groupKey]` |
+| reassigned `let` key | `$.untrack($scrollTop)[$.get(lastHref)] = e.detail` | `[lastHref]` |
+
+`client` and `client-dev` diverge; `server` and `server-dev` are byte-identical, which is what
+localises it to the client assignment path rather than to the store lowering.
+
+Found in the corpus as `appwrite-console/.../resource-form.svelte` and
+`huly/packages/panel/src/components/Panel.svelte` — both were failing on `main` and neither was
+in a ratchet, so **no gate was reporting them**; they surfaced only once the output ratchet's
+unlisted set was enumerated.
+
+**The reusable part** is that the two ports were not a copied table — one had been *fixed* and
+the other had not, and nothing relates them. The comment at `utils.rs:1387` even spells out the
+expected output, which reads as authority while the sibling path silently disagrees.
+
 ### 16. What is the read form of a name inside an `$.invalidate_inner_signals` body? — [D]
 
 **Upstream:** one `build_getter(node, state)` (`3-transform/client/utils.js:33`), called once per
@@ -612,7 +682,107 @@ cannot be made to produce the text the per-line pipeline splices. Closing this a
 retiring the text splice — the client instance-script pipeline AGENTS.md already names as the
 correctness hazard.
 
-### 17. Does this write target resolve to the component's binding, or to a shadow? — [D]
+### 18. Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? — [D], closed
+
+**Upstream:** one test, `AssignmentExpression.js:165` — `if (binding.legacy_indirect_bindings.size
+> 0)` wraps the mutation in `(mutation, $.invalidate_inner_signals(() => { … }))`. Row 16 asks what
+goes *inside* that body; this row asks which rsvelte code paths ask the question at all.
+
+**Ports.** Four, and they are reached by disjoint input shapes:
+
+- `visitors/expression_converter.rs` `wrap_with_legacy_invalidate` — template AST path.
+- `legacy_state_member_mutate_ast.rs:290,324` — instance-script state member mutation.
+- `prop_member_mutate_ast.rs` — instance-script prop member mutation.
+- `reactive_transforms.rs` — a `$:` body. This one had **no** wrap, on either of its two
+  internal routes: the simple-assignment `format!` builders, and `state_member_mutate_ast.rs`,
+  which is a second file with the same body as `legacy_state_member_mutate_ast.rs` and did not
+  take the `invalidate_bodies` map.
+
+**Demonstrated.** `<select bind:value={lodging.type}><option>{$t('hotel')}</option></select>` with
+`$: lodging.tz = allDay ? null : 'x'`: official emits the sequence, rsvelte emitted
+`$.mutate(lodging, $.get(lodging).tz = …)` alone. Reproduces on `adventurelog`'s
+`LodgingDetails.svelte`, twice, at both of that file's `$:` routes.
+
+**What made it hard to see is the shape of the first repro, not the defect.** The first minimal
+file was a *prop* root mutated from a *function body* — a cell that reaches port 1, which already
+wrapped. It went byte-identical on all four targets while the corpus file that motivated it still
+diverged. Crossing the two axes (binding kind × the statement the write sits in) put the
+discriminating cells on the table: the kind axis is flat, and every failing cell is a `$:`.
+A repro going green is evidence about that repro, never about the cause.
+
+**Closed at degree 1** for the `state_member_mutate_ast` route (it now takes the same map and
+builds the same string as its twin) and by construction for the two `format!` builders, which call
+one local helper. The two twin files remain — that is row 16's open half, not this one's.
+
+### 19. Where does a keyword's source-map anchor go? — [D], defended at degree 2
+
+**Upstream:** one `write_source_keyword(context, line, column, keyword)`
+(`esrap/src/languages/ts/index.js:113`) — `location(line, column)`, write the fragment,
+`location(line, column + keyword.length)`. The fragment a declaration passes it is
+`node.kind + ' '`, so the end anchor counts the separator, and esrap's `run()`
+(`esrap/src/index.js:139-146`) pushes one segment per `Location` command with no collapse.
+
+**Ports.**
+
+- `rsvelte_esrap` `Printer::write_keyword` / `KeywordCursor::write` — the client map. Every
+  `Location` reaches `Driver::push_mapping` (`command.rs`).
+- `3_transform/mod.rs` `generate_token_mappings_inner` — the **server** map. `print_split` runs
+  the printer with `emit_locations: false`, so the server's anchors come from a text token scan
+  that matches generated tokens back against the source, not from esrap at all.
+
+**Demonstrated.** On upstream's `sourcemaps/attached-sourcemap` fixture, whose `let` is alone on
+its source line, the two ports were wrong in different ways at the same instant: the client
+emitted no end anchor (a rsvelte-only guard dropped it once `column + keyword.len()` exceeded the
+source line's length), and the server emitted one at `column + 3` (it anchored the token `let`,
+not the fragment `let `). Two further defects in the client port were invisible until the first
+was fixed — `push_mapping` **overwrote** a mapping when the generated position repeated, and
+`keyword_cursor` / `write_keyword` mapped builder-made nodes that upstream skips on `node.loc`,
+so every synthesized `var root = …` anchored at offset 0 of the `.svelte` file. All four are
+fixed; the gate went 768/770 → **770/770** with out-of-range unchanged at 0.
+
+**Defended at degree 2, not closed.** The server does not print through esrap, so there is no
+single implementation to route both through. What the tree now has is four independently-failing
+pins with expectations spelled out rather than read off the other port:
+`crates/rsvelte_esrap/tests/keyword_anchor_fidelity.rs` (three tests, each failing only under its
+own ablation) and `crates/rsvelte_core/tests/server_declaration_keyword_anchor.rs`. Nothing
+compares the two maps to each other, and only one of the 29 sourcemaps samples has a source line
+that separates the two rules — which is why this row was worth writing rather than the fix alone.
+
+### 20. What does a `$:` reactive statement assign? — [D], closed
+
+**Upstream:** one visitor pair feeds one `order_reactive_statements`
+(`phases/3-transform/client/visitors/shared/utils.js`). `AssignmentExpression.js` runs
+`extract_identifiers(node.left)`, which keeps only `Identifier`s — so `$: o.x = 1` assigns
+**nothing** — while `UpdateExpression.js` takes
+`node.argument.type === 'MemberExpression' ? object(node.argument) : node.argument`, so
+`$: o.x++` assigns **`o`**. The asymmetry is the whole decision, and the ordering DFS in
+`order_reactive_statements` reads it.
+
+**Ports.**
+
+- `2_analyze/mod.rs` `CycleFacts::push_update_target` (`:1574`), feeding
+  `order_reactive_statements` (`:3295`) — the client. It recurses through
+  `JsNode::MemberExpression { object, .. }` to the root identifier, i.e. it has upstream's
+  `object()`.
+- `3_transform/server/ast/script.rs` `ReactiveScopedCollector::visit_update_expression`
+  (`:4363`), feeding `topo_sort_reactive` (`:4189`) — the **server**. It matched
+  `AssignmentTargetIdentifier` only, so a member-target update recorded no assignment at all.
+
+**Demonstrated.** `compatibility/pattern-corpus/issues/reactive-member-assignment-cycle.svelte`
+carries `$: data.count++`, `$: if (data.encrypt && size < 150) size = 150;` and
+`$: data.size = size;`. Under the analyze port `data.count++` assigns `data`, so the DFS emits
+the three in the order official does; under the server port it assigned nothing, the edge
+disappeared and `data.count++` sank to last. **The client and client-dev outputs were
+byte-identical to official throughout** — the same source, the same upstream rule, two answers,
+and the divergence lived only on `server` / `server-dev`. That file has been on `main` since
+#3958 and is in no ratchet: `Compiler parity` was red on `main`, so nothing scored it.
+
+**Closed at degree 1 in spirit, not in code.** The server port now applies the same member-chain
+root rule through a `update_target_root_name` helper that returns `None` for a chain rooted at a
+call, mirroring `object()`. The two collectors still exist — the server walks oxc and the
+analyzer walks `JsNode`, so there is no single function to route both through — and nothing
+compares them to each other. The file above is the pin.
+### 21. Does this write target resolve to the component's binding, or to a shadow? — [D]
 
 **Upstream:** every write lowering reaches its binding through **one** `context.state.scope.get(name)`
 — `build_assignment` (`3-transform/client/visitors/AssignmentExpression.js:120`) and
@@ -1028,6 +1198,81 @@ The residue is a different cause and is recorded rather than claimed: for a `var
 reference list **empty**, and the component's `Derived` binding owns the handler's positions —
 so a position-keyed test cannot separate them no matter which port asks it. Two of the 16 cells
 stay red.
+
+### 22. How is an inline `$props()` type hoisted to `$$ComponentProps`? — [D]
+
+**Upstream:** one branch of `handle$propsRune`
+(`svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts`, the "Easy mode" arm). It takes
+`node.initializer.typeArguments?.[0] || node.type` — so the **type-argument** form
+`$props<{…}>()` and the **type-annotation** form `let {…}: {…} = $props()` are the *same*
+`generic_arg` — and relocates it with `preprendStr` + `appendLeft` + **`this.str.move(...)`** +
+`appendRight(surroundWithIgnoreComments('$$ComponentProps'))`. Because the type text is *moved*
+rather than re-emitted, every character of the hoisted alias keeps its magic-string mapping.
+
+**Ports.** Both in `rsvelte_projection` `svelte2tsx/script/props_rune.rs::apply_props_typedef`,
+selected by which flag the same upstream `||` collapses:
+
+- `HAS_TYPE_ARG` (`props_rune.rs:126-150`) mirrors upstream: `prepend_right` + `append_left` +
+  `append_right`, and signals `props_type_arg_hoist` so `process_instance_script_tag.rs:321`
+  performs the `move_range`.
+- `TYPE_ANNOTATION | HOISTABLE_TYPE` (`props_rune.rs:154-176`) does **not** move anything. It
+  `overwrite`s the annotation away at its original site and the alias is re-synthesized as fresh
+  text by `format!` at `process_instance_script_tag.rs:177` / `:199` / `:356`.
+
+**Demonstrated.** Two inputs that differ only in which spelling of the same type upstream's `||`
+picks, both `is_ts_file: true`, counting map segments on the generated `$$ComponentProps` alias
+line:
+
+| input | generated alias line | segments | mapped columns |
+|---|---|---|---|
+| `let { a } = $props<{ a: number }>()` | `type $$ComponentProps = { a: number };…` | **15** | 35/59 |
+| `let { a }: { a: number } = $props()` | `;type $$ComponentProps =  { a: number };…` | **0** | 0/61 |
+
+The generated **text** matches upstream in both cases, which is why the svelte2tsx text gate is
+green on them; the divergence is confined to the map. And the map gate cannot see it either — it
+asserts rsvelte's map is *structurally well-formed*, not equal to official's, because the two are
+segmented too differently to diff. So a diagnostic anywhere in an inline-annotated props type
+resolves to the wrong source position, and nothing in the tree reports it.
+
+**Not closed.** Degree 1 is available in principle — the annotation arm can take the
+type-argument arm's `move_range` path — but it changes which chunk the `;` markers travel with,
+which is exactly the ordering `process_instance_script_tag.rs:301-310` comments as load-bearing,
+so it needs the corpus svelte2tsx text gate rather than a unit test alone.
+
+### 23. What compiler options and shim files does the shadow program get? — [D], opened deliberately
+
+**Upstream:** one function, `plugins/typescript/service.ts`'s `createLanguageService`. It forces
+`target: ts.ScriptTarget.Latest` when the project declares none and raises anything below ES2015
+to ES2015 (`:792-795`), builds its no-project fallback with `include: []` "to not flood the
+initial files" (`:874-878`), and takes its shim set from svelte2tsx's `get_global_types`, which
+always contains `svelte-native-jsx.d.ts` (`svelte2tsx/index.js:5685`).
+
+**Ports.** `rsvelte_language_server` `tsgo_overlay.rs::write_tsconfig` /
+`materialize_support_files`, and `rsvelte_check` `svelte_check/overlay.rs`. They write the same
+kind of generated tsconfig beside the same two vendored shims, and neither calls the other.
+
+**Demonstrated, and this row is the unusual case where the divergence was created here on
+purpose.** All three rules were missing from *both* ports; the language-server one now carries
+them and the svelte-check one does not. Measured on three mini-workspaces against the live
+official server, completion at a script-body position:
+
+| workspace | official has `Temporal`/`DisposableStack`/`AsyncDisposableStack`/`SuppressedError`/`svelteNative` | rsvelte LSP before | rsvelte LSP after |
+|---|---|---|---|
+| no `tsconfig.json` | all five | none | all five |
+| `target: ES5` | `svelteNative` only | none | `svelteNative` only |
+| `target: ESNext` | all five | four (no `svelteNative`) | all five |
+
+The `include` rule is the largest of the three by effect: with no project config rsvelte pulled
+every `.d.ts` in the repository into the program, so bits-ui's own `declare global`s
+(`bitsEscapeLayers` and five siblings) were offered as completions at **55 of 285** sampled
+script-body positions where official offers nothing.
+
+**Why the asymmetry was left.** svelte-check's unit is a type-checked project, so the same change
+moves `check-known-failures.json`, and neither layer of that gate is runnable from the worktree
+this was measured in — Layer 2 needs `submodules/cmsaasstarter` and the skeleton monorepo
+installed from their own lockfiles. Closing this row is degree 1 (`rsvelte_check`'s overlay takes
+the same three rules) plus one run of the check gate; it is not a design question.
+
 
 ## Adding a row, and closing one
 

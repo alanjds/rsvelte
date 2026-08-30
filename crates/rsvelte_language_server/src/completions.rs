@@ -39,8 +39,13 @@ pub fn completions_with_strict_mode(
     offset: usize,
     strict_mode: bool,
 ) -> Option<CompletionList> {
-    if EmbeddedRegions::new(text).contains(offset) {
+    let embedded = EmbeddedRegions::new(text);
+    if embedded.in_style(offset) {
         return crate::css::completions(text, offset);
+    }
+    // A script body belongs to tsgo, not to the CSS provider.
+    if embedded.in_script(offset) {
+        return None;
     }
     let before = preceding(text, offset);
 
@@ -689,6 +694,18 @@ mod tests {
     fn a_moustache_inside_a_script_body_is_left_alone() {
         let text = "<script>\n  const a = `{#`;\n</script>";
         assert_eq!(labels_at(text, text.find("{#").unwrap() + 2), None);
+    }
+
+    #[test]
+    fn a_script_body_gets_no_css_completions() {
+        let text = "<script>\n  const a = 'style=\"colo';\n</script>";
+        assert_eq!(labels_at(text, text.find("colo").unwrap() + 4), None);
+    }
+
+    #[test]
+    fn a_style_body_is_still_answered_from_css() {
+        let text = "<style>\n  h1 { colo }\n</style>";
+        assert!(labels_at(text, text.find("colo").unwrap() + 4).is_some());
     }
 
     #[test]

@@ -2714,9 +2714,13 @@ impl<'a, 's> StateVarCollector<'a, 's> {
                 .await_comment_runs
                 .relocatable_run(self.source, expr.span.start)
             {
-                Some((run_start, comments)) => {
-                    (run_start, wrap(&format!("{comments}{}", arg_text.trim())))
-                }
+                Some((run_start, parens, comments)) => (
+                    run_start,
+                    format!(
+                        "{parens}{}",
+                        wrap(&format!("{comments}{}", arg_text.trim()))
+                    ),
+                ),
                 None => (expr.span.start, wrap(arg_text.trim())),
             },
         };

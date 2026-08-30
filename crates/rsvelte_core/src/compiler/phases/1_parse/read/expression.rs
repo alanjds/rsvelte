@@ -2108,8 +2108,13 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
     // the error label lands on the offending region. (Parsing the bare string as
     // a program is unreliable: OXC's statement-level error recovery folds
     // trailing tokens into one recovered node, hiding the boundary.)
-    let mut wrapped = String::with_capacity(content.len() + 2);
-    wrapped.push('(');
+    // In TypeScript a bare `(` also opens an arrow parameter list, where a type
+    // annotation is legal, so OXC reads past the colon acorn-typescript stops at.
+    // A leading operand cannot be a parameter, which forces the sequence reading
+    // and puts the error back on the colon.
+    let open: &str = if ts { "(0," } else { "(" };
+    let mut wrapped = String::with_capacity(content.len() + open.len() + 2);
+    wrapped.push_str(open);
     wrapped.push_str(content);
     // a trailing `//` comment would swallow a same-line `)`
     wrapped.push_str("\n)");
@@ -2127,8 +2132,8 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
         // enclosing construct's opening delimiter, which is never where acorn
         // returned an expression.
         let start = first_error.labels.first()?.offset() as usize;
-        // Map the label's *start* back into `content` (strip the leading `(`).
-        start.checked_sub(1)
+        // Map the label's *start* back into `content` (strip the synthetic open).
+        start.checked_sub(open.len())
     })?;
 
     // A trailing-token error has leftover input *before* the synthetic closing
@@ -7965,6 +7970,81 @@ fn preceded_by_code_word(content: &str, word: &[u8], at: usize) -> Option<usize>
         .then_some(found)
 }
 
+/// Words strict mode forbids as an identifier; mirrors `RESERVED` in
+/// `1_parse/read/strict_mode.rs`, which checks them on a parsed program.
+const STRICT_RESERVED: [&str; 9] = [
+    "let",
+    "yield",
+    "static",
+    "implements",
+    "interface",
+    "package",
+    "private",
+    "protected",
+    "public",
+];
+
+/// acorn raises the strict-mode reserved-word error the moment it reads the
+/// identifier, so a statement whose remainder is broken still reports at the
+/// word. OXC replaces the whole program with a dummy on a fatal error
+/// (`Program::dummy`), leaving `strict_mode`'s walk no node to check, so the
+/// word has to come from the source. Only a word *opening* a statement counts:
+/// elsewhere it is as often a member property or an object key — positions
+/// where acorn reads the name liberally and raises nothing — as a reference.
+fn acorn_reserved_word_at_statement_start(
+    content: &str,
+    reported: usize,
+    is_typescript: bool,
+) -> Option<(usize, String)> {
+    use crate::compiler::phases::phase3_transform::shared::js_scan::{code_bytes, is_ident_byte};
+
+    let bytes = content.as_bytes();
+    let limit = reported.min(bytes.len());
+    let mut starts = Vec::new();
+    let mut depth = 0u32;
+    let mut expecting_start = true;
+    for (at, byte) in code_bytes(bytes) {
+        if at >= limit {
+            break;
+        }
+        if expecting_start && !byte.is_ascii_whitespace() {
+            starts.push(at);
+            expecting_start = false;
+        }
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                expecting_start |= depth == 0;
+            }
+            b';' => expecting_start |= depth == 0,
+            _ => {}
+        }
+    }
+
+    starts.into_iter().find_map(|at| {
+        let word = content[at..]
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            .next()
+            .unwrap_or_default();
+        if !STRICT_RESERVED.contains(&word) {
+            return None;
+        }
+        // acorn's `isLet()`, plus acorn-typescript's `interface`: a name after
+        // the keyword makes it open a declaration rather than name one.
+        let opens_declaration = word == "let" || (is_typescript && word == "interface");
+        if opens_declaration
+            && let Some((_, byte)) = code_bytes(bytes)
+                .find(|&(i, byte)| i >= at + word.len() && !byte.is_ascii_whitespace())
+            && (is_ident_byte(byte) || (word == "let" && (byte == b'[' || byte == b'{')))
+        {
+            return None;
+        }
+        Some((at, format!("The keyword '{word}' is reserved")))
+    })
+}
+
 /// Reproduce where plain acorn stops on TypeScript syntax in a JavaScript
 /// program. OXC understands these constructs and consequently either labels
 /// their enclosing node or emits a TypeScript-aware message; upstream never
@@ -8084,7 +8164,19 @@ fn convert_parsed_program<'ast>(
                     )
                 }
             });
-        let mut reported_at = reported_at;
+        // A dummy program is what OXC leaves behind when it aborts, and the
+        // acorn-only checks below all need nodes.
+        let no_ast = program.body.is_empty() && program.directives.is_empty();
+        let mut reported_at = reported_at.map(|(at, message)| {
+            if no_ast
+                && let Some(earlier) =
+                    acorn_reserved_word_at_statement_start(content, at, is_typescript)
+            {
+                earlier
+            } else {
+                (at, message)
+            }
+        });
         let mut parse_error = reported_at.as_ref().map(|(at, message)| {
             let pos = at + offset;
             crate::error::ParseError::svelte("js_parse_error", message.clone(), (pos, pos))
@@ -11665,7 +11757,17 @@ fn convert_function_expression_for_program(
     let mut obj = Map::new();
     obj.set_field("type", Value::String("FunctionExpression".to_string()));
     push_span_fields(&mut obj, start, end, line_offsets);
-    obj.set_field("id", Value::Null);
+    // acorn keeps a named function expression's own identifier; dropping it hid
+    // the name from every consumer of the serialized program, the scope walk
+    // included.
+    if let Some(id) = &func.id {
+        let id_start = offset + id.span.start as usize;
+        let id_end = offset + id.span.end as usize;
+        let id_expr = create_identifier(&id.name, id_start, id_end, line_offsets);
+        obj.set_field("id", id_expr.as_json().clone());
+    } else {
+        obj.set_field("id", Value::Null);
+    }
     obj.set_field("generator", Value::Bool(func.generator));
     obj.set_field("async", Value::Bool(func.r#async));
 
@@ -11714,9 +11816,9 @@ fn convert_function_expression_for_program(
 /// `JsNode::Raw(Value)` blob, so the function body subtree routes through the
 /// typed analyze walker. Serializes byte-identically to the Value blob (modulo
 /// the `expression: false` field, which the official ESTree output also emits
-/// and the Value blob was missing). `id` is always `null` to match the Value
-/// blob, and params keep the TS-aware `convert_formal_parameter` shape (TS bits
-/// fall through to `JsNode::Raw` via `expr_to_node`).
+/// and the Value blob was missing). Params keep the TS-aware
+/// `convert_formal_parameter` shape (TS bits fall through to `JsNode::Raw` via
+/// `expr_to_node`).
 fn convert_function_expression_for_program_as_node(
     arena: &ParseArena,
     func: &oxc_ast::ast::Function,
@@ -11777,11 +11879,22 @@ fn convert_function_expression_for_program_as_node(
         ))
     });
 
+    let id = func.id.as_ref().map(|id| {
+        let id_start = offset + id.span.start as usize;
+        let id_end = offset + id.span.end as usize;
+        arena.alloc_js_node(expr_to_node(create_identifier(
+            &id.name,
+            id_start,
+            id_end,
+            line_offsets,
+        )))
+    });
+
     JsNode::FunctionExpression {
         start: start as u32,
         end: end as u32,
         loc: create_typed_loc(start, end, line_offsets),
-        id: None,
+        id,
         params: arena.alloc_js_children(params),
         body,
         generator: func.generator,
@@ -13924,8 +14037,22 @@ mod tests {
 
         // OXC recovers a type annotation in a JavaScript parse. Acorn returns
         // the complete `src` expression and leaves the colon for Svelte's
-        // close-token check.
-        assert_eq!(trailing_token_offset("src: string;", false), Some(3));
+        // close-token check. acorn-typescript stops at the colon too — a type
+        // annotation is not an expression in either language, and only the
+        // synthetic wrapper's `(` makes one legal (as an arrow parameter list).
+        for source in ["src: string;", "data: string", "\n\tdata: string;\n"] {
+            let colon = source.find(':').unwrap();
+            assert_eq!(
+                trailing_token_offset(source, false),
+                Some(colon),
+                "js: {source:?}"
+            );
+            assert_eq!(
+                trailing_token_offset(source, true),
+                Some(colon),
+                "ts: {source:?}"
+            );
+        }
     }
 
     #[test]

@@ -91,7 +91,7 @@ use store_transforms::*;
 pub(crate) use class_transforms::transform_class_fields_client;
 use class_transforms::transform_module_class_fields_client;
 pub(crate) use expression_utils::find_matching_paren;
-pub(crate) use formatting::normalize_js_with_oxc;
+pub(crate) use formatting::{normalize_js_with_oxc, normalize_js_with_oxc_lead};
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -615,8 +615,18 @@ pub(crate) fn transform_client(
             .filter(|(_, transform)| transform.assign.is_some())
             .map(|(name, _)| name.clone())
             .collect();
-        let dead_comment_rules =
-            dead_comments::Rules::component(analysis.runes, &destructure_iife_targets);
+        let invalidate_inner_signals_targets: Vec<String> = analysis
+            .root
+            .bindings
+            .iter()
+            .filter(|binding| !binding.legacy_indirect_bindings.is_empty())
+            .map(|binding| binding.name.clone())
+            .collect();
+        let dead_comment_rules = dead_comments::Rules::component(
+            analysis.runes,
+            &destructure_iife_targets,
+            &invalidate_inner_signals_targets,
+        );
         let dead_comments_stripped = match retained_scripts
             .and_then(|scripts| scripts.instance.as_ref())
             .filter(|retained| {
@@ -1386,6 +1396,9 @@ pub(crate) fn transform_client(
         // content is always emitted at the function body level.
         let script_indent = 1usize;
         let trimmed = transformed_script.trim();
+        // Upstream dedents a block comment by its opener line's indentation,
+        // which the trim above removes when the script opens with one.
+        let script_lead = formatting::leading_indent(&transformed_script).to_string();
         // `content.start` is the byte right after `<script>`, which resolves to a
         // column past the end of that line; anchor the chunk at its first token.
         let script_source_offset = source
@@ -1413,7 +1426,11 @@ pub(crate) fn transform_client(
                     options.dev,
                 ) {
                     let cleaned_output = strip_async_noop_placeholders(async_result.output.trim());
-                    let normalized = normalize_js_with_oxc(cleaned_output.trim(), script_indent);
+                    let normalized = normalize_js_with_oxc_lead(
+                        cleaned_output.trim(),
+                        script_indent,
+                        &script_lead,
+                    );
                     component_body.push(script_raw_statement(
                         normalized,
                         script_source_offset,
@@ -1432,7 +1449,8 @@ pub(crate) fn transform_client(
                     // No top-level await: strip any async noop placeholders
                     let cleaned = strip_async_noop_placeholders(trimmed);
                     if !cleaned.trim().is_empty() {
-                        let normalized = normalize_js_with_oxc(cleaned.trim(), script_indent);
+                        let normalized =
+                            normalize_js_with_oxc_lead(cleaned.trim(), script_indent, &script_lead);
                         component_body.push(script_raw_statement(
                             normalized,
                             script_source_offset,
@@ -1454,7 +1472,8 @@ pub(crate) fn transform_client(
                     // Normalize raw JavaScript formatting using OXC to match
                     // the official Svelte compiler's esrap output (consistent spacing,
                     // semicolons, etc.)
-                    let normalized = normalize_js_with_oxc(trimmed, script_indent);
+                    let normalized =
+                        normalize_js_with_oxc_lead(trimmed, script_indent, &script_lead);
                     let retained = retained_scripts
                         .and_then(|scripts| scripts.instance.as_ref())
                         .filter(|retained| {
@@ -6791,7 +6810,27 @@ fn transform_instance_script_for_visitors(
         std::borrow::Cow::Borrowed(script)
     } else {
         super::profile::record_pn(super::profile::PN_INV_COMMENTS);
-        let out = rehome_reactive_statement_comments(script);
+        // Only the `$.invalidate_inner_signals` kill is consulted: the
+        // destructure-IIFE targets live in the visitor state the caller holds,
+        // and a re-home after one of those is the behaviour this had before.
+        let invalidate_targets: Vec<String> = analysis
+            .root
+            .bindings
+            .iter()
+            .filter(|binding| !binding.legacy_indirect_bindings.is_empty())
+            .map(|binding| binding.name.clone())
+            .collect();
+        let liveness = (!invalidate_targets.is_empty()
+            && (memmem::find(script.as_bytes(), b"//").is_some()
+                || memmem::find(script.as_bytes(), b"/*").is_some()))
+        .then(|| {
+            dead_comments::cursor_liveness(
+                script,
+                dead_comments::Rules::component(false, &[], &invalidate_targets),
+            )
+        })
+        .flatten();
+        let out = rehome_reactive_statement_comments(script, liveness.as_ref());
         #[cfg(feature = "measure-pa-split")]
         if out != script {
             super::profile::record_pn(super::profile::PN_CHG_COMMENTS);
@@ -7287,7 +7326,12 @@ fn transform_instance_script_for_visitors(
                 {
                     format!("{}()", n)
                 }
-                Some(b) if matches!(b.kind, BK::StoreSub) => format!("{}()", n),
+                // This body is spliced into instance-script TEXT, which then has read
+                // transforms applied to it, so a store sub is written bare and gets its
+                // `()` from that pass — writing `$t()` here yields `$t()()`. The AST port
+                // in `wrap_with_legacy_invalidate` is emitted post-transform and does the
+                // opposite; the two are not interchangeable.
+                Some(b) if matches!(b.kind, BK::StoreSub) => n.to_string(),
                 Some(b)
                     if matches!(
                         b.kind,

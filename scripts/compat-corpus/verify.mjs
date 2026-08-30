@@ -1121,7 +1121,9 @@ if (fixedKnown) {
   // must stay scoped too — otherwise it would empty the unmeasured baselines.
   const scope =
     TARGET_KEYS.length === ALL_TARGET_KEYS.length ? "" : ` --targets ${TARGET_KEYS.join(",")}`;
-  console.log(`\n  fix: node scripts/compat-corpus/verify.mjs --no-fmt${scope} --update-baseline`);
+  // No `--no-fmt` here: the output family refuses it, so printing it hands the
+  // reader a command the tool declines to run.
+  console.log(`\n  fix: node scripts/compat-corpus/verify.mjs${scope} --update-baseline`);
 }
 
 if (regressions.length) {

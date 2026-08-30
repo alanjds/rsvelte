@@ -64,15 +64,28 @@ everywhere". Divergences this target keeps on purpose — because reproducing
 upstream's bytes would emit invalid JavaScript — are recorded in
 [`deliberate-divergences.md`](deliberate-divergences.md), each pinned by a test.
 
-## Server (`known-failures.server.json`, 69 entries)
+## Server (`known-failures.server.json`, 71 entries)
 
-Partition of `known-failures.server.json` by verdict: `60 + 4 + 5`
+Partition of `known-failures.server.json` by verdict: `60 + 4 + 5 + 2`
 
 - **60 — the generated JS differs.**
 - **4 — both compilers reject with a different error code.**
 - **5 — one compiler rejects and the other compiles.**
+- **2 — a recorded deliberate divergence, not a burndown target.**
+  `pattern/issues/dollar-function-parameter.svelte` and
+  `threlte/packages/extras/src/lib/hooks/useViewport.svelte.ts`. A `$`-prefixed
+  **function parameter** is a local binding, not a store subscription; upstream's
+  server visitor decides by name alone and lowers a write to it to
+  `$.store_mutate`, which throws at runtime, while upstream's own *client*
+  agrees with rsvelte. Reported in
+  [`upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md`](../upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md),
+  recorded in
+  [`deliberate-divergences.md`](deliberate-divergences.md#a--prefixed-function-parameter-is-not-a-store-subscription-server)
+  and pinned by `crates/rsvelte_core/tests/dollar_parameter_is_not_a_store.rs`.
+  **These two are listed so the gate stops the difference spreading, not so it is
+  fixed** — the pin is what keeps the justification from rotting.
 
-All 69 arrived with the wave-2 enrolment (#3130); this target was at 0 before
+The other 69 arrived with the wave-2 enrolment (#3130); this target was at 0 before
 it. The last pre-enrolment entry was #2308, from the `runed` / `svelte-toolbelt` enrolment:
 `watch.test.svelte.ts` writes `runs = runs + 1` and rsvelte **contracted** it to
 `runs += 1` (that direction, not the reverse). The `.svelte.(js|ts)` server path
@@ -90,13 +103,17 @@ quoted key dropped in a destructured `$derived`) and #2034 (`$.to_array` arity
 with a rest element) — were resolved by #2036, which mirrored #2010's client
 destructuring fixes onto the server target.
 
-## Server dev (`known-failures.server-dev.json`, 69 entries)
+## Server dev (`known-failures.server-dev.json`, 71 entries)
 
 The `server-dev` target is the server transform with `dev: true`. It separately
 ratchets server-only development instrumentation: component metadata, element
 locations, dynamic-element validation, snippet validation, and injected CSS.
 
-Partition of `known-failures.server-dev.json` by verdict: `60 + 4 + 5`
+Partition of `known-failures.server-dev.json` by verdict: `60 + 4 + 5 + 2`
+
+The trailing **2** is the same deliberate divergence as on `server` — the
+`$`-prefixed function parameter — carried on both targets because the server
+transform runs on both.
 
 - **60 — the generated JS differs.**
 - **4 — both compilers reject with a different error code.**
@@ -283,23 +300,22 @@ the equality instrumentation, `$.track_reactivity_loss`, ownership mutation
 validation, `$.tag()` / `$.tag_proxy()`, `console.*` wrapping and the signal
 read/write row — was already empty.
 
-Two divergences remain here, both deferred only because **no corpus entry
-reaches them** — each has a check that distinguishes fixing from not, so neither
-is unverifiable:
+The two divergences this section used to defer — both were deferred only because
+**no corpus entry reached them** — are now **closed**, and both are pinned in the
+pattern corpus rather than described here:
 
-- **Over-reach.** The exemption is carried by a level flag that stays set for the
-  whole body conversion, so an assignment nested *inside* an exempt arrow's body
-  is exempted too. `onclick={() => (a.b = f(() => (c.d = e)))}` must emit
-  `$.assign(c, 'd'` and must not emit `$.assign(a, 'b'` — one input, both signs.
-  A boolean cannot express upstream's third conjunct, which is the *identity*
-  test `expression === context.path.at(-1)`; the exempt arrow has to be carried
-  by identity, not by a level.
-- **Under-reach, the opposite direction.** Upstream's guard names
-  `SvelteElement` alongside `RegularElement`, but `visit_event_attribute` is
-  reached only from `regular_element.rs`, so `<svelte:element this={tag}
-  onclick={() => (o.x = v)}>` is never exempt and emits
-  `$.assign(o, 'x', '=', v, …)` where upstream emits none. Measured, not
-  inferred.
+- **Over-reach**, `assign-exempt-arrow-does-not-cover-a-nested-arrow.svelte`.
+  `onclick={() => (a.b = f(() => (c.d = e)))}` must emit `$.assign(c, 'd'` and
+  must not emit `$.assign(a, 'b'` — one input, both signs. Official emits exactly
+  that and so does rsvelte, on all four targets.
+- **Under-reach**, `assign-exempt-arrow-on-svelte-element.svelte`.
+  `<svelte:element this={tag} onclick={() => (o.x = v)}>` must emit no `$.assign`
+  at all; official emits `() => o.x = v` and so does rsvelte.
+
+Both repros were verified to **reach** the decision before being called closed:
+official's own output for the first carries `$.assign(c, 'd', '=', e, …)`, so a
+port that exempted nothing would still differ. A repro that goes green without
+reaching the decision is evidence about the repro, not about the defect.
 
 Counting method, for whoever picks this up: attribute an entry by **comparing
 how many times each helper appears** on each side, never by the first differing

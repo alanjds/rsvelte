@@ -7,8 +7,9 @@ Svelte structure, oxc for embedded JS, and PostCSS for embedded CSS) and require
 embedded CSS by default, so the ratchet intentionally includes CSS-engine parity
 as well as Svelte-structure parity. The ratchet may only shrink.
 
-**Current baseline: `fmt-known-failures.json`, 787 entries** — 22 from before the
-wave-2 corpus enrolment and 765 in the current expanded-corpus population.
+**Current baseline: `fmt-known-failures.json`, 788 entries** — 22 from before the
+wave-2 corpus enrolment, 765 in the current expanded-corpus population, and 1
+from a pattern-corpus repro added during the campaign (Cluster 12).
 Oracle-bug / invalid-input / migrate cases are NOT here — those are permanently
 excluded in `fmt-oracle-excluded.json` (see `fmt-oracle-excluded.md`).
 
@@ -28,7 +29,7 @@ An id that carries two clusters' divergences at once is filed under its dominant
 one (see *Multiple clusters per id*), so the per-cluster counts below remain a
 partition of the ratchet rather than an over-count:
 
-Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 2 + 385 + 239 + 85 + 38 + 14 + 1 + 2 + 1`
+Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 1 + 2 + 385 + 239 + 85 + 38 + 14 + 1 + 2 + 1`
 
 ## Wave-2 enrolment (#3130) — Clusters 20-27
 
@@ -339,6 +340,37 @@ oxfmt over the same two selectors as standalone CSS
 reproduces rsvelte's output byte for byte. Neither spelling changes what the
 selector matches. Changing the product engine or teaching the AST printer to
 preserve these spellings has the same high blast radius as Cluster 8.
+
+## Cluster 12 — a block written entirely on one line is expanded, and that is significant whitespace (1)
+
+`pattern/issues/4046-each-const-parameter-comment.svelte`. The source is
+
+```svelte
+{#each [1] as i}{@const c = /* c */ v * i}<p>{c}</p>{/each}
+```
+
+with no whitespace anywhere between the block tag, the `{@const}` and the child.
+The oracle keeps the first child glued to the open tag and the close tag glued to
+the last child — `{#each [1] as i}{@const c = /* c */ v * i}` then
+`  <p>{c}</p>{/each}` — which reads oddly and is the whitespace-sensitive answer.
+rsvelte-fmt normalizes the block to the canonical multi-line form instead.
+
+**This one is not cosmetic: the formatted text compiles to different code.** Run
+through the official compiler, the source and the oracle's output are
+byte-identical (`compile(source).js.code === compile(oracle).js.code`), while
+rsvelte-fmt's output is not — the each callback loses the comment from its
+parameter list, `($$anchor, i /* c */) =>` becoming `($$anchor, i) =>`. A
+formatter must not move that, so the fix belongs in rsvelte: a block whose first
+child begins with no whitespace must not gain any.
+
+Two controls were measured. Removing the comment reproduces the same five-line
+divergence, so **the comment is not the trigger** — the one-line layout is. And
+handed the multi-line spelling, both formatters return it unchanged and agree
+byte-for-byte, so this is rsvelte-fmt *adding* whitespace rather than the oracle
+preserving something rsvelte cannot see.
+
+The repro cannot be re-spelled to dodge this. Its subject is exactly the comment
+that the multi-line spelling drops, so a multi-line version pins nothing.
 
 ## Resolved
 

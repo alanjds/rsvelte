@@ -82,8 +82,8 @@ const UNKNOWN_MARKER: &str = "__UNKNOWN__";
 /// materialization when the node type alone settles the answer.
 ///
 /// `gather_possible_values` only inspects `Literal`, `ConditionalExpression`,
-/// `LogicalExpression`, `BinaryExpression`, `TemplateLiteral`,
-/// `TSAsExpression`, and — for a class attribute only — `ArrayExpression` and
+/// `LogicalExpression`, `TSAsExpression`, and — for a class attribute only —
+/// `ArrayExpression` and
 /// `ObjectExpression`. Everything else falls to its `_` arm, which marks the
 /// value unknown and makes `get_possible_values` return `None`. A bare
 /// `Identifier` (`class={cls}`, the common dynamic case) is in that group, so
@@ -95,12 +95,7 @@ pub fn get_possible_values_expr(
     if let Some(node_type) = expr.node_type() {
         let inspected = matches!(
             node_type,
-            "Literal"
-                | "ConditionalExpression"
-                | "LogicalExpression"
-                | "BinaryExpression"
-                | "TemplateLiteral"
-                | "TSAsExpression"
+            "Literal" | "ConditionalExpression" | "LogicalExpression" | "TSAsExpression"
         ) || (is_class
             && matches!(node_type, "ArrayExpression" | "ObjectExpression"));
         if !inspected {

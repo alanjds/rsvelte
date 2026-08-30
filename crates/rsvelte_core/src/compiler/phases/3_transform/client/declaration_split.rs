@@ -9,11 +9,11 @@
 //! single multi-declarator declaration invalidated every retained span, folded
 //! CRLF to LF and dropped the trailing newline.
 //!
-//! Only the *rendering* of a split declaration is text work, and it reproduces
-//! the shape the text pass produced: the declarators of a multi-line
-//! declaration collapse onto one line each, and a `//` comment that sat between
-//! two declarators moves above the declaration it precedes rather than staying
-//! on the keyword's line, where it would comment the declarator out.
+//! Only the *rendering* of a split declaration is text work: the declarators of
+//! a multi-line declaration collapse onto one line each, and every comment the
+//! declaration carried — leading it, or sitting between two declarators — is
+//! emitted after the keyword with the declarator on the next line, which is
+//! where esrap flushes it and where it cannot comment the declarator out.
 
 use std::cell::RefCell;
 
@@ -57,6 +57,19 @@ fn collect_edits(script: &str, program: &Program<'_>) -> Vec<Edit> {
         .iter()
         .map(|comment| comment.span)
         .collect();
+    // `ExportNamedDeclaration` is the specifier-only `export { … }` in this AST
+    // (`export let` is `ExportDeclaration`, `export … from` is
+    // `ExportFromDeclaration`). In an instance script it IS the prop
+    // declaration and never reaches the output, so upstream's cursor sees no
+    // node there and a comment before it flushes with the next statement's.
+    let removed: Vec<Span> = program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::ExportNamedDeclaration(export) => Some(export.span),
+            _ => None,
+        })
+        .collect();
     let mut edits = Vec::new();
     for statement in &program.body {
         let (exported, declaration) = match statement {
@@ -73,6 +86,7 @@ fn collect_edits(script: &str, program: &Program<'_>) -> Vec<Edit> {
             exported,
             declaration,
             comments.as_slice(),
+            removed.as_slice(),
         ) {
             edits.push(edit);
         }
@@ -86,6 +100,7 @@ fn split_declaration(
     exported: bool,
     declaration: &VariableDeclaration<'_>,
     comments: &[Span],
+    removed: &[Span],
 ) -> Option<Edit> {
     if declaration.declarations.len() < 2 || declaration.declare {
         return None;
@@ -104,14 +119,8 @@ fn split_declaration(
     // and esrap flushes its leading comments at the first located node inside
     // it — the declarator, which prints after the keyword. A comment trailing
     // the previous statement's line belongs to that statement and stays put.
-    // Only a plain declaration is rewritten here: an exported one is re-emitted
-    // by the prop lowering, which builds its own text and would drop a comment
-    // moved into this one.
-    let (leading_start, leading_comments) = if exported {
-        (start, Vec::new())
-    } else {
-        leading_own_line_comments(script, start, comments)
-    };
+    let (leading_start, leading_comments) =
+        leading_own_line_comments(script, start, comments, removed);
     let keyword_start = declaration.span.start as usize;
     if !script[keyword_start..].starts_with(keyword) {
         return None;
@@ -162,16 +171,12 @@ fn split_declaration(
     let mut replacement = String::new();
     let mut emitted = false;
     for (from, to) in pieces {
-        let (comment_lines, body) = split_leading_line_comments(&collapse_lines(&script[from..to]));
+        let (comment_lines, raw) = split_leading_own_line_comments(&script[from..to]);
+        let body = collapse_lines(raw);
         if body.is_empty() {
             continue;
         }
         if emitted {
-            replacement.push('\n');
-            replacement.push_str(indent);
-        }
-        for comment in comment_lines {
-            replacement.push_str(&comment);
             replacement.push('\n');
             replacement.push_str(indent);
         }
@@ -187,6 +192,11 @@ fn split_declaration(
             if !leading_comments.is_empty() {
                 replacement.push_str(indent);
             }
+        }
+        for comment in comment_lines {
+            replacement.push_str(&comment);
+            replacement.push('\n');
+            replacement.push_str(indent);
         }
         replacement.push_str(&body);
         replacement.push(';');
@@ -208,6 +218,7 @@ fn leading_own_line_comments(
     script: &str,
     start: usize,
     comments: &[Span],
+    removed: &[Span],
 ) -> (usize, Vec<String>) {
     let mut run_start = start;
     let mut texts = Vec::new();
@@ -219,7 +230,26 @@ fn leading_own_line_comments(
         .skip_while(|comment| comment.end as usize > start)
     {
         let (from, to) = (comment.start as usize, comment.end as usize);
-        if to > run_start || !script[to..run_start].trim().is_empty() {
+        if to > run_start {
+            break;
+        }
+        let mut gap_start = run_start;
+        // A statement the transform deletes leaves no node for the cursor to
+        // stop at, so the run reaches across it.
+        for span in removed.iter().rev() {
+            let (s, e) = (span.start as usize, span.end as usize);
+            if e <= gap_start
+                && s >= to
+                && script[e..gap_start]
+                    .trim_start()
+                    .trim_start_matches(';')
+                    .trim()
+                    .is_empty()
+            {
+                gap_start = s;
+            }
+        }
+        if !script[to..gap_start].trim().is_empty() {
             break;
         }
         let line_start = script[..from].rfind('\n').map_or(0, |at| at + 1);
@@ -290,23 +320,42 @@ fn collapse_lines(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// Peel the whole-line `//` comments a declarator starts with off its front. A
-/// block comment stays where it is: it does not run to the end of its line, so
-/// it cannot hide the declarator.
-fn split_leading_line_comments(part: &str) -> (Vec<String>, String) {
+/// Peel the comments a declarator starts with that ENDED their own line, off
+/// the RAW slice — `collapse_lines` joins lines with a space, so asking after it
+/// cannot tell a block comment that stood alone from one written beside the
+/// declarator, and upstream prints only the first on its own line.
+fn split_leading_own_line_comments(part: &str) -> (Vec<String>, &str) {
     let mut comments = Vec::new();
-    let mut rest = part.trim_start();
-    while rest.starts_with("//") {
-        match rest.find('\n') {
-            Some(at) => {
-                comments.push(rest[..at].trim_end().to_string());
-                rest = rest[at + 1..].trim_start();
+    let mut rest = part.trim_start_matches([' ', '\t', '\r', '\n']);
+    loop {
+        let end = if rest.starts_with("//") {
+            match rest.find('\n') {
+                Some(at) => at,
+                // A trailing line comment has no declarator after it.
+                None => {
+                    comments.push(rest.trim_end().to_string());
+                    return (comments, "");
+                }
             }
-            // A trailing line comment has no declarator after it.
-            None => return (comments, String::new()),
+        } else if rest.starts_with("/*") {
+            match rest.find("*/") {
+                Some(at) => at + 2,
+                None => break,
+            }
+        } else {
+            break;
+        };
+        let after = &rest[end..];
+        if !after
+            .trim_start_matches([' ', '\t', '\r'])
+            .starts_with('\n')
+        {
+            break;
         }
+        comments.push(rest[..end].trim_end().to_string());
+        rest = after.trim_start_matches([' ', '\t', '\r', '\n']);
     }
-    (comments, rest.trim().to_string())
+    (comments, rest)
 }
 
 #[cfg(test)]
@@ -356,11 +405,15 @@ mod tests {
         );
     }
 
+    /// The comment prints AFTER the keyword, with the declarator on the next
+    /// line: upstream rebuilds a split declaration, so its statement carries no
+    /// `loc` and esrap flushes the comment at the first located node inside it.
+    /// The newline is what keeps the declarator out of the comment.
     #[test]
-    fn moves_a_line_comment_above_the_declaration_it_precedes() {
+    fn prints_a_declarator_comment_after_the_keyword() {
         assert_eq!(
             split("let a = 1, // why\n\tb = 2;"),
-            "let a = 1;\n// why\nlet b = 2;"
+            "let a = 1;\nlet // why\nb = 2;"
         );
     }
 
