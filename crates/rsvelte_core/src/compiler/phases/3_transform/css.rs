@@ -2045,8 +2045,11 @@ fn is_parent_chain_unused(ctx: &CssContext) -> bool {
                             // Other pseudo-classes like :hover, :focus don't constrain matching
                         }
                         Some("NestingSelector") => {
-                            // & - matches whatever the parent matches, can't determine unused
-                            return true;
+                            // `&` adds the parent's constraints, but the compound
+                            // around it adds its own: an element matching
+                            // `&.dragging` still has to carry `dragging`. Bailing
+                            // here threw that away — and a compound that is only
+                            // `&` falls out through the no-constraints check below.
                         }
                         _ => {}
                     }
@@ -5639,7 +5642,7 @@ fn is_simple_selector_unused(sel: &Value, ctx: &CssContext) -> bool {
                 // selectors that definitely don't exist in the template
                 let all_unused = children
                     .iter()
-                    .all(|child| is_is_inner_selector_unused(child, ctx));
+                    .all(|child| branch_is_marked_unused(child, ctx));
                 if all_unused && !children.is_empty() {
                     return true;
                 }
@@ -6040,8 +6043,13 @@ fn is_functional_branch_unused(
 
 /// Check if a selector inside `:is()`/`:where()`/`:has()` is definitely unused,
 /// judged on its own (no enclosing-chain context).
+///
+/// "On its own" has to include the nesting context: an argument constrains the
+/// same element the enclosing compound does, so with the parent preludes still
+/// in `ctx` a bare `a` inside `.row { &:is(a) { … } }` is asked whether an `<a>`
+/// sits *below* a `.row` — and `<a class="row">` is the `.row`.
 fn is_is_inner_selector_unused(complex: &Value, ctx: &CssContext) -> bool {
-    is_functional_branch_unused(complex, None, ctx)
+    without_parent_preludes(ctx, || is_functional_branch_unused(complex, None, ctx))
 }
 
 /// Read the marking walk's verdict for one argument. Falls back to the isolated
