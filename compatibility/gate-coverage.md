@@ -557,6 +557,50 @@ the divergence count falls; it says the population changes, and a class that is 
 tree is not evidence about a tree with `node_modules`. Installing them also changes the ratchet
 keys, which is why this is a row rather than a patch.
 
+### Blind spot 27m — the uninstalled corpus makes upstream parse Svelte 5 with Svelte 4, so on 40.6% of the ratchet the oracle never sees a template [D]
+
+27l records that the corpus repositories are not installed and reads the consequence as
+*unresolved imports*. The larger consequence is one step earlier, and 27l's own diagnostic dump
+already contained the witness it did not name: `ts/-1 46:2 Unexpected character '@'`. Code `-1` is
+`DocumentSnapshot.ts:284`, the `parserError` upstream sets when **`svelte2tsx` throws**, and
+`Unexpected character '@'` is Svelte 4's parser refusing `{@render}`.
+
+The chain is four citations. `service.ts:379` resolves the Svelte compiler with
+`importSvelte(tsconfigPath || workspacePath)`; `importPackage.ts:60` falls back to the language
+server's own dependency when the linted path has no `node_modules/svelte`; that dependency is
+`svelte: ^4.2.19` in `language-tools/pnpm-lock.yaml`, resolved to **4.2.20**, and CI installs it
+`--frozen-lockfile`; the resolved `parse`/`version` reach `svelte2tsx` through `service.ts:429` and
+`DocumentSnapshot.ts:241`. When it throws, `DocumentSnapshot.ts:291` replaces the projection with
+`text = scriptInfo.content` — **the instance script alone, no template** — and every completion for
+that document is then built with `isIncomplete: true` (`CompletionProvider.ts:451`), or is
+`CompletionList.create([], true)` where TypeScript has no entries (`:303`).
+
+Measured over the whole aggregate population, classifying each key's file by the same predicate
+`DocumentSnapshot` uses:
+
+| repo | keys on a file upstream cannot project | / keys | divergent requests behind them | / requests |
+|---|---:|---:|---:|---:|
+| shadcn-svelte | 3,870 | 10,080 (38.4%) | 459,382 | 958,698 (47.9%) |
+| flowbite-svelte | 2,436 | 7,758 (31.4%) | 370,690 | 761,648 (48.7%) |
+| bits-ui | 2,400 | 3,696 (64.9%) | 267,346 | 416,918 (64.1%) |
+| melt-ui | 150 | 258 (58.1%) | 25,810 | 46,812 (55.1%) |
+| **total** | **8,856** | **21,792 (40.6%)** | **1,123,228** | **2,184,076 (51.4%)** |
+
+No key had an unresolvable file. The positive control is the same `svelte2tsx` call with `parse`
+from Svelte 5.56.10: **1,476 of the 3,637 corpus components throw under 4.2.20 and 0 throw under
+5** — the files are fine, the oracle is not. On `label-demo.svelte` all 40 completion requests
+reduce to this one cause: 22 where upstream returns a list and rsvelte returns `null`, 18 where
+only `isIncomplete` differs.
+
+This is not an upstream defect. svelte-language-server supports Svelte 3/4/5 and falls back
+deliberately, expecting the user's project to carry its own compiler. It is a **gate setup**
+defect: the oracle is configured the way no real project is.
+
+**Unmeasured, and deliberately unsigned:** whether installing the repositories lowers the
+divergence count. It replaces the population — the ratchet keys turn over completely and rsvelte's
+real defects on those 1,476 files become visible for the first time. The remaining 12,936 keys, on
+files upstream does project, are the part of the residue this row says nothing about.
+
 ### Blind spot 27i — a diagnostic's severity is unobservable, and lint findings are never paired at all [D]
 
 `diff.mjs:19` keys a diagnostic on `digest([value.code, value.source, value.range?.start])`. The
