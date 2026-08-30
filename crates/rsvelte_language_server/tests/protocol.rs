@@ -1144,7 +1144,13 @@ fn a_compiler_warning_carries_its_docs_link_and_yields_a_quickfix() {
         json!("(svelte) Disable a11y_missing_attribute for this line")
     );
     assert_eq!(actions[0]["kind"], json!("quickfix"));
-    let edits = actions[0]["edit"]["changes"][&uri]
+    // `getQuickfixes.ts:148` builds a `documentChanges` edit, never a map.
+    let document_change = &actions[0]["edit"]["documentChanges"][0];
+    assert_eq!(
+        document_change["textDocument"],
+        json!({ "uri": uri, "version": null })
+    );
+    let edits = document_change["edits"]
         .as_array()
         .expect("edits for the document");
     assert_eq!(edits.len(), 1);
