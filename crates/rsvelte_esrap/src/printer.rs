@@ -4263,6 +4263,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             },
             |p, el, child| match el {
                 ArrayExpressionElement::SpreadElement(s) => {
+                    // The element is reached by `visit` upstream, so its leading
+                    // comments are flushed before `...`, not before the operand.
+                    p.flush_leading(child, s.span.start);
                     child.write_ascii_bytes(b"...");
                     p.print_expression(&s.argument, child);
                 }
@@ -4444,6 +4447,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     fn print_argument(&mut self, arg: &Argument, ctx: &mut Context<DIRECT>) {
         match arg {
             Argument::SpreadElement(spread) => {
+                self.flush_leading(ctx, spread.span.start);
                 ctx.write_ascii_bytes(b"...");
                 self.print_expression(&spread.argument, ctx);
             }
