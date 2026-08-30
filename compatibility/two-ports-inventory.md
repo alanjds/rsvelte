@@ -1176,6 +1176,29 @@ reach it, with the positive control (disabling the typed fast path makes the mar
 the instrument can report. The twin is left unfixed and recorded here rather than changed
 unmeasured.
 
+**This row's question has THREE ports in the client, not two, and the third had no
+guard at all.** An `UpdateExpression` is lowered by `convert_update_expression` (the JSON
+path), by the typed arm of `convert_js_node`, and by `try_transform_update`. The second and
+third both refuse a name whose reference at that position belongs to a plain local
+(`reference_is_plain_local`); the first went from `extract_identifier_name_from_json` straight
+to `context.state.transform.get(&name)`. So `var v = 0; while (v < 1) { v++; }` inside a
+template handler, in a component that also has `let v = $derived(base)`, emitted `$.update(v)`
+against the component's signal. Ablating the added test takes a 16-cell grid from 4 to 6 and the
+repro from 0 to 2 of 4.
+
+**Finding the third port took a backtrace, and that is the reusable part.** Instrumenting the two
+known call sites reported nothing, and so did every `format!("$.update(…)")` in the client — five
+sites, all silent. The producer was found by putting a `Backtrace::force_capture()` in
+`b::svelte_call` when its method is `update`. **Enumerating the sites that look like the
+answer is not enumerating the sites that produce the output**; the output string is the only
+key that cannot miss one.
+
+The residue is a different cause and is recorded rather than claimed: for a `var` declared in a
+`for` HEAD, phase 2 creates the local binding (kind `Normal`, the arrow's scope) but leaves its
+reference list **empty**, and the component's `Derived` binding owns the handler's positions —
+so a position-keyed test cannot separate them no matter which port asks it. Two of the 16 cells
+stay red.
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the

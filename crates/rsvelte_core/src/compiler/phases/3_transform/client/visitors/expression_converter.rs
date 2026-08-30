@@ -7130,6 +7130,10 @@ fn convert_update_expression(
     // apply the update transform directly to avoid invalid JS like $.get(x)++ or x()++.
     if let Some(arg_val) = argument_value
         && let Some(name) = extract_identifier_name_from_json(arg_val)
+        // The typed and `try_transform_update` paths both ask this; the JSON one asked
+        // nothing, so a local shadowing a signal was updated through the signal.
+        && !get_root_start_position(arg_val)
+            .is_some_and(|start| context.state.reference_is_plain_local(&name, start))
         && let Some(update_transform) = context.state.transform.get(&name)
         && let Some(update_fn) = update_transform.update
     {
