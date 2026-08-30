@@ -93,6 +93,7 @@ whose oracle is the other implementation is only as good as its independent expe
 | [17](#17-does-an-assignment-lhss-computed-index-get-its-sites-read-transform--d-closed) | Does an assignment LHS's computed index get its site's read transform? | 2 (+3 `untrack` rebuilders) | **[D]** | closed |
 | [18](#18-does-a-mutation-of-a-legacy_indirect_bindings-root-get-the-invalidate-wrap-at-all--d-closed) | Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? | 4 | **[D]** | closed |
 | [19](#19-where-does-a-keywords-source-map-anchor-go--d-defended-at-degree-2) | Where does a keyword's source-map anchor go? | 2 | **[D]** | defended at degree 2 |
+| [20](#20-what-does-a--reactive-statement-assign--d-closed) | What does a `$:` reactive statement assign? | 2 | **[D]** | closed |
 
 ---
 
@@ -721,6 +722,41 @@ pins with expectations spelled out rather than read off the other port:
 own ablation) and `crates/rsvelte_core/tests/server_declaration_keyword_anchor.rs`. Nothing
 compares the two maps to each other, and only one of the 29 sourcemaps samples has a source line
 that separates the two rules — which is why this row was worth writing rather than the fix alone.
+
+### 20. What does a `$:` reactive statement assign? — [D], closed
+
+**Upstream:** one visitor pair feeds one `order_reactive_statements`
+(`phases/3-transform/client/visitors/shared/utils.js`). `AssignmentExpression.js` runs
+`extract_identifiers(node.left)`, which keeps only `Identifier`s — so `$: o.x = 1` assigns
+**nothing** — while `UpdateExpression.js` takes
+`node.argument.type === 'MemberExpression' ? object(node.argument) : node.argument`, so
+`$: o.x++` assigns **`o`**. The asymmetry is the whole decision, and the ordering DFS in
+`order_reactive_statements` reads it.
+
+**Ports.**
+
+- `2_analyze/mod.rs` `CycleFacts::push_update_target` (`:1574`), feeding
+  `order_reactive_statements` (`:3295`) — the client. It recurses through
+  `JsNode::MemberExpression { object, .. }` to the root identifier, i.e. it has upstream's
+  `object()`.
+- `3_transform/server/ast/script.rs` `ReactiveScopedCollector::visit_update_expression`
+  (`:4363`), feeding `topo_sort_reactive` (`:4189`) — the **server**. It matched
+  `AssignmentTargetIdentifier` only, so a member-target update recorded no assignment at all.
+
+**Demonstrated.** `compatibility/pattern-corpus/issues/reactive-member-assignment-cycle.svelte`
+carries `$: data.count++`, `$: if (data.encrypt && size < 150) size = 150;` and
+`$: data.size = size;`. Under the analyze port `data.count++` assigns `data`, so the DFS emits
+the three in the order official does; under the server port it assigned nothing, the edge
+disappeared and `data.count++` sank to last. **The client and client-dev outputs were
+byte-identical to official throughout** — the same source, the same upstream rule, two answers,
+and the divergence lived only on `server` / `server-dev`. That file has been on `main` since
+#3958 and is in no ratchet: `Compiler parity` was red on `main`, so nothing scored it.
+
+**Closed at degree 1 in spirit, not in code.** The server port now applies the same member-chain
+root rule through a `update_target_root_name` helper that returns `None` for a chain rooted at a
+call, mirroring `object()`. The two collectors still exist — the server walks oxc and the
+analyzer walks `JsNode`, so there is no single function to route both through — and nothing
+compares them to each other. The file above is the pin.
 
 ## Adding a row, and closing one
 

@@ -4361,8 +4361,22 @@ impl<'a> oxc_ast_visit::Visit<'a> for ReactiveScopedCollector {
     }
 
     fn visit_update_expression(&mut self, it: &oxc_ast::ast::UpdateExpression<'a>) {
-        if let oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = &it.argument {
-            self.push_assign(id.name.as_str());
+        match &it.argument {
+            oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
+                self.push_assign(id.name.as_str());
+            }
+            // `UpdateExpression.js` takes `object(node.argument)`, so `o.x++`
+            // assigns `o` — where `o.x = …` assigns nothing, because
+            // `AssignmentExpression.js` filters `extract_identifiers` to
+            // Identifiers and a member target is not one.
+            other => {
+                if let Some(name) = other
+                    .as_member_expression()
+                    .and_then(update_target_root_name)
+                {
+                    self.push_assign(name);
+                }
+            }
         }
         oxc_ast_visit::walk::walk_update_expression(self, it);
     }
@@ -4907,6 +4921,21 @@ fn collect_legacy_reactive_decls(
 
 /// Extract identifier names from an assignment target (simple id, or destructure
 /// array/object pattern leaves).
+/// The identifier a member chain bottoms out at, or `None` when it does not —
+/// upstream's `object()`, which returns null for a chain rooted at a call.
+fn update_target_root_name<'a>(expr: &'a oxc_ast::ast::MemberExpression<'a>) -> Option<&'a str> {
+    let mut object = expr.object();
+    loop {
+        match object {
+            oxc_ast::ast::Expression::Identifier(id) => return Some(id.name.as_str()),
+            oxc_ast::ast::Expression::StaticMemberExpression(m) => object = &m.object,
+            oxc_ast::ast::Expression::ComputedMemberExpression(m) => object = &m.object,
+            oxc_ast::ast::Expression::PrivateFieldExpression(m) => object = &m.object,
+            _ => return None,
+        }
+    }
+}
+
 fn collect_assignment_target_idents(
     target: &oxc_ast::ast::AssignmentTarget,
     out: &mut Vec<String>,

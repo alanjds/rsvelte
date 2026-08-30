@@ -3813,12 +3813,20 @@ impl<'a> ScopeBuilder<'a> {
                     decl_kind,
                 );
             }
-            JsNode::AssignmentPattern { left, .. } => {
+            JsNode::AssignmentPattern { left, right, .. } => {
                 self.declare_bindings_from_pattern_node_with_kind(
                     self.arena.get_js_node(*left),
                     kind,
                     inside_rest,
                     decl_kind,
+                );
+                // Upstream walks a default expression like any other, so every
+                // `scope.declare` inside it still reaches `root.conflicts`.
+                let arena = self.arena;
+                collect_declared_names_in_expression(
+                    arena.get_js_node(*right),
+                    arena,
+                    &mut self.nested_declared_names,
                 );
             }
             _ => {}
@@ -4600,4 +4608,88 @@ fn node_slot_name<'n>(node: &'n TemplateNode<'_>) -> Option<&'n str> {
     }
 
     None
+}
+
+/// Names a pattern binds, for the `root.conflicts` seed only — no scope is
+/// pushed and no binding is created.
+fn collect_pattern_names_into(
+    node: &JsNode,
+    arena: &ParseArena,
+    out: &mut rustc_hash::FxHashSet<String>,
+) {
+    match node {
+        JsNode::Identifier { name, .. } => {
+            out.insert(name.to_string());
+        }
+        JsNode::ObjectPattern { properties, .. } | JsNode::ObjectExpression { properties, .. } => {
+            for prop in arena.get_js_children(*properties) {
+                match prop {
+                    JsNode::Property { value, .. } => {
+                        collect_pattern_names_into(arena.get_js_node(*value), arena, out);
+                    }
+                    JsNode::RestElement { argument, .. }
+                    | JsNode::SpreadElement { argument, .. } => {
+                        collect_pattern_names_into(arena.get_js_node(*argument), arena, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        JsNode::ArrayPattern { elements, .. } | JsNode::ArrayExpression { elements, .. } => {
+            for elem in elements.iter().flatten() {
+                collect_pattern_names_into(elem, arena, out);
+            }
+        }
+        JsNode::AssignmentPattern { left, right, .. } => {
+            collect_pattern_names_into(arena.get_js_node(*left), arena, out);
+            collect_declared_names_in_expression(arena.get_js_node(*right), arena, out);
+        }
+        JsNode::RestElement { argument, .. } | JsNode::SpreadElement { argument, .. } => {
+            collect_pattern_names_into(arena.get_js_node(*argument), arena, out);
+        }
+        _ => {}
+    }
+}
+
+/// Every `scope.declare` upstream adds its name to `root.conflicts`, wherever
+/// the declaration sits — so a generated name must avoid the parameters of a
+/// function nested in an expression the scope walk does not otherwise enter.
+fn collect_declared_names_in_expression(
+    node: &JsNode,
+    arena: &ParseArena,
+    out: &mut rustc_hash::FxHashSet<String>,
+) {
+    match node {
+        JsNode::ArrowFunctionExpression { params, .. } => {
+            for param in arena.get_js_children(*params) {
+                collect_pattern_names_into(param, arena, out);
+            }
+        }
+        JsNode::FunctionExpression { id, params, .. }
+        | JsNode::FunctionDeclaration { id, params, .. } => {
+            if let Some(id) = id {
+                collect_pattern_names_into(arena.get_js_node(*id), arena, out);
+            }
+            for param in arena.get_js_children(*params) {
+                collect_pattern_names_into(param, arena, out);
+            }
+        }
+        JsNode::ClassExpression { id: Some(id), .. }
+        | JsNode::ClassDeclaration { id: Some(id), .. } => {
+            collect_pattern_names_into(arena.get_js_node(*id), arena, out);
+        }
+        JsNode::VariableDeclarator { id, .. } => {
+            collect_pattern_names_into(arena.get_js_node(*id), arena, out);
+        }
+        JsNode::CatchClause {
+            param: Some(param), ..
+        } => {
+            collect_pattern_names_into(arena.get_js_node(*param), arena, out);
+        }
+        _ => {}
+    }
+
+    crate::compiler::phases::phase2_analyze::for_each_js_child(node, arena, &mut |child| {
+        collect_declared_names_in_expression(child, arena, out);
+    });
 }
