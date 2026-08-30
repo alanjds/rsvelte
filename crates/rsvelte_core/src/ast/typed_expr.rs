@@ -147,6 +147,7 @@ impl TsAccessibility {
 /// priced on the type: `JsNode` is one enum and every variant pays its widest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TsMemberModifiers {
+    pub r#abstract: bool,
     pub accessor: bool,
     pub declare: bool,
     pub definite: bool,
@@ -159,8 +160,9 @@ pub struct TsMemberModifiers {
 impl TsMemberModifiers {
     /// The `(name, written)` pairs in the order acorn-typescript emits them.
     #[must_use]
-    pub const fn flags(&self) -> [(&'static str, bool); 6] {
+    pub const fn flags(&self) -> [(&'static str, bool); 7] {
         [
+            ("abstract", self.r#abstract),
             ("accessor", self.accessor),
             ("declare", self.declare),
             ("definite", self.definite),
@@ -755,6 +757,14 @@ pub enum JsNode {
         value: Box<Value>,
     },
     TSInterfaceDeclaration {
+        start: u32,
+        end: u32,
+        value: Box<Value>,
+    },
+    /// An abstract method's bodyless `value`, retained whole for the same
+    /// reason: nothing walks into it and its shape is acorn-typescript's, not
+    /// a `FunctionExpression`'s.
+    TSDeclareMethod {
         start: u32,
         end: u32,
         value: Box<Value>,
@@ -2312,7 +2322,8 @@ impl Serialize for JsNode {
                 map.end()
             }
             Self::TSTypeAliasDeclaration { value, .. }
-            | Self::TSInterfaceDeclaration { value, .. } => {
+            | Self::TSInterfaceDeclaration { value, .. }
+            | Self::TSDeclareMethod { value, .. } => {
                 opaque_ts_with_comments(value).serialize(serializer)
             }
             Self::TSModuleDeclaration {
@@ -2458,6 +2469,7 @@ fn get_bool(obj: &serde_json::Map<String, Value>, key: &str) -> bool {
 /// written `readonly` survived exactly as far as `from_value`.
 fn member_modifiers_from_value(obj: &serde_json::Map<String, Value>) -> TsMemberModifiers {
     TsMemberModifiers {
+        r#abstract: get_bool(obj, "abstract"),
         accessor: get_bool(obj, "accessor"),
         declare: get_bool(obj, "declare"),
         definite: get_bool(obj, "definite"),
@@ -2600,7 +2612,7 @@ impl JsNode {
                     .map(str::to_owned);
                 if matches!(
                     opaque_type.as_deref(),
-                    Some("TSTypeAliasDeclaration" | "TSInterfaceDeclaration")
+                    Some("TSTypeAliasDeclaration" | "TSInterfaceDeclaration" | "TSDeclareMethod")
                 ) {
                     let start = owned_obj
                         .get("start")
@@ -2610,18 +2622,13 @@ impl JsNode {
                         .get("end")
                         .and_then(Value::as_u64)
                         .unwrap_or_default() as u32;
-                    return if opaque_type.as_deref() == Some("TSTypeAliasDeclaration") {
-                        Self::TSTypeAliasDeclaration {
-                            start,
-                            end,
-                            value: Box::new(Value::Object(owned_obj)),
+                    let value = Box::new(Value::Object(owned_obj));
+                    return match opaque_type.as_deref() {
+                        Some("TSTypeAliasDeclaration") => {
+                            Self::TSTypeAliasDeclaration { start, end, value }
                         }
-                    } else {
-                        Self::TSInterfaceDeclaration {
-                            start,
-                            end,
-                            value: Box::new(Value::Object(owned_obj)),
-                        }
+                        Some("TSDeclareMethod") => Self::TSDeclareMethod { start, end, value },
+                        _ => Self::TSInterfaceDeclaration { start, end, value },
                     };
                 }
 
@@ -3365,6 +3372,7 @@ impl JsNode {
             Self::TSParameterProperty { .. } => Some("TSParameterProperty"),
             Self::TSEnumDeclaration { .. } => Some("TSEnumDeclaration"),
             Self::TSTypeAliasDeclaration { .. } => Some("TSTypeAliasDeclaration"),
+            Self::TSDeclareMethod { .. } => Some("TSDeclareMethod"),
             Self::TSInterfaceDeclaration { .. } => Some("TSInterfaceDeclaration"),
             Self::TSModuleDeclaration { .. } => Some("TSModuleDeclaration"),
             Self::TSAsExpression { .. } => Some("TSAsExpression"),
@@ -4088,6 +4096,7 @@ impl JsNode {
             | Self::TSParameterProperty { start, .. }
             | Self::TSEnumDeclaration { start, .. }
             | Self::TSTypeAliasDeclaration { start, .. }
+            | Self::TSDeclareMethod { start, .. }
             | Self::TSInterfaceDeclaration { start, .. }
             | Self::TSModuleDeclaration { start, .. }
             | Self::TSAsExpression { start, .. }
@@ -4176,6 +4185,7 @@ impl JsNode {
             | Self::TSParameterProperty { end, .. }
             | Self::TSEnumDeclaration { end, .. }
             | Self::TSTypeAliasDeclaration { end, .. }
+            | Self::TSDeclareMethod { end, .. }
             | Self::TSInterfaceDeclaration { end, .. }
             | Self::TSModuleDeclaration { end, .. }
             | Self::TSAsExpression { end, .. }
@@ -4267,6 +4277,7 @@ impl JsNode {
             Self::TSParameterProperty { .. } => "TSParameterProperty",
             Self::TSEnumDeclaration { .. } => "TSEnumDeclaration",
             Self::TSTypeAliasDeclaration { .. } => "TSTypeAliasDeclaration",
+            Self::TSDeclareMethod { .. } => "TSDeclareMethod",
             Self::TSInterfaceDeclaration { .. } => "TSInterfaceDeclaration",
             Self::TSModuleDeclaration { .. } => "TSModuleDeclaration",
             Self::TSAsExpression { .. } => "TSAsExpression",

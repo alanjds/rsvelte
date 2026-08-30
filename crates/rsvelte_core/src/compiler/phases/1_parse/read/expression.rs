@@ -11558,12 +11558,11 @@ fn convert_class_element_for_program_as_node(
 ) -> TypedClassElem {
     match element {
         oxc_ast::ast::ClassElement::MethodDefinition(method) => {
-            // Abstract methods are dropped by the Value path (`return None`).
-            if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
-                return TypedClassElem::Skip;
-            }
-            // TS modifiers / decorators have no typed representation here.
+            // TS modifiers / decorators have no typed representation here, and
+            // an abstract method's `value` is a `TSDeclareMethod` the typed
+            // function variant cannot spell.
             if !method.decorators.is_empty()
+                || method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
                 || method.r#override
                 || method.optional
                 || method.accessibility.is_some()
@@ -11687,10 +11686,8 @@ fn convert_class_element_for_program(
 ) -> Option<Value> {
     match element {
         oxc_ast::ast::ClassElement::MethodDefinition(method) => {
-            // Filter out abstract methods (TSAbstractMethodDefinition)
-            if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
-                return None;
-            }
+            let is_abstract =
+                method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition;
             let start = offset + method.span.start as usize;
             let end = offset + method.span.end as usize;
             let mut obj = Map::new();
@@ -11712,15 +11709,29 @@ fn convert_class_element_for_program(
             let key = convert_property_key(arena, &method.key, offset, line_offsets);
             obj.set_field("key", key.to_value());
 
-            // value (function expression)
-            let value =
+            // value (function expression). acorn-typescript gives a bodyless
+            // abstract method a `TSDeclareMethod`: same fields minus `body`,
+            // plus the `expression` flag and the return type it always writes.
+            let mut value =
                 convert_function_expression_for_program(arena, &method.value, offset, line_offsets);
+            if is_abstract && let Value::Object(func) = &mut value {
+                func.set_field("type", Value::String("TSDeclareMethod".to_string()));
+                func.remove("body");
+                func.set_field("expression", Value::Bool(false));
+                if let Some(return_type) = &method.value.return_type {
+                    func.set_field(
+                        "returnType",
+                        convert_type_annotation_adjusted(arena, return_type, offset, line_offsets),
+                    );
+                }
+            }
             obj.set_field("value", value);
 
             push_member_modifiers(
                 &mut obj,
                 method.accessibility,
                 &[
+                    ("abstract", is_abstract),
                     ("override", method.r#override),
                     ("optional", method.optional),
                 ],
@@ -11729,7 +11740,10 @@ fn convert_class_element_for_program(
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
-            // Filter out abstract property definitions (TSAbstractPropertyDefinition)
+            // An abstract property is still dropped: official keeps it in the
+            // AST *and* prints `abstract p;` into the compiled output, which no
+            // JS parser accepts, so emitting it here would need that decision
+            // taken first.
             if prop.r#type == oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition {
                 return None;
             }

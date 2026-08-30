@@ -21,7 +21,8 @@
 //! - **JSON fallback (`TAG_JSON`)**: the entire `StyleSheet` sub-tree,
 //!   `SvelteOptions`, `TransitionDirective`/`AnimateDirective`
 //!   `metadata`, `Root.js`, and the two opaque TypeScript declaration
-//!   variants (`TSTypeAliasDeclaration` and `TSInterfaceDeclaration`).
+//!   variants (`TSTypeAliasDeclaration`, `TSInterfaceDeclaration` and
+//!   `TSDeclareMethod`).
 //!   These are rare and have many optional fields; switching them to
 //!   dedicated tags is a follow-up.
 //!
@@ -2114,7 +2115,8 @@ fn write_js_node<W: Writer>(w: &mut W, node: &JsNode, arena: &ParseArena) -> std
         // stored raw value, so the JsNode serializer also restores comments
         // captured in the arena side table (#3702).
         JsNode::TSTypeAliasDeclaration { start, end, .. }
-        | JsNode::TSInterfaceDeclaration { start, end, .. } => {
+        | JsNode::TSInterfaceDeclaration { start, end, .. }
+        | JsNode::TSDeclareMethod { start, end, .. } => {
             write_json_node(w, *start, *end, node)?;
         }
         JsNode::TSParameterProperty { start, end, loc } => {

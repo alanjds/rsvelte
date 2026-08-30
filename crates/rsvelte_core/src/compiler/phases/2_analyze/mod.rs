@@ -3945,6 +3945,7 @@ pub(crate) fn for_each_js_child(node: &JsNode, arena: &ParseArena, f: &mut impl 
         | JsNode::TSEnumDeclaration { .. }
         | JsNode::TSTypeAliasDeclaration { .. }
         | JsNode::TSInterfaceDeclaration { .. }
+        | JsNode::TSDeclareMethod { .. }
         | JsNode::TSParameterProperty { .. }
         | JsNode::Comment { .. }
         | JsNode::Null => {}
@@ -6409,7 +6410,8 @@ fn collect_identifier_names_in_node(
             loc: _,
         }
         | JsNode::TSTypeAliasDeclaration { .. }
-        | JsNode::TSInterfaceDeclaration { .. } => {}
+        | JsNode::TSInterfaceDeclaration { .. }
+        | JsNode::TSDeclareMethod { .. } => {}
         JsNode::TSModuleDeclaration {
             start: _,
             end: _,
