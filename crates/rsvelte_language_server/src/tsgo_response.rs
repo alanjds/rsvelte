@@ -752,11 +752,21 @@ pub fn widen_hover_range_over_string_quotes(result: &mut Value, text: &str) {
 /// answers `[]` for a definition request it cannot map.
 #[must_use]
 pub fn tsgo_unmapped_result(method: &str) -> Value {
-    if method == "textDocument/definition" {
-        Value::Array(Vec::new())
-    } else {
-        Value::Null
+    match method {
+        "textDocument/definition" => Value::Array(Vec::new()),
+        // `PluginHost.getCompletions` returns `Promise<CompletionList>` and ends
+        // in `CompletionList.create(flattened, isIncomplete)`, so upstream has no
+        // way to answer a completion with `null` — every plugin declining leaves
+        // an empty list whose `isIncomplete` is the `false` seed of the reduce.
+        "textDocument/completion" => empty_completion_list(),
+        _ => Value::Null,
     }
+}
+
+/// The value upstream's completion host produces when every plugin declines.
+#[must_use]
+pub fn empty_completion_list() -> Value {
+    serde_json::json!({ "isIncomplete": false, "items": [] })
 }
 
 fn is_semantic_tokens_method(method: &str) -> bool {
@@ -968,6 +978,17 @@ fn json_u32(value: &Value) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unmapped_completion_is_an_empty_list_not_null() {
+        assert_eq!(
+            tsgo_unmapped_result("textDocument/completion"),
+            json!({ "isIncomplete": false, "items": [] })
+        );
+        // The other two shapes upstream can produce are unchanged.
+        assert_eq!(tsgo_unmapped_result("textDocument/definition"), json!([]));
+        assert_eq!(tsgo_unmapped_result("textDocument/hover"), Value::Null);
+    }
+
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
