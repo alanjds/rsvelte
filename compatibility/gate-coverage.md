@@ -4287,7 +4287,7 @@ report; below 1000 manifest components it exits 2; and without the compiler's ow
 `RSVELTE_SIGNAL_DISCIPLINE_ARMED` line it exits 2, because a binding predating the check prints
 nothing at all.
 
-**Why it exists.** `two-ports-inventory.md` row 17: upstream resolves a write target once through
+**Why it exists.** `two-ports-inventory.md` row 21: upstream resolves a write target once through
 `scope.get`, and 32 of rsvelte's 44 `*_ast.rs` passes compare identifier *text* against a
 `Vec<String>`, so each one answers the shadow question separately. Output equality only finds
 such a pass where a collected file happens to carry the shape *and* the file diverges on nothing
@@ -4337,6 +4337,36 @@ the source byte-identical.
 **What is unmeasured `[U]`.** Whether the two rules above are the only exclusions upstream's
 output forces. They were derived from the 9 violations the first corpus run produced, which is a
 sample of one tree's output, not an enumeration of the shapes upstream emits.
+
+## 42. Deliberate-divergence pinning — `scripts/dev/deliberate-divergences-check.mjs`
+
+**Unit.** One `## ` section of `compatibility/deliberate-divergences.md`, 11 of them. The check is
+that each names at least one repository path that (a) exists on disk and (b) is a test — under a
+`tests/` directory, in `compatibility/pattern-corpus/`, or a `scripts/**/test-*.mjs` harness.
+Run by `ci.yml`'s `Corpus verify baseline-flag contract` job and `pnpm run
+test:deliberate-divergences`; it reads only the document and the filesystem, so it needs no
+corpus, no submodules and no build. Hard gate, no ratchet.
+
+**Why it exists.** A recorded deliberate divergence is a decision *not* to close a difference, and
+`known-failures-md-check.mjs` (C2) never interprets a justification — so until this, a section
+could describe behaviour nothing re-checks, and a later refactor would change the behaviour while
+the document went on asserting the old one. Ratchet entries are attributed *to* this document, so
+an unpinned section makes every entry attributed to it unverifiable too.
+
+**[D] and positive control.** Replacing one section's `**Pinned by** …` citation with prose makes
+the check exit 1 naming that section and its line; restoring it leaves `git diff` empty and the
+check green at 11/11. Its first real run also found the boundary the checker itself had wrong: the
+section pinned by `scripts/dev/test-lint-severity-exit-attribution.mjs` was reported as unpinned,
+because the first pin predicate demanded a `tests/` directory. **A derived classifier needs its own
+control** — the shape had to be read off the tree, not assumed.
+
+**[S] What it does not look at.** Three things, all of them the same shape as C2's. It never runs
+the pin, so a test that no longer exercises the divergence — or one whose assertion was weakened to
+whatever the code now does — passes. It never checks that the pin is *about* the section: any
+existing test path in the section's body satisfies it, including one cited as background. And it
+has no view of the reverse direction, a divergence that is real and **not** recorded here at all;
+that population is bounded only by the ratchets whose `.md` attributes entries to this document,
+and today only 6 of 31 ratchet docs make any such attribution.
 
 ## Adding a gate, or a row here
 

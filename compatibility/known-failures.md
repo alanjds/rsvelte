@@ -300,23 +300,22 @@ the equality instrumentation, `$.track_reactivity_loss`, ownership mutation
 validation, `$.tag()` / `$.tag_proxy()`, `console.*` wrapping and the signal
 read/write row — was already empty.
 
-Two divergences remain here, both deferred only because **no corpus entry
-reaches them** — each has a check that distinguishes fixing from not, so neither
-is unverifiable:
+The two divergences this section used to defer — both were deferred only because
+**no corpus entry reached them** — are now **closed**, and both are pinned in the
+pattern corpus rather than described here:
 
-- **Over-reach.** The exemption is carried by a level flag that stays set for the
-  whole body conversion, so an assignment nested *inside* an exempt arrow's body
-  is exempted too. `onclick={() => (a.b = f(() => (c.d = e)))}` must emit
-  `$.assign(c, 'd'` and must not emit `$.assign(a, 'b'` — one input, both signs.
-  A boolean cannot express upstream's third conjunct, which is the *identity*
-  test `expression === context.path.at(-1)`; the exempt arrow has to be carried
-  by identity, not by a level.
-- **Under-reach, the opposite direction.** Upstream's guard names
-  `SvelteElement` alongside `RegularElement`, but `visit_event_attribute` is
-  reached only from `regular_element.rs`, so `<svelte:element this={tag}
-  onclick={() => (o.x = v)}>` is never exempt and emits
-  `$.assign(o, 'x', '=', v, …)` where upstream emits none. Measured, not
-  inferred.
+- **Over-reach**, `assign-exempt-arrow-does-not-cover-a-nested-arrow.svelte`.
+  `onclick={() => (a.b = f(() => (c.d = e)))}` must emit `$.assign(c, 'd'` and
+  must not emit `$.assign(a, 'b'` — one input, both signs. Official emits exactly
+  that and so does rsvelte, on all four targets.
+- **Under-reach**, `assign-exempt-arrow-on-svelte-element.svelte`.
+  `<svelte:element this={tag} onclick={() => (o.x = v)}>` must emit no `$.assign`
+  at all; official emits `() => o.x = v` and so does rsvelte.
+
+Both repros were verified to **reach** the decision before being called closed:
+official's own output for the first carries `$.assign(c, 'd', '=', e, …)`, so a
+port that exempted nothing would still differ. A repro that goes green without
+reaching the decision is evidence about the repro, not about the defect.
 
 Counting method, for whoever picks this up: attribute an entry by **comparing
 how many times each helper appears** on each side, never by the first differing

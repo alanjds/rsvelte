@@ -2,7 +2,7 @@
 //!
 //! Every gate in this repository compares rsvelte's output to official's on some
 //! population, so a defect is only ever found where someone collected an input
-//! that reaches it. `two-ports-inventory.md` row 17 is a class that defeats
+//! that reaches it. `two-ports-inventory.md` row 21 is a class that defeats
 //! that: a rewrite pass that matches a binding by NAME claims an identifier
 //! resolving to a shadow. The observable end state needs no oracle — the
 //! generated program hands a signal helper something the same program declared
@@ -282,7 +282,7 @@ impl<'ast> Visit<'ast> for SinkVisitor<'_> {
 mod tests {
     use super::*;
 
-    /// The shape `two-ports-inventory.md` row 17 found, at both sinks: a write
+    /// The shape `two-ports-inventory.md` row 21 found, at both sinks: a write
     /// lowering claimed an identifier that resolves to a shadow in its own input.
     #[test]
     fn reports_a_write_to_something_the_program_declares_plain() {
@@ -333,7 +333,7 @@ mod tests {
     }
 
     /// A user callback nested inside a runtime one is user code again, which is
-    /// exactly where row 17's defect lives.
+    /// exactly where row 21's defect lives.
     #[test]
     fn a_user_callback_inside_a_runtime_callback_is_still_judged() {
         assert_eq!(

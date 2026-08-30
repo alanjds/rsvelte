@@ -1184,6 +1184,11 @@ jobs:
       - name: Check the known-failures doc count parser
         run: node scripts/dev/test-known-failures-md-check.mjs
 
+      # A recorded deliberate divergence is a decision not to close, so it has to
+      # be held by a test; this reads the doc, not the corpus.
+      - name: Check every deliberate divergence is pinned
+        run: node scripts/dev/deliberate-divergences-check.mjs
+
       # The CSS-prune sweep's comparison key. Same reason it lives here: the
       # comparator is a pure module, so it needs neither the NAPI binding nor
       # submodules that the sweep itself does.
