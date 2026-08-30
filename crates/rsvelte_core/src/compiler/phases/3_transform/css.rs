@@ -5318,6 +5318,21 @@ fn is_has_argument_unused(
         }
     }
 
+    // Upstream matches a `:has()` argument against the component's OWN elements;
+    // what a slot, render tag or component injects is not in the tree it walks.
+    // So a constraint no element here carries is unused however incomplete the
+    // structural data is, and the conservative opaque-boundary bails below —
+    // which cost 13 of 28 cells on a combinator x opaque-host grid — do not apply.
+    if selector_info_has_constraints(&first_info)
+        && !ctx
+            .dom_structure
+            .elements
+            .iter()
+            .any(|el| selector_matches_element(&first_info, el))
+    {
+        return true;
+    }
+
     // A `:has()` nested inside the argument has its own subject set — the
     // elements this argument could match — so it has to be resolved against
     // those. `selector_info_has_constraints` sees no tag/class/id in
