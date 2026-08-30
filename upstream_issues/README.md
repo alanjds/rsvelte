@@ -92,6 +92,7 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
 | `eslint-plugin-svelte-shorthand-directive-modifier.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
 | `esrap-property-prints-a-function-expression-as-a-method.md` | sveltejs/esrap (shipped by sveltejs/svelte's lockfile) | — | unrecorded |
+| `lsp-render-tag-kills-every-template-definition.md` | sveltejs/language-tools | — | unrecorded |
 | `oxfmt-const-tag-ending-in-a-line-comment.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
 | `oxfmt-each-pattern-default-unknown-node-type.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
 | `oxfmt-single-quoted-attribute-containing-a-double-quote.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |

@@ -1199,6 +1199,81 @@ reference list **empty**, and the component's `Derived` binding owns the handler
 so a position-keyed test cannot separate them no matter which port asks it. Two of the 16 cells
 stay red.
 
+### 22. How is an inline `$props()` type hoisted to `$$ComponentProps`? — [D]
+
+**Upstream:** one branch of `handle$propsRune`
+(`svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts`, the "Easy mode" arm). It takes
+`node.initializer.typeArguments?.[0] || node.type` — so the **type-argument** form
+`$props<{…}>()` and the **type-annotation** form `let {…}: {…} = $props()` are the *same*
+`generic_arg` — and relocates it with `preprendStr` + `appendLeft` + **`this.str.move(...)`** +
+`appendRight(surroundWithIgnoreComments('$$ComponentProps'))`. Because the type text is *moved*
+rather than re-emitted, every character of the hoisted alias keeps its magic-string mapping.
+
+**Ports.** Both in `rsvelte_projection` `svelte2tsx/script/props_rune.rs::apply_props_typedef`,
+selected by which flag the same upstream `||` collapses:
+
+- `HAS_TYPE_ARG` (`props_rune.rs:126-150`) mirrors upstream: `prepend_right` + `append_left` +
+  `append_right`, and signals `props_type_arg_hoist` so `process_instance_script_tag.rs:321`
+  performs the `move_range`.
+- `TYPE_ANNOTATION | HOISTABLE_TYPE` (`props_rune.rs:154-176`) does **not** move anything. It
+  `overwrite`s the annotation away at its original site and the alias is re-synthesized as fresh
+  text by `format!` at `process_instance_script_tag.rs:177` / `:199` / `:356`.
+
+**Demonstrated.** Two inputs that differ only in which spelling of the same type upstream's `||`
+picks, both `is_ts_file: true`, counting map segments on the generated `$$ComponentProps` alias
+line:
+
+| input | generated alias line | segments | mapped columns |
+|---|---|---|---|
+| `let { a } = $props<{ a: number }>()` | `type $$ComponentProps = { a: number };…` | **15** | 35/59 |
+| `let { a }: { a: number } = $props()` | `;type $$ComponentProps =  { a: number };…` | **0** | 0/61 |
+
+The generated **text** matches upstream in both cases, which is why the svelte2tsx text gate is
+green on them; the divergence is confined to the map. And the map gate cannot see it either — it
+asserts rsvelte's map is *structurally well-formed*, not equal to official's, because the two are
+segmented too differently to diff. So a diagnostic anywhere in an inline-annotated props type
+resolves to the wrong source position, and nothing in the tree reports it.
+
+**Not closed.** Degree 1 is available in principle — the annotation arm can take the
+type-argument arm's `move_range` path — but it changes which chunk the `;` markers travel with,
+which is exactly the ordering `process_instance_script_tag.rs:301-310` comments as load-bearing,
+so it needs the corpus svelte2tsx text gate rather than a unit test alone.
+
+### 23. What compiler options and shim files does the shadow program get? — [D], opened deliberately
+
+**Upstream:** one function, `plugins/typescript/service.ts`'s `createLanguageService`. It forces
+`target: ts.ScriptTarget.Latest` when the project declares none and raises anything below ES2015
+to ES2015 (`:792-795`), builds its no-project fallback with `include: []` "to not flood the
+initial files" (`:874-878`), and takes its shim set from svelte2tsx's `get_global_types`, which
+always contains `svelte-native-jsx.d.ts` (`svelte2tsx/index.js:5685`).
+
+**Ports.** `rsvelte_language_server` `tsgo_overlay.rs::write_tsconfig` /
+`materialize_support_files`, and `rsvelte_check` `svelte_check/overlay.rs`. They write the same
+kind of generated tsconfig beside the same two vendored shims, and neither calls the other.
+
+**Demonstrated, and this row is the unusual case where the divergence was created here on
+purpose.** All three rules were missing from *both* ports; the language-server one now carries
+them and the svelte-check one does not. Measured on three mini-workspaces against the live
+official server, completion at a script-body position:
+
+| workspace | official has `Temporal`/`DisposableStack`/`AsyncDisposableStack`/`SuppressedError`/`svelteNative` | rsvelte LSP before | rsvelte LSP after |
+|---|---|---|---|
+| no `tsconfig.json` | all five | none | all five |
+| `target: ES5` | `svelteNative` only | none | `svelteNative` only |
+| `target: ESNext` | all five | four (no `svelteNative`) | all five |
+
+The `include` rule is the largest of the three by effect: with no project config rsvelte pulled
+every `.d.ts` in the repository into the program, so bits-ui's own `declare global`s
+(`bitsEscapeLayers` and five siblings) were offered as completions at **55 of 285** sampled
+script-body positions where official offers nothing.
+
+**Why the asymmetry was left.** svelte-check's unit is a type-checked project, so the same change
+moves `check-known-failures.json`, and neither layer of that gate is runnable from the worktree
+this was measured in — Layer 2 needs `submodules/cmsaasstarter` and the skeleton monorepo
+installed from their own lockfiles. Closing this row is degree 1 (`rsvelte_check`'s overlay takes
+the same three rules) plus one run of the check gate; it is not a design question.
+
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the

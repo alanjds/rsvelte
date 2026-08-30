@@ -28,10 +28,14 @@ const SHADOW_DIRECTORY: &str = "svelte";
 const OVERLAY_TSCONFIG: &str = "tsconfig.json";
 const SHIM_SHIMS_NAME: &str = "svelte-shims-v4.d.ts";
 const SHIM_JSX_NAME: &str = "svelte-jsx-v4.d.ts";
+const SHIM_NATIVE_JSX_NAME: &str = "svelte-native-jsx.d.ts";
 const SHIM_SHIMS: &str =
     include_str!("../../rsvelte_check/src/svelte_check/shims/svelte-shims-v4.d.ts");
 const SHIM_JSX: &str =
     include_str!("../../rsvelte_check/src/svelte_check/shims/svelte-jsx-v4.d.ts");
+/// `get_global_types` puts this in every shim set it builds, Svelte 3 or 4+.
+const SHIM_NATIVE_JSX: &str =
+    include_str!("../../rsvelte_check/src/svelte_check/shims/svelte-native-jsx.d.ts");
 const IGNORE_START: &str = "/*Ωignore_startΩ*/";
 const IGNORE_END: &str = "/*Ωignore_endΩ*/";
 
@@ -877,12 +881,15 @@ impl TsgoOverlay {
 
     fn materialize_support_files(&self) -> Result<(), TsgoOverlayError> {
         reject_symlink_components(&self.cache_dir, &self.cache_dir)?;
-        let shims = self.cache_dir.join(SHIM_SHIMS_NAME);
-        let jsx = self.cache_dir.join(SHIM_JSX_NAME);
-        reject_symlink_components(&shims, &self.cache_dir)?;
-        reject_symlink_components(&jsx, &self.cache_dir)?;
-        write_if_changed(&shims, SHIM_SHIMS)?;
-        write_if_changed(&jsx, SHIM_JSX)?;
+        for (name, contents) in [
+            (SHIM_SHIMS_NAME, SHIM_SHIMS),
+            (SHIM_JSX_NAME, SHIM_JSX),
+            (SHIM_NATIVE_JSX_NAME, SHIM_NATIVE_JSX),
+        ] {
+            let path = self.cache_dir.join(name);
+            reject_symlink_components(&path, &self.cache_dir)?;
+            write_if_changed(&path, contents)?;
+        }
         self.write_tsconfig()
     }
 
@@ -895,15 +902,20 @@ impl TsgoOverlay {
         let mut include = vec!["svelte/**/*".to_string()];
         if let Some(user_include) = specs.include {
             include.extend(user_include);
-        } else if specs.files.is_none() {
-            let root = self
-                .source_tsconfig
-                .as_deref()
-                .and_then(Path::parent)
-                .unwrap_or(&self.workspace);
+        } else if specs.files.is_none()
+            && let Some(root) = self.source_tsconfig.as_deref().and_then(Path::parent)
+        {
+            // With no project config upstream builds its fallback with
+            // `include: []` (`service.ts:874-878`, "not to flood the initial
+            // files"), so a workspace glob here would put every `.d.ts` in the
+            // repository — and its `declare global`s — into the program.
             include.push(format!("{}/**/*", path_for_tsconfig(root)));
         }
-        let mut files = vec![SHIM_SHIMS_NAME.to_string(), SHIM_JSX_NAME.to_string()];
+        let mut files = vec![
+            SHIM_SHIMS_NAME.to_string(),
+            SHIM_JSX_NAME.to_string(),
+            SHIM_NATIVE_JSX_NAME.to_string(),
+        ];
         files.extend(specs.files.unwrap_or_default());
         let mut config = json!({
             "compilerOptions": {
@@ -919,6 +931,9 @@ impl TsgoOverlay {
             "files": files,
             "include": include
         });
+        if let Some(target) = overlay_target(self.source_tsconfig.as_deref()) {
+            config["compilerOptions"]["target"] = json!(target);
+        }
         if let Some(source) = &self.source_tsconfig {
             config["extends"] = json!(path_for_tsconfig(source));
         }
@@ -1083,6 +1098,27 @@ struct InheritedConfigSpecs {
     files: Option<Vec<String>>,
 }
 
+/// The `target` the shadow program must be given, or `None` to keep the
+/// project's. Mirrors `service.ts:792-795`, where upstream forces
+/// `ScriptTarget.Latest` when the project sets no target and raises anything
+/// below ES2015 to ES2015 — without it a shadow program is checked against a
+/// smaller lib than the editor's own program uses.
+fn overlay_target(tsconfig: Option<&Path>) -> Option<&'static str> {
+    match tsconfig.and_then(|path| resolve_compiler_option(path, "target")) {
+        None => Some("ESNext"),
+        Some(target) => {
+            matches!(target.to_ascii_lowercase().as_str(), "es3" | "es5").then_some("ES2015")
+        }
+    }
+}
+
+fn resolve_compiler_option(tsconfig: &Path, key: &str) -> Option<String> {
+    resolve_config_value(tsconfig, key).and_then(|value| match value {
+        serde_json::Value::String(text) => Some(text),
+        _ => None,
+    })
+}
+
 fn read_tsconfig_specs(tsconfig: &Path) -> InheritedConfigSpecs {
     let config_dir = tsconfig.parent().unwrap_or_else(|| Path::new("."));
     let rebase = |key: &str| {
@@ -1132,6 +1168,48 @@ fn resolve_config_specs(tsconfig: &Path, key: &str) -> Option<(Vec<String>, Path
                 base,
             ));
         }
+        let parents = match parsed.get("extends") {
+            Some(serde_json::Value::String(parent)) => vec![parent.as_str()],
+            Some(serde_json::Value::Array(parents)) => parents
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect(),
+            _ => Vec::new(),
+        };
+        pending.extend(
+            parents
+                .into_iter()
+                .filter_map(|parent| resolve_extends_target(&base, parent)),
+        );
+    }
+    None
+}
+
+fn resolve_config_value(tsconfig: &Path, key: &str) -> Option<serde_json::Value> {
+    let mut pending = vec![absolute_normalized(tsconfig)];
+    let mut seen = BTreeSet::new();
+    let mut visited = 0usize;
+    while let Some(path) = pending.pop() {
+        if visited == MAX_EXTENDS_CONFIGS || !seen.insert(path.clone()) {
+            continue;
+        }
+        visited += 1;
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(parsed) = parse_jsonc(&raw) else {
+            continue;
+        };
+        if let Some(value) = parsed
+            .get("compilerOptions")
+            .and_then(|options| options.get(key))
+        {
+            return Some(value.clone());
+        }
+        let base = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         let parents = match parsed.get("extends") {
             Some(serde_json::Value::String(parent)) => vec![parent.as_str()],
             Some(serde_json::Value::Array(parents)) => parents
@@ -1966,6 +2044,90 @@ mod tests {
             json!([path_for_tsconfig(
                 &overlay.workspace().join("src/generated/**")
             )])
+        );
+    }
+
+    fn overlay_config_of(workspace: &Path) -> serde_json::Value {
+        let overlay = TsgoOverlay::build(workspace, None).unwrap();
+        serde_json::from_str(&fs::read_to_string(overlay.tsconfig_path()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_project_without_a_config_does_not_pull_in_the_whole_workspace() {
+        let workspace = TestWorkspace::new("no-config-include");
+        write(&workspace.0.join("src/App.svelte"), "<p />");
+        write(
+            &workspace.0.join("src/globals.d.ts"),
+            "declare const unrelated: 1;",
+        );
+
+        let config = overlay_config_of(&workspace.0);
+        // `service.ts:874-878` builds its fallback with `include: []`.
+        assert_eq!(config["include"], json!(["svelte/**/*"]));
+        assert_eq!(config["compilerOptions"]["target"], json!("ESNext"));
+        assert!(config.get("extends").is_none());
+    }
+
+    #[test]
+    fn a_target_below_es2015_is_raised_and_a_modern_one_is_left_alone() {
+        for (declared, expected) in [
+            ("ES5", Some("ES2015")),
+            ("es3", Some("ES2015")),
+            ("ES2020", None),
+            ("ESNext", None),
+        ] {
+            let workspace = TestWorkspace::new(&format!("target-{declared}"));
+            write(
+                &workspace.0.join("tsconfig.json"),
+                &format!("{{ \"compilerOptions\": {{ \"target\": \"{declared}\" }} }}"),
+            );
+            write(&workspace.0.join("App.svelte"), "<p />");
+
+            let config = overlay_config_of(&workspace.0);
+            assert_eq!(
+                config["compilerOptions"]
+                    .get("target")
+                    .and_then(|v| v.as_str()),
+                expected,
+                "declared {declared}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_is_read_through_the_extends_chain() {
+        let workspace = TestWorkspace::new("target-extends");
+        write(
+            &workspace.0.join("configs/base.json"),
+            r#"{ "compilerOptions": { "target": "ES2022" } }"#,
+        );
+        write(
+            &workspace.0.join("tsconfig.json"),
+            r#"{ "extends": "./configs/base.json" }"#,
+        );
+        write(&workspace.0.join("App.svelte"), "<p />");
+
+        assert!(
+            overlay_config_of(&workspace.0)["compilerOptions"]
+                .get("target")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_native_jsx_shim_is_part_of_every_program() {
+        let workspace = TestWorkspace::new("native-jsx-shim");
+        write(&workspace.0.join("App.svelte"), "<p />");
+
+        let overlay = TsgoOverlay::build(&workspace.0, None).unwrap();
+        assert!(overlay.cache_dir().join(SHIM_NATIVE_JSX_NAME).is_file());
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(overlay.tsconfig_path()).unwrap()).unwrap();
+        assert!(
+            config["files"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(SHIM_NATIVE_JSX_NAME))
         );
     }
 

@@ -7,6 +7,8 @@ use serde_json::Value;
 
 const COMPONENT_SUFFIX: &str = "__SvelteComponent_";
 const RUNES: [&str; 4] = ["$props", "$state", "$derived", "$effect"];
+/// `internalHelpers.renderName` — the function svelte2tsx wraps a component in.
+const RENDER_NAME: &str = "$$render";
 
 /// Source context needed to normalize an initial or resolved completion.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -99,12 +101,24 @@ pub fn rewrite_completion_response_for_context(
     let Some(items) = completion_items_mut(value) else {
         return;
     };
+    items.retain(is_not_svelte2tsx_completion);
     if context.kit_route {
         duplicate_kit_types_items(items);
     }
     for item in items {
         rewrite_completion_item_with_preference(item, context.prefer_components);
     }
+}
+
+/// `CompletionProvider.ts`'s `isNoSvelte2tsxCompletion`, minus its
+/// `kindModifiers === 'declare'` arm: tsgo's LSP items carry no `kindModifiers`,
+/// so the `svelte2tsxTypes` name list is left unported rather than dropping a
+/// user's own `SvelteStore`.
+fn is_not_svelte2tsx_completion(item: &Value) -> bool {
+    let Some(label) = item.get("label").and_then(Value::as_str) else {
+        return true;
+    };
+    !label.starts_with("__sveltets_") && label != RENDER_NAME && !label.starts_with("$$_")
 }
 
 /// Normalize one initial or resolved completion item.
@@ -132,6 +146,12 @@ pub fn rewrite_visible_tsgo_response(value: &mut Value) {
 }
 
 fn rewrite_completion_item_with_preference(item: &mut Value, prefer_components: bool) {
+    // Upstream builds every completion item itself and never sets `tags` —
+    // `CompletionItemTag` appears nowhere in `packages/language-server/src` —
+    // so tsgo's deprecation tag is a field upstream cannot produce.
+    if let Some(object) = item.as_object_mut() {
+        object.remove("tags");
+    }
     let generated_component = item
         .get("label")
         .and_then(Value::as_str)
@@ -575,6 +595,74 @@ mod tests {
             "import Button from './Button.svelte';\n"
         );
         assert_eq!(item["data"]["name"], "Button__SvelteComponent_");
+    }
+
+    #[test]
+    fn a_deprecation_tag_is_not_forwarded() {
+        let mut item = json!({
+            "label": "HTMLDirectoryElement",
+            "tags": [1],
+            "sortText": "11",
+            "data": { "name": "HTMLDirectoryElement" }
+        });
+        rewrite_completion_item(&mut item);
+        assert!(item.get("tags").is_none());
+        // Only `tags` goes; the item is otherwise forwarded unchanged.
+        assert_eq!(item["sortText"], "11");
+        assert_eq!(item["label"], "HTMLDirectoryElement");
+    }
+
+    #[test]
+    fn a_deprecation_tag_is_not_forwarded_in_a_list_either() {
+        let mut result = json!({
+            "isIncomplete": false,
+            "items": [{ "label": "a", "tags": [1] }, { "label": "b" }]
+        });
+        rewrite_completion_response_for_context(
+            &mut result,
+            CompletionRewriteContext {
+                kit_route: false,
+                prefer_components: true,
+            },
+        );
+        assert!(result["items"][0].get("tags").is_none());
+    }
+
+    #[test]
+    fn svelte2tsx_internals_are_dropped_from_a_list() {
+        let mut result = json!({
+            "isIncomplete": false,
+            "items": [
+                { "label": "__sveltets_2_any" },
+                { "label": "$$render" },
+                { "label": "$$_ident" },
+                { "label": "Popover" },
+                { "label": "SvelteStore" }
+            ]
+        });
+        rewrite_completion_response_for_context(
+            &mut result,
+            CompletionRewriteContext {
+                kit_route: false,
+                prefer_components: true,
+            },
+        );
+        let labels: Vec<&str> = result["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["label"].as_str().expect("label"))
+            .collect();
+        // `SvelteStore` stays: upstream only drops it when tsgo reports
+        // `kindModifiers: 'declare'`, which the LSP shape does not carry.
+        assert_eq!(labels, ["Popover", "SvelteStore"]);
+    }
+
+    #[test]
+    fn a_bare_array_response_is_filtered_too() {
+        let mut result = json!([{ "label": "__sveltets_2_any" }, { "label": "keep" }]);
+        rewrite_completion_response(&mut result);
+        assert_eq!(result.as_array().expect("array").len(), 1);
     }
 
     #[test]

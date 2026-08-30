@@ -68,7 +68,7 @@ use crate::tsgo_rename::{
     rewrite_prepare_response, rewrite_workspace_edit,
 };
 use crate::tsgo_response::{
-    RequestDocumentContext, TsgoResponseMapper, normalize_definition_result,
+    RequestDocumentContext, TsgoResponseMapper, empty_completion_list, normalize_definition_result,
     normalize_hover_result, tsgo_unmapped_result, widen_hover_range_over_string_quotes,
 };
 use crate::uri::{path_to_uri, uri_to_path};
@@ -832,12 +832,12 @@ impl Server {
             Ok(params) => params.text_document_position,
             Err(err) => {
                 log::warn(format_args!("textDocument/completion: {err}"));
-                self.respond_nothing(id);
+                self.respond(Response::new_ok(id, empty_completion_list()));
                 return;
             }
         };
         if !self.settings.completion_enable {
-            self.respond_nothing(id);
+            self.respond(Response::new_ok(id, empty_completion_list()));
             return;
         }
         if !self.settings.native_completion_enabled() {
@@ -1956,7 +1956,7 @@ impl Server {
             // An unfinished unknown `{#...` now makes the compiler reject the
             // projection. Preserve the pre-diagnostic completion response when
             // the native provider also has nothing to offer.
-            self.respond_nothing(request.id);
+            self.respond(Response::new_ok(request.id, empty_completion_list()));
             return;
         }
         let component_site = self.component_completion_site(&request);
@@ -2003,7 +2003,9 @@ impl Server {
             log::warn(format_args!("could not forward request to tsgo: {error}"));
             self.respond(Response::new_ok(
                 id,
-                pending.fallback_result.unwrap_or(serde_json::Value::Null),
+                pending
+                    .fallback_result
+                    .unwrap_or_else(|| tsgo_unmapped_result(&pending.method)),
             ));
             return;
         }
@@ -3174,7 +3176,7 @@ impl Server {
                                     completion_action(site, count, first_is_member),
                                     CompletionAction::Forward
                                 ) {
-                                    *result = serde_json::Value::Null;
+                                    *result = empty_completion_list();
                                 }
                             }
                         }
@@ -3305,6 +3307,15 @@ impl Server {
                     }
                 } else if let Some(fallback) = fallback_result {
                     response.response_result = Ok(fallback);
+                }
+                // tsgo answers `null` where it has nothing; upstream's plugins do
+                // too, but `PluginHost.getCompletions` still returns the
+                // `CompletionList.create([], false)` its signature promises.
+                if method == "textDocument/completion"
+                    && let Ok(result) = &mut response.response_result
+                    && result.is_null()
+                {
+                    *result = empty_completion_list();
                 }
                 if let Some((key, stash)) = adopted_completion_data {
                     self.remember_completion_data(key, stash);
