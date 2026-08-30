@@ -398,6 +398,30 @@ go divergent → byte-identical on each target and **none** move the other way, 
 shrinking from 15 to 11 divergent lines with the residue in comment placement. A fix measured on
 one direction's population would have scored a one-directional patch green.
 
+**The `is_known` half of the same source-vs-built split closed on 2026-08-30, and its
+population is disjoint from the `is_defined` one above.** `build_template_chunk` folds a chunk
+whose evaluation is known, and upstream evaluates the value it BUILT
+(`memoize(build_expression(...))`). In legacy mode `build_expression` wraps any chunk carrying a
+call, a member expression or an assignment in `(deps…, $.untrack(() => value))`, and
+`scope.evaluate` has no `SequenceExpression` case — so no such chunk is ever known, however
+constant its **source** reads. rsvelte graded the source, so
+`style="margin-bottom:{a.id === b ? '0px' : '0px'}"` folded to a constant and the write was
+hoisted out of `$.template_effect`: the attribute freezes at its first-render value, the output
+parses, and the client and the server agree with each other. `get_literal_value` now declines
+where `build_expression` will wrap, which covers all three chunk builders
+(`shared/utils.rs`, `shared/element.rs`, `title_element.rs`) in one place because they share it.
+
+Two things worth keeping. The guard has to see the **repaired** metadata, not phase 2's raw
+flags: rsvelte's directive paths drop `has_member_expression` / `has_assignment` and the sites
+restore them before `build_expression` reads them, so a guard on the raw flags would let the
+fold and the wrap disagree about one tree. And the measurement is small and one-directional —
+over all 34,709 corpus sources × 3 targets (104,127 compiled units) exactly **6 (id, target)
+pairs move, across 3 ids**, and every one moves toward official: `huly`'s `IconStarted.svelte`
+goes divergent → byte-identical on client and client-dev, and the two `sparrow-app` files shrink
+(53 → 25 and 101 → 87 diverging lines) with **100% of the residue in comment placement**, a
+different defect. Zero server outputs move, which is the positive control for
+`get_literal_value` being client-only.
+
 Still open in this row: `is_expression_known_json`, `is_initial_value_literal_or_known` (the
 `memmem::find(json, b"Literal")` one), `is_value_known_defined` and `is_expression_defined_typed`
 — four `is_known` ports, untouched here, and `is_js_expr_defined` remains a structural second
