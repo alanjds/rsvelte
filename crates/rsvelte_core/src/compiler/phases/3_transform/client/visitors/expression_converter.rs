@@ -6799,8 +6799,7 @@ fn convert_block_statement_from_jsnode(
     JsBlockStatement::with_body(body)
 }
 
-/// Add the names a statement's variable declarations bind to
-/// `shadowed_prop_names`.
+/// Add the names a statement declares to `shadowed_prop_names`.
 ///
 /// A destructuring pattern binds names like any other declaration —
 /// `const { a: v } = …` shadows a prop `v` exactly as `const v = …` does — so
@@ -6812,12 +6811,21 @@ fn register_block_decl_names_jsnode(
     context: &mut ComponentContext,
 ) {
     let mut names: Vec<String> = Vec::new();
-    if let JsNode::VariableDeclaration { declarations, .. } = node {
-        for declarator in pa.get_js_children(*declarations) {
-            if let JsNode::VariableDeclarator { id, .. } = declarator {
-                collect_param_names_from_jsnode(pa.get_js_node(*id), &mut names);
+    match node {
+        JsNode::VariableDeclaration { declarations, .. } => {
+            for declarator in pa.get_js_children(*declarations) {
+                if let JsNode::VariableDeclarator { id, .. } = declarator {
+                    collect_param_names_from_jsnode(pa.get_js_node(*id), &mut names);
+                }
             }
         }
+        // A function or class DECLARATION binds its name in the enclosing block
+        // exactly as `let` does; only a variable declaration was read here.
+        JsNode::FunctionDeclaration { id: Some(id), .. }
+        | JsNode::ClassDeclaration { id: Some(id), .. } => {
+            collect_param_names_from_jsnode(pa.get_js_node(*id), &mut names);
+        }
+        _ => {}
     }
     for name in names {
         context.state.shadowed_prop_names.insert(name);

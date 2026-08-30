@@ -3066,6 +3066,18 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
         }
     }
 
+    fn visit_class(&mut self, it: &oxc_ast::ast::Class<'ast>) {
+        // A `class Foo {}` DECLARATION binds `Foo` in the ENCLOSING scope exactly
+        // as a function declaration does. A class EXPRESSION binds its name only
+        // inside its own body, which upstream mis-lowers, so it is left alone.
+        if it.r#type == oxc_ast::ast::ClassType::ClassDeclaration
+            && let Some(id) = &it.id
+        {
+            self.declare_in_current_scope(&id.name);
+        }
+        walk::walk_class(self, it);
+    }
+
     fn visit_function(&mut self, it: &Function<'ast>, flags: ScopeFlags) {
         // A `function foo()` DECLARATION binds `foo` in the ENCLOSING scope,
         // shadowing any same-named prop/state var for references elsewhere — so

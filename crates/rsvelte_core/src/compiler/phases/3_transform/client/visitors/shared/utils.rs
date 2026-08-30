@@ -292,15 +292,25 @@ fn extract_pattern_names_to_scope(pattern: &JsPattern, scope: &mut LocalScope) {
     }
 }
 
-/// Scan a block body for variable declarations and register them in the local scope.
+/// Scan a block body for the names it declares and register them in the local scope.
 /// This tracks local `const`/`let`/`var` declarations so that should_proxy() can
-/// check their init expression types when they're referenced in assignments.
+/// check their init expression types when they're referenced in assignments, and a
+/// `function` / `class` declaration, which binds a name in the block exactly as
+/// `let` does.
 fn register_block_local_vars(
     block: &[JsStatement],
     arena: &crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
     scope: &mut LocalScope,
 ) {
     for stmt in block {
+        match stmt {
+            JsStatement::FunctionDeclaration(JsFunctionDeclaration { id: Some(id), .. })
+            | JsStatement::ClassDeclaration {
+                class: JsClassExpression { id: Some(id), .. },
+                ..
+            } => scope.add_shadowed(id.to_string()),
+            _ => {}
+        }
         if let JsStatement::VariableDeclaration(var_decl) = stmt {
             for decl in &var_decl.declarations {
                 if let JsPattern::Identifier(name) = &decl.id {

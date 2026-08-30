@@ -814,6 +814,26 @@ for the keyword at depth 0 rather than by the character. The one thing a text ru
 is name the node: `foo(({ a } = o))` and `if (({ a } = o))` differ only in the token before the
 paren, so this stays an approximation of a parent-type test, not the test.
 
+Underneath that scanner sits a plainer question the same row keeps asking — **which statements bind
+a name** — and the two client registrars each knew a different half. `ast_state_transform.rs` had a
+`visit_function` arm declaring a function declaration's id in the enclosing scope and **no class
+hook at all**; the template walker's `register_block_local_vars` matched
+`JsStatement::VariableDeclaration` and nothing else. So `class v {}` inside a function read
+`typeof $.get(v)` on both paths and `function v() {}` inside an event handler did too. Both are
+fixed. What sized the work honestly was refusing to price it off the three probes that reported
+it: a grid of declaration kind (`function` / `class` / `let` / `const` / `var`) × where the
+reference sits relative to the declaration × host (instance-script body / template handler /
+prop-named binding) is **30 divergences over 96 comparisons**, against the 6 divergent lines the
+original probes showed. The declaration-kind fix takes 12 of those; the residue is two further
+causes, recorded rather than claimed. **Hoisting**: the instance-script port declares a name when
+the walk reaches it, so `const r = typeof v; function v() {}` still reads the component binding —
+upstream resolves against a scope that already holds every declaration of the block, and the same
+is true of `let` and `var`, which is why the residue is 12 comparisons and not just the function
+one. The template port already pre-scans its block, so this half is one port, not two. And **`var`
+is function-scoped**: `{ var v = 2; } return typeof v;` binds `v` in the enclosing function, while
+every registrar here treats a block's declarations as the block's — that one is 6 comparisons and
+is the only member of this family that **also reproduces on the server**.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`
