@@ -77,6 +77,7 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `3609-svelte-snippet-param-shadowed-by-const.md` | sveltejs/svelte | #3609 | unrecorded |
 | `3635-esrap-side-effect-import-drops-attributes.md` | sveltejs/esrap | #3635 | unrecorded |
 | `3651-svelte-async-autofocus-and-event-output-is-unparseable.md` | sveltejs/svelte | #3651 | unrecorded |
+| `4046-svelte-a-reordered-reactive-statement-reprints-earlier-comments.md` | sveltejs/svelte | #4046 | unrecorded |
 | `eslint-plugin-svelte-no-add-event-listener-suggestion.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
 | `eslint-plugin-svelte-no-goto-without-base-namespace-import-crash.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
 | `eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
@@ -100,5 +101,5 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
 
 Eight reports carry no rsvelte issue number: six came out of the lint-parity campaign and two out
-of the `two-ports-inventory.md` row 17 shadow probes. None of them names an issue internally —
+of the `two-ports-inventory.md` row 21 shadow probes. None of them names an issue internally —
 `—` records that, rather than inventing a number.

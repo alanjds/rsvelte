@@ -25,8 +25,10 @@ Ids are `pattern/issues/<file>`, `pattern/matrix/<axis>/<file>` and
 
 1. **Self-contained.** Imports need not resolve — nothing is bundled or run —
    but the file must be a complete component on its own.
-2. **The official compiler must accept it.** These are output-equality patterns,
-   not error-parity cases.
+2. **The official compiler must accept it** — unless the file exists to compare a
+   *rejection*. The error ratchets (`error-{message,position,end,frame}-*`) compare
+   both compilers on inputs both reject, so a repro whose subject is the reported
+   message or position belongs here too; say so in its row.
 3. **One behaviour per file, minimal.** Delete everything the shape does not
    need.
 4. **Never write provenance in an HTML comment.** Removed comments are
@@ -598,6 +600,14 @@ Ids are `pattern/issues/<file>`, `pattern/matrix/<axis>/<file>` and
 | `named-slot-let-scope.svelte` | corpus residue | A child carrying `slot="name"` is scoped from the component's own scope, not from the `let:` scope, so a `let:` name is not visible inside a named slot and its read is not a legacy dependency. Resolution still reaches the merged root scope, so the divergence returns when no other binding shares the name. |
 | `g1-title-nullish-guard-both-directions.svelte` | corpus residue | One `scope.evaluate(value).is_defined` decision, read at three sites upstream, carried in one file in both directions: a `<title>` whose built value is a legacy `$.untrack(...)` sequence keeps `?? ''` even though the source expression is statically defined, and a function binding or a never-written `$state` binding does not. Scoring the source expression closes one direction; a hand-written table of binding shapes closes the other, and neither closes both. |
 | `each-item-reassigned-member-bind.svelte` | corpus residue | Upstream's each-item read transform answers `collection[index]` for a **reassigned** item at every site, not only where the item is read bare. A `bind:` on a member or a computed member of that item must use the same base, so a sibling `bind:value={item}` (which is what makes the item reassigned) changes how `item.prop` is read. |
+| `prop-default-function-param-conflict.svelte` | corpus residue | Upstream's `scope.declare` seeds `root.conflicts` wherever the declaration sits, so a name generated for a prop must avoid the parameters of a function nested in another prop's **default expression** — a subtree the scope walk does not otherwise enter. |
+| `each-item-member-assign-dev-wrap.svelte` | corpus residue | `build_assignment` returns on `transform?.mutate` **before** the dev `$.assign` wrap, so an each-item member mutation is not wrapped even in dev. The dev target is the comparison; production is the control. |
+| `store-source-read-of-a-reassigned-let.svelte` | corpus residue | A store's own binding is read the way `build_getter` reads any reference to it — a prop is a getter call, a reassigned legacy `let` is a signal read, anything else is the bare name. Six rewriters asked this separately. |
+| `assign-exempt-arrow-does-not-cover-a-nested-arrow.svelte` | corpus residue | The dev `$.assign` exemption for an event-handler arrow covers that arrow, not an arrow nested inside it. |
+| `assign-exempt-arrow-on-svelte-element.svelte` | corpus residue | The same exemption applies on `<svelte:element>`, which the element-kind list had omitted. |
+| `legacy-chunk-fold-grades-the-built-value.svelte` | corpus residue | In legacy mode `build_expression` wraps a member/call/assignment chunk in `(deps…, $.untrack(…))`, and `scope.evaluate` has no `SequenceExpression` case — so the chunk is graded on the value it built, not on how constant its source reads. The comment-free `{flag ? 'lit' : 'lit'}` is the control that still folds. |
+| `css-precheck-pseudo-class-colon.svelte` | corpus residue | Unpreprocessed indented Sass both compilers reject: upstream reports where its recursive CSS parse first fails (the empty pseudo-class name), where a raw-text "first colon in the block" guess lands on `:global`. The **position** is the comparison. |
+| `css-precheck-line-comment-precedence.svelte` | corpus residue | The same shape with a later SCSS `//` line comment — a real CSS error, but not the first one, so preferring it reports past the divergence upstream stops at. |
 
 ## `matrix/` — the axes around those repros
 
