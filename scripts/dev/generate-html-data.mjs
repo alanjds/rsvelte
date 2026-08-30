@@ -24,6 +24,19 @@ const ORACLE = path.join(
   ROOT,
   "crates/rsvelte_language_server/tests/data/html-documentation.json",
 );
+const PROVIDER_SOURCE_REL =
+  "packages/language-server/src/plugins/html/dataProvider.ts";
+const PROVIDER_BUILD_REL =
+  "packages/language-server/dist/src/plugins/html/dataProvider.js";
+const PROVIDER_SOURCE = path.join(ROOT, "submodules/language-tools", PROVIDER_SOURCE_REL);
+const SVELTE_OUTPUT = path.join(
+  ROOT,
+  "crates/rsvelte_language_server/src/html_data/svelte_html.rs",
+);
+const SVELTE_ORACLE = path.join(
+  ROOT,
+  "crates/rsvelte_language_server/tests/data/svelte-html-attributes.json",
+);
 const DATA_FILE = "lib/umd/languageFacts/data/webCustomData.js";
 // `package.json` `main` is the umd build, so umd is what the official server
 // loads; the esm copy of the same data hashes differently.
@@ -170,9 +183,138 @@ function writeOracle(providerPath, htmlData, images) {
   );
 }
 
+// `svelteHtmlDataProvider` (`plugins/html/dataProvider.ts`) merges the data
+// above with Svelte's own tags and directives, and that merged provider is what
+// the official server serves. Only the DIFFERENCE is emitted here — the merge
+// itself is ported in `html_data/provider.rs` — and the generator refuses to
+// write anything unless replaying that port reproduces the provider exactly.
+function writeSvelteProvider(htmlData, languageToolsRoot) {
+  const build = path.join(languageToolsRoot, PROVIDER_BUILD_REL);
+  if (!fs.existsSync(build)) {
+    throw new Error(
+      `${build} is missing. Build language-tools (\`pnpm build\`) first, or pass --language-tools-root.`,
+    );
+  }
+  // The build is not checked in, so its provenance comes from its own source:
+  // whichever tree it was built in has to hold the source this repository pins.
+  const built_from = path.join(languageToolsRoot, PROVIDER_SOURCE_REL);
+  if (digest(built_from) !== digest(PROVIDER_SOURCE)) {
+    throw new Error(
+      `${built_from} is not the ${PROVIDER_SOURCE} this repository pins`,
+    );
+  }
+  if (fs.statSync(build).mtimeMs < fs.statSync(built_from).mtimeMs) {
+    throw new Error(`${build} is older than ${built_from}; rebuild it.`);
+  }
+  const require = createRequire(import.meta.url);
+  const provider = require(build).svelteHtmlDataProvider;
+
+  // Split positionally, not by name: Svelte declares its own `slot` tag, and
+  // `_tagMap` is last-wins while `provideTags` returns both.
+  const prefix = provider._tags.slice(0, htmlData.tags.length);
+  if (prefix.some((tag, index) => tag.name !== htmlData.tags[index].name)) {
+    throw new Error("the provider does not open with the upstream tags in order");
+  }
+  const svelteTags = provider._tags.slice(htmlData.tags.length);
+  const webGlobals = new Set(htmlData.globalAttributes.map((a) => a.name));
+  const globalAdditions = provider._globalAttributes.filter(
+    (a) => !webGlobals.has(a.name),
+  );
+  const svelteEvent = (name) => name.replace(/^on/, "on:");
+  const tagAdditions = [];
+  for (const tag of htmlData.tags) {
+    const merged = provider._tagMap[tag.name].attributes;
+    const extra = merged.slice(tag.attributes.length);
+    if (extra.length > 0) {
+      tagAdditions.push([tag.name, extra]);
+    }
+  }
+
+  // The port, replayed here: rename every upstream `on…`, append the per-tag
+  // additions, then answer `provideAttributes` the way the provider does.
+  const replayTag = (tag) => ({
+    ...tag,
+    attributes: [
+      ...tag.attributes.map((a) => ({ ...a, name: svelteEvent(a.name) })),
+      ...(tagAdditions.find(([name]) => name === tag.name)?.[1] ?? []),
+    ],
+  });
+  const replayedTags = [...htmlData.tags.map(replayTag), ...svelteTags];
+  const replayed = new Map(replayedTags.map((tag) => [tag.name, tag]));
+  const globals = [...htmlData.globalAttributes, ...globalAdditions];
+  const ownOnly = new Set(["svelte:boundary", "svelte:options"]);
+  const replayAttributes = (name) =>
+    ownOnly.has(name)
+      ? (svelteTags.find((tag) => tag.name === name)?.attributes ?? [])
+      : [...(replayed.get(name)?.attributes ?? []), ...globals];
+
+  const rows = {};
+  for (const tag of provider.provideTags()) {
+    const expected = provider.provideAttributes(tag.name);
+    const actual = replayAttributes(tag.name);
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      throw new Error(
+        `replaying the merge does not reproduce provideAttributes(${tag.name})`,
+      );
+    }
+    rows[tag.name] = expected.map((attribute) => attribute.name);
+  }
+  if (JSON.stringify(provider.provideTags()) !== JSON.stringify(replayedTags)) {
+    throw new Error("replaying the merge does not reproduce provideTags()");
+  }
+
+  const body = `pub const SVELTE_TAGS: &[Tag] = ${slice(svelteTags, tag)};
+
+pub const GLOBAL_ADDITIONS: &[Attribute] = ${slice(globalAdditions, attribute)};
+`;
+  const svelteImports = `use super::web::{Attribute, ${["Baseline", "Reference", "Status"]
+    .filter((name) => body.includes(name))
+    .map((name) => `${name}, `)
+    .join("")}Tag};`;
+  const header = `//! Svelte's additions to the HTML data, generated — do not edit.
+//!
+//! Source: \`packages/language-server/src/plugins/html/dataProvider.ts\` of
+//! language-tools, read out of its build (MIT).
+//!
+//!   sha256 ${digest(PROVIDER_SOURCE)} (the TypeScript source)
+//!   sha256 ${digest(build)} (the build read)
+//!
+//! Only what \`svelteHtmlDataProvider\` adds to [\`super::web\`] is here; the
+//! merge is ported in [\`super::provider\`], and the generator refuses to write
+//! this file unless replaying that port reproduces the provider exactly.
+//!
+//! Regenerate with \`node scripts/dev/generate-html-data.mjs\`.
+
+${svelteImports}
+
+pub const SVELTE_TAGS: &[Tag] = ${slice(svelteTags, tag)};
+
+pub const GLOBAL_ADDITIONS: &[Attribute] = ${slice(globalAdditions, attribute)};
+
+/// Appended to the named tag's own attributes, after the \`on:\` rename.
+pub const TAG_ADDITIONS: &[(&str, &[Attribute])] = ${slice(
+    tagAdditions,
+    ([name, extra]) => `(${string(name)},${slice(extra, attribute)})`,
+  )};
+
+/// These two are served their own attributes and no globals.
+pub const OWN_ATTRIBUTES_ONLY: &[&str] = &["svelte:boundary", "svelte:options"];
+`;
+  fs.writeFileSync(SVELTE_OUTPUT, header);
+  fs.writeFileSync(SVELTE_ORACLE, `${JSON.stringify(rows)}\n`);
+  process.stdout.write(
+    `${path.relative(ROOT, SVELTE_OUTPUT)}: ${svelteTags.length} tags, ${globalAdditions.length} global additions, ${tagAdditions.length} tags with additions\n`,
+  );
+}
+
 function main() {
   const flag = process.argv.indexOf("--package-root");
   const override = flag === -1 ? undefined : path.resolve(process.argv[flag + 1]);
+  const languageToolsFlag = process.argv.indexOf("--language-tools-root");
+  const languageToolsRoot =
+    languageToolsFlag === -1
+      ? path.join(ROOT, "submodules/language-tools")
+      : path.resolve(process.argv[languageToolsFlag + 1]);
   const version = lockedVersion();
   const root = packageRoot(override, version);
   const dataPath = path.join(root, DATA_FILE);
@@ -260,6 +402,7 @@ pub const VALUE_SETS: &[ValueSet] = ${slice(htmlData.valueSets, valueSet)};
   fs.mkdirSync(path.dirname(OUTPUT), { recursive: true });
   fs.writeFileSync(OUTPUT, header + body);
   writeOracle(providerPath, htmlData, BaselineImages);
+  writeSvelteProvider(htmlData, languageToolsRoot);
   process.stdout.write(
     `${path.relative(ROOT, OUTPUT)}: ${htmlData.tags.length} tags, ${htmlData.globalAttributes.length} global attributes, ${htmlData.valueSets.length} value sets from ${PACKAGE}@${version}\n`,
   );
