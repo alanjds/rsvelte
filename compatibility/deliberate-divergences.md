@@ -371,3 +371,37 @@ agreed, while the matrix treats unparseable official output as an oracle rejecti
 aborts rather than producing a keyed divergence. Gate-coverage 5r records that blind
 spot. Remove this entry and converge on upstream when its two visitors adopt an async
 memoization path.
+
+---
+
+## SCSS serialisation from the `grass` backend
+
+**Pinned by** `crates/rsvelte_preprocess/tests/grass_serialisation.rs`.
+**Not reported upstream**, because these are not defects on either side: dart-sass and `grass`
+both emit valid CSS with the same computed effect.
+
+`rsvelte_preprocess` compiles SCSS with the Rust `grass` crate rather than by shelling out to
+dart-sass, which is what makes the preprocessor usable from a Rust host at all. The two
+serialise the same stylesheet differently in four ways:
+
+- a computed colour prints in the legacy shortest form (`#e9e9e9`) where dart-sass ≥ 1.79
+  prints the space its channels were computed in (`rgb(91.3333333333%, …)`);
+- a `/* … */` following a declaration moves to its own line;
+- a wrapped selector list inside `@media` keeps the block indentation only on its first line;
+- whitespace and quote style differ in a handful of places.
+
+**155 of the 315 units in `scss-known-failures.json` are exactly this**, and the number is
+measured rather than eyeballed: both outputs are flattened to an ordered list of
+`(selector chain, property, value)` with colours folded to one `rgba()` spelling, and the two
+lists are equal. The remaining 160 are not covered by this entry — 59 change the cascade and 99
+are inputs `grass` rejects, each attributed to a report under `upstream_issues/`.
+
+They stay **listed in the ratchet rather than normalised away**. The gate exists to catch a
+divergence in colour *arithmetic*, and a normaliser that folded every colour spelling would
+fold that too — which is the same argument as `sourcemap-known-failures.md`'s: a rule that
+repairs a class of output cannot then be used as evidence about that class. Listing them costs
+155 lines that never move; normalising them would cost the gate its subject.
+
+The pin records dart-sass's output beside each assertion, so a `grass` release that converges
+turns the test red and this entry gets deleted rather than quietly becoming false. It also
+carries the two non-neutral classes, for the same reason.

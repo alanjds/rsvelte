@@ -77,6 +77,13 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `3609-svelte-snippet-param-shadowed-by-const.md` | sveltejs/svelte | #3609 | unrecorded |
 | `3635-esrap-side-effect-import-drops-attributes.md` | sveltejs/esrap | #3635 | unrecorded |
 | `3651-svelte-async-autofocus-and-event-output-is-unparseable.md` | sveltejs/svelte | #3651 | unrecorded |
+| `grass-css-color-4-relative-syntax.md` | connorskees/grass | — | unrecorded |
+| `grass-explicit-extension-specifier.md` | connorskees/grass | — | unrecorded |
+| `grass-hoists-a-declaration-written-after-a-nested-rule.md` | connorskees/grass | — | unrecorded |
+| `grass-import-only-file-loaded-by-use.md` | connorskees/grass | — | unrecorded |
+| `grass-missing-css-color-4-api.md` | connorskees/grass | — | unrecorded |
+| `grass-slash-list-divided-inside-a-nested-rule.md` | connorskees/grass | — | unrecorded |
+| `grass-tailwind-important-apply.md` | connorskees/grass | — | unrecorded |
 | `eslint-plugin-svelte-no-add-event-listener-suggestion.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
 | `eslint-plugin-svelte-no-goto-without-base-namespace-import-crash.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
 | `eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md` | sveltejs/eslint-plugin-svelte | — | unrecorded |
@@ -97,6 +104,9 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte-snippet-name-colliding-with-an-import.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
 
-Eight reports carry no rsvelte issue number: six came out of the lint-parity campaign and two out
-of the `two-ports-inventory.md` row 17 shadow probes. None of them names an issue internally —
+Fifteen reports carry no rsvelte issue number: six came out of the lint-parity campaign, two out
+of the `two-ports-inventory.md` row 17 shadow probes, and seven out of the SCSS-backend burndown —
+five covering every unit `scss-known-failures.json` lists as `grass-rejects-accepted`, plus the two
+classes in that ratchet whose output is not render-neutral (a hoisted declaration, and a slash list
+divided inside a nested rule). None of them names an issue internally —
 `—` records that, rather than inventing a number.
