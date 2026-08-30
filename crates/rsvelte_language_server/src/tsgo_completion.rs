@@ -132,6 +132,12 @@ pub fn rewrite_visible_tsgo_response(value: &mut Value) {
 }
 
 fn rewrite_completion_item_with_preference(item: &mut Value, prefer_components: bool) {
+    // Upstream builds every completion item itself and never sets `tags` —
+    // `CompletionItemTag` appears nowhere in `packages/language-server/src` —
+    // so tsgo's deprecation tag is a field upstream cannot produce.
+    if let Some(object) = item.as_object_mut() {
+        object.remove("tags");
+    }
     let generated_component = item
         .get("label")
         .and_then(Value::as_str)
@@ -575,6 +581,37 @@ mod tests {
             "import Button from './Button.svelte';\n"
         );
         assert_eq!(item["data"]["name"], "Button__SvelteComponent_");
+    }
+
+    #[test]
+    fn a_deprecation_tag_is_not_forwarded() {
+        let mut item = json!({
+            "label": "HTMLDirectoryElement",
+            "tags": [1],
+            "sortText": "11",
+            "data": { "name": "HTMLDirectoryElement" }
+        });
+        rewrite_completion_item(&mut item);
+        assert!(item.get("tags").is_none());
+        // Only `tags` goes; the item is otherwise forwarded unchanged.
+        assert_eq!(item["sortText"], "11");
+        assert_eq!(item["label"], "HTMLDirectoryElement");
+    }
+
+    #[test]
+    fn a_deprecation_tag_is_not_forwarded_in_a_list_either() {
+        let mut result = json!({
+            "isIncomplete": false,
+            "items": [{ "label": "a", "tags": [1] }, { "label": "b" }]
+        });
+        rewrite_completion_response_for_context(
+            &mut result,
+            CompletionRewriteContext {
+                kit_route: false,
+                prefer_components: true,
+            },
+        );
+        assert!(result["items"][0].get("tags").is_none());
     }
 
     #[test]
