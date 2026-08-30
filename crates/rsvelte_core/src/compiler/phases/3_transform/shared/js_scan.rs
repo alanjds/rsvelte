@@ -427,6 +427,21 @@ pub(crate) fn comment_ranges(bytes: &[u8]) -> Vec<(usize, usize)> {
     ranges
 }
 
+/// `bytes` with every comment byte but its newlines replaced by a space, so a
+/// line-based scan reads a comment as blank instead of as a token. Byte indices
+/// and line structure are preserved, so a position is valid in either view.
+pub(crate) fn blank_comments(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for (start, end) in comment_ranges(bytes) {
+        for b in &mut out[start..end] {
+            if *b != b'\n' {
+                *b = b' ';
+            }
+        }
+    }
+    out
+}
+
 /// Walk left from `pos` over whitespace and comments, with `comments` from
 /// [`comment_ranges`] over the same `bytes`.
 pub(crate) fn skip_ws_and_comments_back(

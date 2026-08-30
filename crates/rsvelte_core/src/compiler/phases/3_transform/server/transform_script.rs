@@ -4968,6 +4968,17 @@ pub(crate) fn transform_class_fields_server(script: &str) -> String {
 
     let all_lines: Vec<&str> = class_body.lines().collect();
 
+    // A comment is not a token. The conditional-initializer lookahead below
+    // reads the next two non-empty lines, so a comment line between `=` and the
+    // `?` pushes the `?` out of that window and the field is emitted as `id =;`.
+    let blanked = crate::compiler::phases::phase3_transform::shared::js_scan::blank_comments(
+        class_body.as_bytes(),
+    );
+    let code_lines: Vec<&str> = std::str::from_utf8(&blanked)
+        .unwrap_or(class_body)
+        .lines()
+        .collect();
+
     // Pre-scan user-declared private member names (`#foo = …` / `#foo(…) {`),
     // so a public `$state` / `$derived` field whose deconflicted backing name
     // would collide with one of them is renamed (`deps` → `#_deps` when a
@@ -5434,7 +5445,7 @@ pub(crate) fn transform_class_fields_server(script: &str) -> String {
         // the depth returns to 0 so the full initializer is emitted verbatim
         // instead of just the first line with a spurious `;` appended.
         let field_bracket_depth = code_bracket_depth(trimmed);
-        let next_nonempty_lines: Vec<&str> = all_lines[line_idx..]
+        let next_nonempty_lines: Vec<&str> = code_lines[line_idx..]
             .iter()
             .filter_map(|next| {
                 let next = next.trim();
