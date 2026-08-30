@@ -407,12 +407,15 @@ whole-corpus `rust_panic` when `sources/` is missing, are tracked in #2707.
 The public `parse()` export had **no gate at all** until #3389 — the other ~38 compare compiled
 text, warnings, errors, TSX, lint findings and LSP responses, and svelte2tsx and `rsvelte_lint`
 consume rsvelte's AST without ever diffing it against official's. One unit is (source, mode):
-every `.svelte` file in `compatibility/pattern-corpus/` under `{modern: true}` and under the
-default legacy shape, diffed as JSON after a round-trip on **both** sides — official keeps
+every `.svelte` entry of `compatibility/manifest.json` under `{modern: true}`, the default
+legacy shape and `loose`, diffed as JSON after a round-trip on **both** sides — official keeps
 `EachBlock.index`, `EachBlock.key` and `SnippetBlock.typeParams` as present-but-undefined keys,
 and rsvelte's binding returns a JSON *string*, so a naive comparison reports a catastrophe that is
-entirely the harness. It needs no corpus collect and no submodule but `svelte`, so it rides the
-shape-matrix job.
+entirely the harness. It needs the **collected corpus** (`parse-ast-verify.mjs:168` fails without
+`compatibility/manifest.json`) and a staged NAPI binding, and it runs in `corpus-compat.yml`
+immediately after `Collect corpus` — not, as this paragraph claimed until 2026-08-30, on
+pattern-corpus alone with no collect. That claim cost a runbook step: it was scheduled to run
+before the collect, where it can only fail.
 
 Three defects were shipped behind that gap and are fixed with it: `modern`/`loose` ignored
 (#3385), `Root.end` short of EOF (#3386), and comments never attaching to statements (#3387).
