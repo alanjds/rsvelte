@@ -41,6 +41,7 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `1681-oxc-css-commented-gradient-indent.md` | oxc-project/oxc (`oxc_formatter_css`) | #1681 | unrecorded |
 | `2582-oxc-nel-whitespace.md` | oxc-project/oxc (`oxc_parser`) | #2582 | unrecorded |
 | `2990-svelte-class-accessor-drops-later-comments.md` | sveltejs/svelte | #2990 | unrecorded |
+| `3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md` | sveltejs/prettier-plugin-svelte | #3035 | unrecorded |
 | `3052-svelte-css-custom-property-brace-block.md` | sveltejs/svelte | #3052 | unrecorded |
 | `3054-svelte-bigint-mix-compile-crash.md` | sveltejs/svelte | #3054 | unrecorded |
 | `3070-svelte-template-comment-leaks-into-generated-code.md` | sveltejs/svelte | #3070 | unrecorded |
