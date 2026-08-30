@@ -33,7 +33,7 @@ use super::super::utils::TrimWs;
 use crate::ast::arena::{IdRange, ParseArena};
 use crate::ast::js::Expression;
 use crate::ast::typed_expr::{
-    JsNode, LiteralValue, Loc, RegexValue, SourcePosition, TemplateElementValue,
+    JsNode, LiteralValue, Loc, RegexValue, SourcePosition, TemplateElementValue, TsMemberModifiers,
     alloc_deser_children, alloc_deser_node, child_node_from_value,
 };
 use crate::compiler::phases::phase1_parse::utils::find_matching_bracket;
@@ -11598,6 +11598,9 @@ fn convert_class_element_for_program_as_node(
                 kind: CompactString::from(kind),
                 r#static: method.r#static,
                 computed: method.computed,
+                // Any written modifier bails to the Value blob above, so a
+                // typed member never carries one.
+                modifiers: TsMemberModifiers::default(),
             })
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -11637,9 +11640,9 @@ fn convert_class_element_for_program_as_node(
                 value,
                 r#static: prop.r#static,
                 computed: prop.computed,
-                // AccessorProperty bails above, so a typed PropertyDefinition is
-                // never an `accessor` field.
-                accessor: false,
+                // AccessorProperty and every written modifier bail to the Value
+                // blob above, so a typed PropertyDefinition never carries one.
+                modifiers: TsMemberModifiers::default(),
             })
         }
         // AccessorProperty: the Value path emits a `PropertyDefinition` with an
@@ -11653,6 +11656,29 @@ fn convert_class_element_for_program_as_node(
 }
 
 /// Convert a class element to JSON value (for program context).
+/// acorn-typescript emits a class-member modifier **only where the source wrote
+/// it**, so absence and `false` are different facts and a modifier must be
+/// skipped rather than emitted as `false`.
+fn push_member_modifiers(
+    obj: &mut Map<String, Value>,
+    accessibility: Option<oxc_ast::ast::TSAccessibility>,
+    flags: &[(&str, bool)],
+) {
+    for (name, present) in flags {
+        if *present {
+            obj.set_field(name, Value::Bool(true));
+        }
+    }
+    if let Some(accessibility) = accessibility {
+        let spelling = match accessibility {
+            oxc_ast::ast::TSAccessibility::Private => "private",
+            oxc_ast::ast::TSAccessibility::Protected => "protected",
+            oxc_ast::ast::TSAccessibility::Public => "public",
+        };
+        obj.set_field("accessibility", Value::String(spelling.to_string()));
+    }
+}
+
 fn convert_class_element_for_program(
     arena: &ParseArena,
     element: &oxc_ast::ast::ClassElement,
@@ -11691,6 +11717,15 @@ fn convert_class_element_for_program(
                 convert_function_expression_for_program(arena, &method.value, offset, line_offsets);
             obj.set_field("value", value);
 
+            push_member_modifiers(
+                &mut obj,
+                method.accessibility,
+                &[
+                    ("override", method.r#override),
+                    ("optional", method.optional),
+                ],
+            );
+
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -11718,10 +11753,17 @@ fn convert_class_element_for_program(
                 obj.set_field("value", Value::Null);
             }
 
-            // TypeScript: declare field (for `declare bar: string;` in class)
-            if prop.declare {
-                obj.set_field("declare", Value::Bool(true));
-            }
+            push_member_modifiers(
+                &mut obj,
+                prop.accessibility,
+                &[
+                    ("declare", prop.declare),
+                    ("definite", prop.definite),
+                    ("optional", prop.optional),
+                    ("override", prop.r#override),
+                    ("readonly", prop.readonly),
+                ],
+            );
 
             Some(Value::Object(obj))
         }

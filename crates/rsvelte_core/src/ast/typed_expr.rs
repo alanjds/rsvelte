@@ -110,6 +110,67 @@ impl Serialize for LiteralValue {
     }
 }
 
+/// TypeScript accessibility, spelled as acorn-typescript spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TsAccessibility {
+    Private,
+    Protected,
+    Public,
+}
+
+impl TsAccessibility {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::Protected => "protected",
+            Self::Public => "public",
+        }
+    }
+
+    #[must_use]
+    pub fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "private" => Some(Self::Private),
+            "protected" => Some(Self::Protected),
+            "public" => Some(Self::Public),
+            _ => None,
+        }
+    }
+}
+
+/// Class-member modifiers, as acorn-typescript reports them: each is emitted
+/// **only where the source wrote it**, so absence and `false` are different
+/// facts and every consumer must skip rather than emit a `false`.
+///
+/// One field on the two member variants rather than seven, because a field is
+/// priced on the type: `JsNode` is one enum and every variant pays its widest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TsMemberModifiers {
+    pub accessor: bool,
+    pub declare: bool,
+    pub definite: bool,
+    pub optional: bool,
+    pub readonly: bool,
+    pub r#override: bool,
+    pub accessibility: Option<TsAccessibility>,
+}
+
+impl TsMemberModifiers {
+    /// The `(name, written)` pairs in the order acorn-typescript emits them.
+    #[must_use]
+    pub const fn flags(&self) -> [(&'static str, bool); 6] {
+        [
+            ("accessor", self.accessor),
+            ("declare", self.declare),
+            ("definite", self.definite),
+            ("optional", self.optional),
+            ("readonly", self.readonly),
+            ("override", self.r#override),
+        ]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum JsNode {
     Identifier {
@@ -646,6 +707,7 @@ pub enum JsNode {
         kind: CompactString,
         r#static: bool,
         computed: bool,
+        modifiers: TsMemberModifiers,
     },
     PropertyDefinition {
         start: u32,
@@ -655,10 +717,11 @@ pub enum JsNode {
         value: Option<JsNodeId>,
         r#static: bool,
         computed: bool,
-        /// TS `accessor` field modifier — preserved so the TS stripper can
-        /// raise `typescript_invalid_feature` (the round-trip must be lossless;
-        /// dropping it silently accepts an unsupported feature).
-        accessor: bool,
+        /// TS member modifiers — preserved so the TS stripper can raise
+        /// `typescript_invalid_feature` on `accessor` (the round-trip must be
+        /// lossless; dropping one silently accepts an unsupported feature) and
+        /// so `parse()` reports the same field set acorn-typescript does.
+        modifiers: TsMemberModifiers,
     },
     StaticBlock {
         start: u32,
@@ -773,6 +836,23 @@ macro_rules! ser_loc {
             $map.serialize_entry("loc", loc)?;
         }
     };
+}
+
+/// Helper: serialize the TS member modifiers that the source actually wrote.
+/// A modifier that was not written is ABSENT, not `false` — acorn-typescript
+/// emits no key at all, so emitting `false` is its own divergence.
+macro_rules! ser_member_modifiers {
+    ($map:ident, $modifiers:expr) => {{
+        let modifiers = $modifiers;
+        for (name, written) in modifiers.flags() {
+            if written {
+                $map.serialize_entry(name, &true)?;
+            }
+        }
+        if let Some(accessibility) = modifiers.accessibility {
+            $map.serialize_entry("accessibility", accessibility.as_str())?;
+        }
+    }};
 }
 
 /// Helper: serialize a `JsNodeId` field by resolving through the arena.
@@ -2135,6 +2215,7 @@ impl Serialize for JsNode {
                 kind,
                 r#static,
                 computed,
+                modifiers,
             } => {
                 let mut map = serializer.serialize_map(Some(8))?;
                 map.serialize_entry("type", "MethodDefinition")?;
@@ -2146,6 +2227,7 @@ impl Serialize for JsNode {
                 map.serialize_entry("kind", kind.as_str())?;
                 ser_node!(map, "key", key);
                 ser_node!(map, "value", value);
+                ser_member_modifiers!(map, modifiers);
                 ser_comments!(map, "MethodDefinition", *start, *end);
                 map.end()
             }
@@ -2157,7 +2239,7 @@ impl Serialize for JsNode {
                 value,
                 r#static,
                 computed,
-                accessor,
+                modifiers,
             } => {
                 let mut map = serializer.serialize_map(Some(7))?;
                 map.serialize_entry("type", "PropertyDefinition")?;
@@ -2166,7 +2248,7 @@ impl Serialize for JsNode {
                 ser_loc!(map, loc);
                 map.serialize_entry("static", r#static)?;
                 map.serialize_entry("computed", computed)?;
-                map.serialize_entry("accessor", accessor)?;
+                ser_member_modifiers!(map, modifiers);
                 ser_node!(map, "key", key);
                 ser_opt_node!(map, "value", value);
                 ser_comments!(map, "PropertyDefinition", *start, *end);
@@ -2369,6 +2451,24 @@ fn get_bool(obj: &serde_json::Map<String, Value>, key: &str) -> bool {
     obj.get(key)
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+}
+
+/// The round-trip through the `Value` blob is where these used to be dropped:
+/// the blob emitted them and the typed variant had nowhere to put them, so a
+/// written `readonly` survived exactly as far as `from_value`.
+fn member_modifiers_from_value(obj: &serde_json::Map<String, Value>) -> TsMemberModifiers {
+    TsMemberModifiers {
+        accessor: get_bool(obj, "accessor"),
+        declare: get_bool(obj, "declare"),
+        definite: get_bool(obj, "definite"),
+        optional: get_bool(obj, "optional"),
+        readonly: get_bool(obj, "readonly"),
+        r#override: get_bool(obj, "override"),
+        accessibility: obj
+            .get("accessibility")
+            .and_then(serde_json::Value::as_str)
+            .and_then(TsAccessibility::from_keyword),
+    }
 }
 
 fn convert_loc(obj: &serde_json::Map<String, Value>) -> Option<Box<Loc>> {
@@ -3091,6 +3191,7 @@ impl JsNode {
                         kind: get_str(obj, "kind"),
                         r#static: get_bool(obj, "static"),
                         computed: get_bool(obj, "computed"),
+                        modifiers: member_modifiers_from_value(obj),
                     },
                     "PropertyDefinition" => Self::PropertyDefinition {
                         start,
@@ -3100,7 +3201,7 @@ impl JsNode {
                         value: convert_optional_child(obj, "value"),
                         r#static: get_bool(obj, "static"),
                         computed: get_bool(obj, "computed"),
-                        accessor: get_bool(obj, "accessor"),
+                        modifiers: member_modifiers_from_value(obj),
                     },
                     "StaticBlock" => Self::StaticBlock {
                         start,

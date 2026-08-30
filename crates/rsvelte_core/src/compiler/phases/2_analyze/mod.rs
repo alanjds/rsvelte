@@ -6112,6 +6112,7 @@ fn collect_identifier_names_in_node(
             kind: _,
             r#static: _,
             computed,
+            modifiers: _,
         } => {
             if *computed {
                 walk(*key, out);
@@ -6127,7 +6128,7 @@ fn collect_identifier_names_in_node(
             value,
             r#static: _,
             computed,
-            accessor: _,
+            modifiers: _,
         } => {
             if *computed {
                 walk(*key, out);
