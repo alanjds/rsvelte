@@ -169,6 +169,13 @@ pub fn attribute_prefix_context(text: &str, offset: usize) -> Option<AttributePr
 }
 
 impl AttributeContext<'_> {
+    /// Whether the tag carrying this attribute is a component rather than an
+    /// element.
+    #[must_use]
+    pub fn on_a_component(&self) -> bool {
+        possibly_component(self.element_tag)
+    }
+
     /// Event modifiers exist on elements only, and only after the `|` that
     /// starts the modifier list.
     #[must_use]
