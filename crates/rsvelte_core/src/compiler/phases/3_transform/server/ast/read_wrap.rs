@@ -628,11 +628,9 @@ impl<'a, 'b> ReadWrap<'a, 'b> {
 /// to the nearest enclosing declaration: a local `let value = 0` inside a
 /// `$.derived(() => …)` thunk must NOT be read-wrapped as `value()`.
 ///
-/// We collect `let`/`const`/`var`/`function`/`class` declaration names. `var` and
-/// `function` are function-scoped, `let`/`const`/`class` block-scoped, but for the
-/// purpose of "is this name a local declaration that shadows the instance binding"
-/// collecting all of them at every block boundary is conservatively correct: any
-/// name declared anywhere in the enclosing function body chain shadows.
+/// `let`/`const`/`class`/`function` only: those are the block's own bindings, and
+/// this frame is popped when the block ends. A `var` outlives it — see
+/// [`collect_hoisted_var_names`], which the enclosing function collects instead.
 fn collect_block_decl_names(stmts: &[Statement], out: &mut FxHashSet<String>) {
     for stmt in stmts {
         match stmt {
@@ -660,6 +658,23 @@ fn collect_block_decl_names(stmts: &[Statement], out: &mut FxHashSet<String>) {
 /// (`for (x of xs)`) declares nothing, so it shadows nothing.
 fn collect_for_left_names(left: &oxc_ast::ast::ForStatementLeft, out: &mut FxHashSet<String>) {
     if let oxc_ast::ast::ForStatementLeft::VariableDeclaration(decl) = left {
+        for d in decl.declarations.iter() {
+            collect_binding_pattern_names(&d.id, out);
+        }
+    }
+}
+
+/// Collect every `var` declared anywhere inside a function body — nested blocks,
+/// loop heads, `try`, `switch`. A `var` is function-scoped, so
+/// `{ var v = 2; } typeof v` still resolves to the local after the block ends,
+/// which a per-block frame cannot express. The walk is shared with the client's
+/// instance-script pass: it answers the same question about the same AST.
+fn collect_hoisted_var_names(stmts: &[Statement], out: &mut FxHashSet<String>) {
+    let mut decls = Vec::new();
+    crate::compiler::phases::phase3_transform::shared::hoisted_vars::collect_in_list(
+        stmts, &mut decls,
+    );
+    for decl in decls {
         for d in decl.declarations.iter() {
             collect_binding_pattern_names(&d.id, out);
         }
@@ -1009,6 +1024,7 @@ impl<'a, 'b> VisitMut<'a> for ReadWrap<'a, 'b> {
         Self::collect_param_names(&it.params, &mut frame);
         if let Some(body) = it.body.as_ref() {
             collect_block_decl_names(&body.statements, &mut frame);
+            collect_hoisted_var_names(&body.statements, &mut frame);
         }
         self.shadowed.push(frame);
         oxc_ast_visit::walk_mut::walk_function(self, it, flags);
@@ -1023,6 +1039,7 @@ impl<'a, 'b> VisitMut<'a> for ReadWrap<'a, 'b> {
         Self::collect_param_names(&it.params, &mut frame);
         if let Some(block) = it.body.as_function_body() {
             collect_block_decl_names(&block.statements, &mut frame);
+            collect_hoisted_var_names(&block.statements, &mut frame);
         }
         self.shadowed.push(frame);
         oxc_ast_visit::walk_mut::walk_arrow_function_expression(self, it);

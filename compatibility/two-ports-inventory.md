@@ -849,6 +849,28 @@ anywhere, and `console.log(v)` on the real `$derived` matches, so the divergence
 over-instrumentation of a local rather than a scope-resolution error. It is dev-mode only, it is
 not in any probe set written for this row, and it is recorded here rather than fixed.
 
+The `var` half closes the family, and it is the largest single instance this row has produced.
+A `var` outlives its block, so `{ var v = 2; } typeof v` resolves to the local — and **all three**
+phase-3 shadow registrars scoped it to the block. The server's `read_wrap.rs` carried the tell:
+its `collect_block_decl_names` doc said collecting `let`/`const`/`var`/`function`/`class` "at every
+block boundary is conservatively correct", which is false for exactly one of those five, because
+the frame is *popped* when the block ends. **A comment asserting fidelity is where this class
+hides** — the same shape as `assign_dev_ast.rs:56` and the server rune table. The grid put every
+`var` site except a function's own top level wrong on client and server: a block, an `if`
+consequent, a `for` init, a `for…of` head, a `try` block, a `case` arm, a `while` body, a doubly
+nested block — **42 of 56 comparisons**, against the 6 the original probe showed. Ablated per port:
+18 server, 18 instance-script, 8 template. The server and the instance-script pass walk the same
+oxc AST and asked the same question, so they now share one `shared::hoisted_vars` walk instead of
+a copy each; the template port reads the phase-3 IR and keeps its own, documented as the twin.
+
+Two things it leaves. The negative control is load-bearing and is what stops the fix from being
+"collect every `var` anywhere": a `var` inside a **nested function** must not leak out, so the walk
+declines to enter a function or class body. And the residue names a **fourth** answer to this row's
+question: `for (var v = 0; v < 1; v++)` in a template handler now reads `typeof v` correctly while
+`v++` still lowers to `$.update(v)`, because that decision is made in `expression_converter.rs`
+from `reference_is_plain_local` — a predicate driven by **phase 2's** scope data rather than by any
+phase-3 registrar. Three registrars agreeing does not make the compiler agree with itself.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`

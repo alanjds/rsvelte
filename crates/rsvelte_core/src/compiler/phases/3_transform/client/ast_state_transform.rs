@@ -357,6 +357,9 @@ struct StateVarCollector<'a, 's> {
     function_depth: u32,
     /// A named function expression's own name, declared once its scope is entered.
     pending_fn_expr_name: Option<String>,
+    /// Per scope, whether it is a `var` boundary (a function, an arrow, or the
+    /// program). A `var` declared in a nested block belongs to the nearest one.
+    scope_is_var_boundary: Vec<bool>,
 
     /// Semantic for the parsed script, set after construction. Enables
     /// per-site resolution of a bare-identifier assignment RHS (upstream
@@ -453,6 +456,7 @@ impl<'a, 's> StateVarCollector<'a, 's> {
             prop_source_vars_slice: prop_source_vars,
             function_depth: 0,
             pending_fn_expr_name: None,
+            scope_is_var_boundary: Vec::new(),
             semantic: None,
         }
     }
@@ -2975,11 +2979,14 @@ impl<'a, 's> StateVarCollector<'a, 's> {
 }
 
 impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
-    fn enter_scope(&mut self, _flags: ScopeFlags, _scope_id: &std::cell::Cell<Option<ScopeId>>) {
+    fn enter_scope(&mut self, flags: ScopeFlags, _scope_id: &std::cell::Cell<Option<ScopeId>>) {
+        self.scope_is_var_boundary
+            .push(flags.intersects(ScopeFlags::Function | ScopeFlags::Top));
         self.push_scope();
     }
 
     fn leave_scope(&mut self) {
+        self.scope_is_var_boundary.pop();
         self.pop_scope();
     }
 
@@ -3204,6 +3211,18 @@ impl<'a, 's, 'ast> Visit<'ast> for StateVarCollector<'a, 's> {
                     }
                 }
                 _ => {}
+            }
+        }
+        // A `var` is function-scoped, so `{ var v = 2; } typeof v` resolves to the
+        // local after the block ends — which the per-block pass above cannot see.
+        if self.scope_is_var_boundary.last().copied().unwrap_or(false) {
+            let mut hoisted = Vec::new();
+            crate::compiler::phases::phase3_transform::shared::hoisted_vars::collect_in_list(
+                stmts,
+                &mut hoisted,
+            );
+            for decl in hoisted {
+                self.register_declaration_names(decl);
             }
         }
         walk::walk_statements(self, stmts);

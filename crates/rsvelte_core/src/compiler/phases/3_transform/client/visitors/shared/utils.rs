@@ -292,6 +292,77 @@ fn extract_pattern_names_to_scope(pattern: &JsPattern, scope: &mut LocalScope) {
     }
 }
 
+/// Every `var` declaration reachable from `stmt` without crossing into a nested
+/// function or class body, which open a `var` scope of their own. The oxc-AST twin
+/// of this walk is `shared::hoisted_vars`; this one reads the phase-3 IR.
+fn collect_hoisted_var_declarations<'x>(
+    stmt: &'x JsStatement,
+    arena: &'x crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
+    out: &mut Vec<&'x JsVariableDeclaration>,
+) {
+    let descend = |id, out: &mut Vec<&'x JsVariableDeclaration>| {
+        collect_hoisted_var_declarations(arena.get_stmt(id), arena, out)
+    };
+    match stmt {
+        JsStatement::VariableDeclaration(decl) if matches!(decl.kind, JsVariableKind::Var) => {
+            out.push(decl)
+        }
+        JsStatement::Block(block) => {
+            for stmt in &block.body {
+                collect_hoisted_var_declarations(stmt, arena, out);
+            }
+        }
+        JsStatement::If(stmt) => {
+            descend(stmt.consequent, out);
+            if let Some(alternate) = stmt.alternate {
+                descend(alternate, out);
+            }
+        }
+        JsStatement::For(stmt) => {
+            if let Some(JsForInit::Variable(decl)) = &stmt.init
+                && matches!(decl.kind, JsVariableKind::Var)
+            {
+                out.push(decl);
+            }
+            descend(stmt.body, out);
+        }
+        JsStatement::ForOf(stmt) => {
+            if let JsForOfLeft::Variable(decl) = &stmt.left
+                && matches!(decl.kind, JsVariableKind::Var)
+            {
+                out.push(decl);
+            }
+            descend(stmt.body, out);
+        }
+        JsStatement::While(stmt) => descend(stmt.body, out),
+        JsStatement::DoWhile(stmt) => descend(stmt.body, out),
+        JsStatement::Labeled(stmt) => descend(stmt.body, out),
+        JsStatement::Try(stmt) => {
+            for stmt in &stmt.block.body {
+                collect_hoisted_var_declarations(stmt, arena, out);
+            }
+            if let Some(handler) = &stmt.handler {
+                for stmt in &handler.body.body {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+            if let Some(finalizer) = &stmt.finalizer {
+                for stmt in &finalizer.body {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+        }
+        JsStatement::Switch(stmt) => {
+            for case in &stmt.cases {
+                for stmt in &case.consequent {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Scan a block body for the names it declares and register them in the local scope.
 /// This tracks local `const`/`let`/`var` declarations so that should_proxy() can
 /// check their init expression types when they're referenced in assignments, and a
@@ -302,6 +373,17 @@ fn register_block_local_vars(
     arena: &crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
     scope: &mut LocalScope,
 ) {
+    // A `var` is function-scoped, so one declared in a nested block, loop head or
+    // `case` arm binds here too; the loop below only sees this list's own statements.
+    let mut hoisted = Vec::new();
+    for stmt in block {
+        collect_hoisted_var_declarations(stmt, arena, &mut hoisted);
+    }
+    for decl in hoisted {
+        for d in &decl.declarations {
+            extract_pattern_names_to_scope(&d.id, scope);
+        }
+    }
     for stmt in block {
         match stmt {
             JsStatement::FunctionDeclaration(JsFunctionDeclaration { id: Some(id), .. })
