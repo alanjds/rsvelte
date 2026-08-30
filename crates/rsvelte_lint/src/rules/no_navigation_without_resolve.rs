@@ -30,6 +30,7 @@ use serde_json::Value;
 use crate::context::LintContext;
 use crate::engine::{SourceKind, classify_source};
 use crate::rule::{Fixable, Rule, RuleCategory, RuleConditions, RuleMeta, Severity};
+use crate::rules::kit_nav::{NavKind, ScopeIndex, nav_call_kind};
 use crate::script::{ProgramView, ScriptKind, ScriptRule, node_type, walk_js};
 
 static META: RuleMeta = RuleMeta {
@@ -496,54 +497,6 @@ fn has_rel_external(attrs: &[Value], var_inits: &HashMap<String, Value>) -> bool
     false
 }
 
-enum NavKind {
-    Goto,
-    Push,
-    Replace,
-}
-
-fn call_kind(node: &Value, im: &Imports) -> Option<NavKind> {
-    let callee = node.get("callee")?;
-    match node_type(callee) {
-        Some("Identifier") => {
-            let n = callee.get("name").and_then(Value::as_str)?;
-            if im.goto.contains(n) {
-                Some(NavKind::Goto)
-            } else if im.push_state.contains(n) {
-                Some(NavKind::Push)
-            } else if im.replace_state.contains(n) {
-                Some(NavKind::Replace)
-            } else {
-                None
-            }
-        }
-        Some("MemberExpression") => {
-            if callee.get("computed").and_then(Value::as_bool) == Some(true) {
-                return None;
-            }
-            let obj = callee
-                .get("object")
-                .filter(|o| node_type(o) == Some("Identifier"))
-                .and_then(|o| o.get("name"))
-                .and_then(Value::as_str)?;
-            if !im.nav_ns.contains(obj) {
-                return None;
-            }
-            match callee
-                .get("property")
-                .and_then(|p| p.get("name"))
-                .and_then(Value::as_str)?
-            {
-                "goto" => Some(NavKind::Goto),
-                "pushState" => Some(NavKind::Push),
-                "replaceState" => Some(NavKind::Replace),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
 /// Check an href attribute node. Returns true if the URL is not allowed.
 fn check_href(
     attr: &Value,
@@ -609,11 +562,14 @@ fn collect_nav_reports(
 ) -> Vec<(u32, u32, &'static str)> {
     let im = collect_imports(json);
     let var_inits = collect_var_inits(json);
+    // Upstream reaches the callee through `ReferenceTracker`, which follows a
+    // binding copied out of the import; the name-keyed `im` sets cannot.
+    let idx = ScopeIndex::build(json);
     let mut reports: Vec<(u32, u32, &'static str)> = Vec::new();
 
     walk_js(json, |node, _| match node_type(node) {
         Some("CallExpression") => {
-            let kind = call_kind(node, &im);
+            let kind = nav_call_kind(&idx, node);
             let Some(kind) = kind else { return };
             let arguments = node.get("arguments").and_then(Value::as_array);
             let Some(first_argument) = arguments.and_then(|arguments| arguments.first()) else {

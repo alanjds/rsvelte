@@ -14,7 +14,7 @@ preset leaves `off`. Gate 33 (`lint-preset.mjs`) pins the two presets, but it
 reads them through `--list-rules` and upstream's exported config object — the
 declared tables, never a run (gate-coverage blind spot 33b).
 
-`lint-severity-known-failures.json` holds 62 entries.
+`lint-severity-known-failures.json` holds 58 entries.
 
 Key classes:
 
@@ -25,7 +25,7 @@ Key classes:
 | `exit` | `exit\|<id>\|<oracle>-><rsvelte>\|<causes>` | the process exit codes differ |
 | `oracle-crash` | `oracle-crash\|<id>\|<rule>` | an upstream rule threw and took the file's whole report with it |
 
-Partition of `lint-severity-known-failures.json` by cause: `57 + 4 + 1`
+Partition of `lint-severity-known-failures.json` by cause: `57 + 1`
 
 Two of those addends are a `4` and they are unrelated: the standalone `4` is the
 `exit` 1→0 class below (a type-aware rule `lint-universe.mjs` excludes, which
@@ -102,20 +102,35 @@ write references and bails. Reproducing that needs an actual redeclaration, and 
 redeclared `let` is an early error in every JavaScript — so the pattern that pins the
 fix cannot also be a program the compiler accepts. Official rejects it too.
 
-## `exit` 1→0, 4 entries — `svelte/no-navigation-without-resolve`
+## `exit` 1→0 — **closed, 0 entries**
 
-`no-goto-without-base/{17-non-call-references,21-module-goto.svelte.js,23-alias-chains}`
-and `no-navigation-without-base/12-module-file.svelte.ts`. Upstream's
-`flat/recommended` runs this rule at `error`; it reports, and ESLint exits 1
-while rsvelte exits 0.
+`no-goto-without-base/{17-non-call-references,23-alias-chains}` were the last two.
+Upstream resolves `goto` through `ReferenceTracker.iterateEsmReferences`, which
+follows a copied binding (`const one = goto; const two = one; two('/x')`) and a
+copied namespace (`const nsCopy = nav; nsCopy.goto('/x')`); rsvelte's local
+`call_kind` matched the imported identifier and a `* as ns` member directly and
+stopped there. The rule now resolves its callee through `kit_nav::nav_call_kind`,
+the scope index the sibling `no-goto-without-base` already used, and `call_kind`
+is deleted.
 
-The rule is on `scripts/compat-corpus/lint-universe.mjs`'s `EXCLUDE` list — it
-needs the TypeScript checker to match upstream, and the type-aware path lives in
-the out-of-workspace `rsvelte_lint_types` crate — so its findings are outside
-this gate's comparison population, as they are outside gate 28's. The **exit
-code is not**, because it is a property of the whole run: excluding a rule from a
-finding comparison cannot exclude it from the process's exit status. That is the
-one thing this class records, and it is why an `EXCLUDE` entry is not free.
+**This bucket held four entries and the reason was not one cause.** It was read as
+"the rule needs the TypeScript checker, and the type-aware path lives in the
+out-of-workspace `rsvelte_lint_types` crate" — which the rule's `EXCLUDE` entry in
+`scripts/compat-corpus/lint-universe.mjs` makes plausible, and which was wrong for
+half of them. Measured instead of assumed, with the rule's own binary:
+
+| input | in a `.svelte` | in a `.svelte.(js\|ts)` |
+|---|---|---|
+| `export function bad() { return goto('/module-bad'); }` | reported | **silent** |
+
+`no-navigation-without-resolve` was a `check_root` rule only, so a
+`.svelte.(js|ts)` — which reaches `run_script_rules_module`, a separate entry
+point — never ran it, while its sibling had implemented both halves since it
+shipped. `crates/rsvelte_lint/tests/navigation_resolve_module_surface.rs` pins
+both halves: the module surface reports, a component still reports once, a
+resolved URL is the accepting control, and the two sibling hooks are asserted to
+run on the same file set — with the note that the sibling is a port-vs-port
+oracle and the absolute answers are pinned separately.
 
 ## `oracle-crash`, 1 entry — `no-target-blank/02-rel-dynamic.svelte`
 
