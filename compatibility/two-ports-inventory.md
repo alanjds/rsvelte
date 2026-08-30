@@ -670,6 +670,47 @@ own ablation) and `crates/rsvelte_core/tests/server_declaration_keyword_anchor.r
 compares the two maps to each other, and only one of the 29 sourcemaps samples has a source line
 that separates the two rules — which is why this row was worth writing rather than the fix alone.
 
+### 18. How is an inline `$props()` type hoisted to `$$ComponentProps`? — [D]
+
+**Upstream:** one branch of `handle$propsRune`
+(`svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts`, the "Easy mode" arm). It takes
+`node.initializer.typeArguments?.[0] || node.type` — so the **type-argument** form
+`$props<{…}>()` and the **type-annotation** form `let {…}: {…} = $props()` are the *same*
+`generic_arg` — and relocates it with `preprendStr` + `appendLeft` + **`this.str.move(...)`** +
+`appendRight(surroundWithIgnoreComments('$$ComponentProps'))`. Because the type text is *moved*
+rather than re-emitted, every character of the hoisted alias keeps its magic-string mapping.
+
+**Ports.** Both in `rsvelte_projection` `svelte2tsx/script/props_rune.rs::apply_props_typedef`,
+selected by which flag the same upstream `||` collapses:
+
+- `HAS_TYPE_ARG` (`props_rune.rs:126-150`) mirrors upstream: `prepend_right` + `append_left` +
+  `append_right`, and signals `props_type_arg_hoist` so `process_instance_script_tag.rs:321`
+  performs the `move_range`.
+- `TYPE_ANNOTATION | HOISTABLE_TYPE` (`props_rune.rs:154-176`) does **not** move anything. It
+  `overwrite`s the annotation away at its original site and the alias is re-synthesized as fresh
+  text by `format!` at `process_instance_script_tag.rs:177` / `:199` / `:356`.
+
+**Demonstrated.** Two inputs that differ only in which spelling of the same type upstream's `||`
+picks, both `is_ts_file: true`, counting map segments on the generated `$$ComponentProps` alias
+line:
+
+| input | generated alias line | segments | mapped columns |
+|---|---|---|---|
+| `let { a } = $props<{ a: number }>()` | `type $$ComponentProps = { a: number };…` | **15** | 35/59 |
+| `let { a }: { a: number } = $props()` | `;type $$ComponentProps =  { a: number };…` | **0** | 0/61 |
+
+The generated **text** matches upstream in both cases, which is why the svelte2tsx text gate is
+green on them; the divergence is confined to the map. And the map gate cannot see it either — it
+asserts rsvelte's map is *structurally well-formed*, not equal to official's, because the two are
+segmented too differently to diff. So a diagnostic anywhere in an inline-annotated props type
+resolves to the wrong source position, and nothing in the tree reports it.
+
+**Not closed.** Degree 1 is available in principle — the annotation arm can take the
+type-argument arm's `move_range` path — but it changes which chunk the `;` markers travel with,
+which is exactly the ordering `process_instance_script_tag.rs:301-310` comments as load-bearing,
+so it needs the corpus svelte2tsx text gate rather than a unit test alone.
+
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the
