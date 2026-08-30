@@ -671,9 +671,6 @@ fn relocate_comments_in_spans(source: &str, spans: &[ReactiveSpan]) -> String {
             continue;
         }
         let text = &source[comment_start..i];
-        if memmem::find(text.as_bytes(), b"svelte-ignore").is_some() {
-            continue;
-        }
         let Some(index) = spans.iter().position(|span| {
             let (start, end) = span.comment_range();
             comment_start >= start && comment_start < end
@@ -681,6 +678,13 @@ fn relocate_comments_in_spans(source: &str, spans: &[ReactiveSpan]) -> String {
             continue;
         };
         let span = &spans[index];
+        // A `svelte-ignore` LEADING the statement stays put — the later text
+        // passes find it by scanning backwards from the node it annotates. One
+        // written inside the statement annotates nothing there and is ordinary
+        // trivia, so leaving it behind loses it with the rebuilt label.
+        if comment_start < span.label && memmem::find(text.as_bytes(), b"svelte-ignore").is_some() {
+            continue;
+        }
         if span.rehome {
             rehomed[index].push(text);
         }
