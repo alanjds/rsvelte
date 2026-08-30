@@ -22,7 +22,7 @@
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrayExpressionElement, BindingIdentifier, BindingPattern, IdentifierReference, Program,
-    Statement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    Statement, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -151,6 +151,7 @@ pub(super) fn collect_local_consts(
     let semantic = &semantic_ret.semantic;
     let mut collector = ConstCollector {
         analysis,
+        semantic,
         counts: FxHashMap::default(),
         verdicts: FxHashMap::default(),
     };
@@ -192,22 +193,16 @@ impl<'a> Visit<'a> for LocalReferenceCollector<'_> {
     }
 }
 
-struct ConstCollector<'an> {
+struct ConstCollector<'an, 'sem> {
     analysis: Option<&'an ComponentAnalysis>,
+    semantic: &'sem Semantic<'sem>,
     counts: FxHashMap<String, u32>,
     verdicts: FxHashMap<String, bool>,
 }
 
-impl<'a> Visit<'a> for ConstCollector<'_> {
+impl<'a> Visit<'a> for ConstCollector<'_, '_> {
     fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
         *self.counts.entry(it.name.to_string()).or_insert(0) += 1;
-    }
-
-    fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
-        if !matches!(it.kind, VariableDeclarationKind::Const) {
-            return;
-        }
-        walk::walk_variable_declaration(self, it);
     }
 
     fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
@@ -218,12 +213,30 @@ impl<'a> Visit<'a> for ConstCollector<'_> {
         let Some(init) = &it.init else {
             return;
         };
+        // Upstream evaluates a binding's initializer when `!binding.updated` —
+        // the test is whether the name is ever written, not whether it is `const`.
+        if !self.is_never_written(id) {
+            return;
+        }
         // No `locals` while building the index: a chained `const a = b` stays
         // unresolved rather than depending on visit order.
         self.verdicts.insert(
             id.name.to_string(),
             shape_can_be_unknown(init, self.analysis, None),
         );
+    }
+}
+
+impl ConstCollector<'_, '_> {
+    fn is_never_written(&self, id: &BindingIdentifier<'_>) -> bool {
+        let Some(symbol_id) = id.symbol_id.get() else {
+            return false;
+        };
+        !self
+            .semantic
+            .scoping()
+            .get_resolved_references(symbol_id)
+            .any(oxc_semantic::Reference::is_write)
     }
 }
 

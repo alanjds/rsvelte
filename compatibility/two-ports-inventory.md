@@ -871,6 +871,25 @@ question: `for (var v = 0; v < 1; v++)` in a template handler now reads `typeof 
 from `reference_is_plain_local` — a predicate driven by **phase 2's** scope data rather than by any
 phase-3 registrar. Three registrars agreeing does not make the compiler agree with itself.
 
+The `console.log` over-instrumentation noted above was then sized the same way, and it is **three**
+sub-causes rather than one. Upstream wraps a dev `console.<method>` only when an argument is a
+spread or `scope.evaluate(arg).has_unknown`, and its identifier case evaluates a binding's
+initializer when `!binding.updated` — the test is whether the name is ever **written**, not whether
+it is `const`. `console_wrap.rs` collected verdicts only from a `const` declaration, and its own
+comment said so: "every other local binding (parameters, lets, duplicate const names) is UNKNOWN to
+upstream's evaluator". That is fixed, with the reassignment controls — a `let` later assigned, a
+`let` incremented, a `let` with no initializer — all still wrapping, which is what separates the
+`!updated` rule from "treat every local as known".
+
+The two that remain are recorded rather than claimed, and they are on either side of this row's own
+axis. A **template** handler's locals are invisible to `args_need_wrap`, which evaluates against the
+component scope with no local bindings at all — so `const a = 1; console.log(a)` in an event handler
+is wrapped while the byte-identical script-path source is not; that is a second port of the same
+predicate, and the script path is the one that already has the answer (`LocalConsts`). And a global
+call is `NUMBER` to upstream's `globals` table (`Math.random()`, `Number('3')`) and UNKNOWN here —
+the same gap #3539's residue records for the constant folder, reached through a different caller.
+Measured together: 5 divergences over a 116-comparison grid of argument shape x host.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`
