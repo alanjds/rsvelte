@@ -23,12 +23,36 @@ Attribution of `fmt-oracle-excluded.json`:
 | 3 | [`deliberate-divergences`](deliberate-divergences.md#a-props-line-comment-keeps-the-separator-slot-the-compiler-reads) | the `$props()` comment slot the #3515 repros depend on |
 | 4 | [`deliberate-divergences`](deliberate-divergences.md#the-formatters-javascript-engine-is-oxc-not-prettier) | `engine-divergence` — oxc's line-breaking, not prettier's |
 | 6 | [`deliberate-divergences`](deliberate-divergences.md#the-formatter-declines-an-input-its-own-parser-rejects) | `invalid-input` and `migrate` — inputs no compiler accepts, and Svelte 4 migrator output |
+| 2 | [`upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md`](../upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md) | `oracle-bug` — the `{#each}` head drops a nested pattern's property key |
 
-The 16 `oracle-bug` entries are **deliberately absent from this table**. They are roughly eight
-distinct oxfmt / prettier-plugin-svelte defects and only one — the `{@const}` line comment — has
-been filed. Listing all sixteen against that one report would make the gate green on a citation
-that does not cover them, which is the failure mode a citation is most likely to hide. Each gets
-a row when its own report is filed with both outputs measured.
+The remaining **14** `oracle-bug` entries are **deliberately absent from this table**. Listing
+them against a report that does not cover them would make the gate green on a citation, which is
+the failure mode a citation is most likely to hide. Each gets a row when its own report is filed
+with both outputs measured.
+
+**Two facts about this set were measured on 2026-08-30 and neither was known when it was
+written.** Re-running the pinned oracle (`oxfmt@0.64.0`, `fmt-corpus.oxfmtrc.json`) over all
+sixteen and feeding each result back to `svelte@5.56.10`'s `parse({modern: true})`:
+
+- **Exactly 2 of 16 still produce text the official compiler rejects** — the two
+  `{#each}` nested-pattern files above, one cause, now filed. The other 14 produce
+  output that *parses*, which is not the same as output that is correct: the recorded
+  defects there are semantic (a dropped variable, collapsed whitespace-significant
+  `<textarea>` content) or cosmetic (indentation), and **the parse oracle cannot see
+  either class**. Read the 2 as "confirmed by an instrument", not the 14 as "cleared".
+- **At least one stated reason no longer reproduces.**
+  `runtime-legacy/samples/block-expression-assign/main.svelte` is recorded as "oxfmt drops
+  the closing paren in `{@const x = (h = 0)}`, producing `{@const x = (h = 0}` — invalid".
+  Under 0.64.0 the output is `{@const x = h = 0}`, which parses and is semantically
+  identical (`=` is right-associative). Whether the entry would now *match* rsvelte-fmt
+  byte-for-byte — and so should be deleted rather than re-worded — is unmeasured; it needs
+  a built `rsvelte-fmt`.
+
+**This exclusion list is permanent, so nothing re-checks it.** The ratchets are two-sided and a
+listed entry that starts passing fails CI; an *exclusion* has no such pressure, and its
+justification was written against whatever oxfmt version was installed that day. `fmt-verify.mjs`
+warns when an excluded id matches byte-for-byte, which catches the strongest case and not this
+one: a reason can go stale while the pair still differs.
 
 ## oracle-bug — the `oxfmt(svelte:true)` oracle output is itself wrong/corrupt
 
