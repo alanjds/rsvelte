@@ -102,3 +102,9 @@ lint run actually enables, which is that filtered by `enabled_script_rules`
 config file, so `extends` layering, `files`/`ignores` globs and per-rule options
 are all off this path. Both limits are recorded as `compatibility/gate-coverage.md`
 blind spots 33b and 33c.
+
+Attribution of `lint-preset-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 5 | [`deliberate-divergences`](deliberate-divergences.md#the-default-lint-preset-carries-three-rules-upstream-does-not-and-drops-two) | `rsvelte-lint` is one binary with no ESLint underneath it: it must carry the core checks or leave them unavailable, and it implements comment directives as a mechanism rather than as a rule id |

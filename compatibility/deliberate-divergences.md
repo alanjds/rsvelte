@@ -461,7 +461,7 @@ memoization path.
 
 ## A linter reports the compiler's own errors (`rsvelte-lint` exit code)
 
-**Ratchet** `compatibility/lint-severity-known-failures.json`, the 56 `exit|…|0->1|…` entries.
+**Ratchet** `compatibility/lint-severity-known-failures.json`, the 57 `exit|…|0->1|…` entries.
 **Pinned by** `scripts/dev/test-lint-severity-exit-attribution.mjs`, run in CI by the
 `Corpus verify baseline-flag contract` job.
 

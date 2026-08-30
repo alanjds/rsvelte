@@ -39,6 +39,12 @@ Partition of `lint-adversarial-fix-all-known-failures.json` by cause: `1`
 
 ### DoD-4 attribution — **U**
 
+Attribution of `lint-adversarial-fix-all-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 1 | `upstream_issues/eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md` | ESLint throws while fixing; there is no oracle output to compare |
+
 `oracle-crash:no-navigation-without-base/06-template-literals.svelte` is attributed to
 [`upstream_issues/eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-base-empty-href-crash.md).
 

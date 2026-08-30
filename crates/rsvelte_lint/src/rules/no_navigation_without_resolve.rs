@@ -28,8 +28,9 @@ use rsvelte_diagnostics::Diagnostic;
 use serde_json::Value;
 
 use crate::context::LintContext;
+use crate::engine::{SourceKind, classify_source};
 use crate::rule::{Fixable, Rule, RuleCategory, RuleConditions, RuleMeta, Severity};
-use crate::script::{node_type, walk_js};
+use crate::script::{ProgramView, ScriptKind, ScriptRule, node_type, walk_js};
 
 static META: RuleMeta = RuleMeta {
     name: "svelte/no-navigation-without-resolve",
@@ -783,6 +784,24 @@ pub fn diagnostics_typed(
 #[derive(Default)]
 pub struct NoNavigationWithoutResolve;
 
+impl NoNavigationWithoutResolve {
+    fn run(ctx: &mut LintContext, json: &Value) {
+        let opts = ctx.option0();
+        let ignore = |key: &str| -> bool {
+            opts.and_then(|o| o.get(key)).and_then(Value::as_bool) == Some(true)
+        };
+
+        // No type backend in the native walk: `expressionIsAllowedType` is a
+        // stub. The type-aware path is `diagnostics_typed`.
+        let no_types = |_: &Value, _: AllowConfig| false;
+        let reports = collect_nav_reports(json, NavigationIgnores::from_option(ignore), &no_types);
+
+        for (s, e, msg) in reports {
+            ctx.report(s, e, msg);
+        }
+    }
+}
+
 impl Rule for NoNavigationWithoutResolve {
     fn meta(&self) -> &'static RuleMeta {
         &META
@@ -793,19 +812,21 @@ impl Rule for NoNavigationWithoutResolve {
         else {
             return;
         };
+        Self::run(ctx, &json);
+    }
+}
 
-        let opts = ctx.option0();
-        let ignore = |key: &str| -> bool {
-            opts.and_then(|o| o.get(key)).and_then(Value::as_bool) == Some(true)
-        };
+impl ScriptRule for NoNavigationWithoutResolve {
+    fn meta(&self) -> &'static RuleMeta {
+        &META
+    }
 
-        // No type backend in the native walk: `expressionIsAllowedType` is a
-        // stub. The type-aware path is `diagnostics_typed`.
-        let no_types = |_: &Value, _: AllowConfig| false;
-        let reports = collect_nav_reports(&json, NavigationIgnores::from_option(ignore), &no_types);
-
-        for (s, e, msg) in reports {
-            ctx.report(s, e, msg);
+    fn check_program(&self, ctx: &mut LintContext, program: &ProgramView<'_>, _kind: ScriptKind) {
+        // A component is covered by `check_root`, which sees both scripts and
+        // the template at once; only a standalone module needs this pass.
+        if !matches!(classify_source(ctx.filename()), SourceKind::Module { .. }) {
+            return;
         }
+        Self::run(ctx, program.value());
     }
 }

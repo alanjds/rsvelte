@@ -116,6 +116,9 @@ pub struct ScopeBuilder<'a> {
     /// verbatim into `ScopeRoot::bindings_by_name` (see `build()`), since
     /// `self.bindings` also moves verbatim and indices stay 1:1.
     bindings_by_name: FxHashMap<String, smallvec::SmallVec<[u32; 1]>>,
+    /// Defaults met while declaring a pattern, walked once the pattern is done so
+    /// the `$props()` slice stays the names the pattern itself declared.
+    pending_pattern_defaults: Vec<JsNodeId>,
 }
 
 impl<'a> ScopeBuilder<'a> {
@@ -150,6 +153,7 @@ impl<'a> ScopeBuilder<'a> {
             validation_errors: Vec::new(),
             possible_implicit_declarations: Vec::new(),
             declarator_init_rune: None,
+            pending_pattern_defaults: Vec::new(),
             instance_scope_index: 0,
             function_scope_map: FxHashMap::default(),
             current_script_offset: 0,
@@ -771,6 +775,7 @@ impl<'a> ScopeBuilder<'a> {
                             .and_then(|init_node| self.rune_call_callee(init_node));
                         self.process_binding_pattern_typed(id_node, *init, decl_kind);
                         self.declarator_init_rune = None;
+                        self.walk_pending_pattern_defaults();
                         // Also track updates in the initializer expression
                         if let Some(init_id) = init {
                             let init_node = self.arena.get_js_node(*init_id);
@@ -1231,6 +1236,15 @@ impl<'a> ScopeBuilder<'a> {
         }
     }
 
+    /// Upstream walks a pattern's default like any other expression, so the scopes it
+    /// opens declare into `root.conflicts` and its reads reference.
+    fn walk_pending_pattern_defaults(&mut self) {
+        while let Some(id) = self.pending_pattern_defaults.pop() {
+            let node = self.arena.get_js_node(id);
+            self.track_node_expression_updates(node);
+        }
+    }
+
     /// Process a binding pattern from a typed JsNode (for variable declarations).
     /// This mirrors `process_binding_pattern` but works with JsNode.
     fn process_binding_pattern_typed(
@@ -1330,14 +1344,7 @@ impl<'a> ScopeBuilder<'a> {
             JsNode::AssignmentPattern { left, right, .. } => {
                 let left_node = self.arena.get_js_node(*left);
                 self.process_binding_pattern_typed(left_node, init, decl_kind);
-                // Upstream walks a default expression like any other, so every
-                // `scope.declare` inside it still reaches `root.conflicts`.
-                let arena = self.arena;
-                collect_declared_names_in_expression(
-                    arena.get_js_node(*right),
-                    arena,
-                    &mut self.nested_declared_names,
-                );
+                self.pending_pattern_defaults.push(*right);
             }
             JsNode::RestElement { argument, .. } => {
                 let arg_node = self.arena.get_js_node(*argument);
