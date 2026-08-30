@@ -2054,9 +2054,30 @@ Positive control that a ceiling is the house pattern where someone thought about
 `fmt.mjs:170`. **[S]** `.svelte.js` / `.svelte.ts` files are never formatted or compared here,
 and neither are standalone `.css` / `.scss` / `.less` files.
 
-**Note on exclusions:** `fmt-oracle-excluded.json` holds 29 entries, each with a written
-justification, partitioned by the JSON's own `class` field (16 oracle-bug, 7 engine-divergence,
-4 invalid-input, 2 migrate). This is a *small, justified* set — noted
+### Blind spot 9d — the gate never asks whether rsvelte's own output is still a Svelte document
+
+The unit is byte equality against the oracle (`fmt-verify.mjs:102`), so a mismatch is one
+verdict whether the actual text differs by a two-space indent or is not parseable at all.
+**[D]** Compiling both sides' formatted output with the official compiler across all 788 listed
+entries (2026-08-31) finds **1** whose rsvelte-fmt output `compile()` rejects, against 0 for the
+oracle: `sveltepress/…/icons/SystemDefault.svelte`, where rsvelte-fmt **duplicates a leading
+HTML comment and truncates the copies**, dropping their `-->` and swallowing the rest of the
+markup (`expected_token`). It had been sitting in `fmt-known-failures.json` as one ordinary
+entry since the wave-2 enrolment. The same check over `fmt-oracle-excluded.json` finds 0. The
+reduction and the three jointly-required ingredients are in `fmt-known-failures.md`.
+
+The severity half of the same blind spot: of those 788, **674 are render-neutral** (the compiler
+emits byte-identical JS *and* CSS from either form) and **114 change what the compiler emits**.
+The gate cannot separate them, so 86% taste and 14% semantics ratchet under one key —
+the *ratchet entry suppresses everything its key cannot tell apart* rule, one level up from
+the matrix gate, which solved the same problem by splitting `output-unparseable` and
+`comment-mismatch` out of `js-mismatch` (section 5). **Closing 9d:** run
+`parseable.mjs`-style acceptance on the actual side and emit it as its own verdict. Cost:
+one compile per failing entry, i.e. per ratchet entry, not per corpus component.
+
+**Note on exclusions:** `fmt-oracle-excluded.json` holds 27 entries, each with a written
+justification, partitioned by the JSON's own `class` field (15 oracle-bug, 7 engine-divergence,
+3 invalid-input, 2 migrate). This is a *small, justified* set — noted
 here so it is not mistaken for a blind spot. Its staleness check is `console.warn` only
 (`fmt-verify.mjs:110-126`).
 
