@@ -982,6 +982,30 @@ the bindings are asked which plain locals they declare inside it
 (`plain_local_names_in_range`). Reachability of the read half is **0 of 34,728 corpus entries**:
 correct, and it moves no real-world output.
 
+**A name the scope builder never walks cannot shadow anything, and that is where this row's
+question is decided.** Upstream's `create_scopes` walks a binding pattern's DEFAULT like any other
+expression, so `let { search = async (input) => … } = …` opens a scope for the arrow and
+`scope.declare` puts `input` into `root.conflicts`. rsvelte's `process_binding_pattern_typed`
+read an `AssignmentPattern`'s `left` and dropped its `right` — so the default's declarations and
+its reads reached nothing, and `$.delegated('input', …)` in dev generated `function input()`
+where upstream deconflicts to `function input_1()`
+(`svelte-material-ui/packages/autocomplete/src/Autocomplete.svelte`). The default has to be
+walked AFTER the pattern rather than inside it, because the `$props()` arm applies `init_rune` to
+the `self.bindings[first_new..]` slice and an arrow parameter declared mid-pattern would land
+inside it.
+
+Two things generalize. **A function parameter's default was already right, for the wrong reason**:
+`input` reached `root.conflicts` through the unbound-global collector in `2_analyze/mod.rs`, which
+scans the script for identifiers that resolve to no declaration — a coincidence that made
+`function f(g = (input) => input)` and `let { g = (input) => input }` look like one covered case
+when they are two, and the grid had to cross the two slots to tell them apart. And **the oxc twin
+of this walk is dead code**: `process_binding_pattern` has the identical one-line omission, but
+`process_program` is reached only when a script's content is not `Expression::Typed`, which
+`resolve_lazy_expressions()` rules out. Measured rather than argued — 0 of 2000 corpus components
+reach it, with the positive control (disabling the typed fast path makes the marker fire) showing
+the instrument can report. The twin is left unfixed and recorded here rather than changed
+unmeasured.
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the

@@ -1129,6 +1129,15 @@ spelling is deliberately declared inside a function. A name-only script pass
 used to rewrite both the local declaration and its call, producing JavaScript
 with a missing `const` initializer in the AdventureLog corpus.
 
+`issues/pattern-default-declares-and-references.svelte` pins that a destructured
+binding's DEFAULT is an ordinary expression. `process_binding_pattern_typed`
+walked an `AssignmentPattern`'s `left` and dropped its `right`, so nothing the
+default declares reached `root.conflicts` — `let { search = async (input) => … }`
+left `input` free and a dev event handler came out as `function input()` where
+upstream deconflicts to `function input_1()`. The object, array and nested-object
+rows are three shapes of the same slot; a function PARAMETER default was already
+right, which is why the two had to be probed apart.
+
 ## Adding a file
 
 See [Adding a pattern file](../../scripts/compat-corpus/README.md#adding-a-pattern-file).
