@@ -13,6 +13,11 @@
 //! is what keeps this from over-pruning.
 //!
 //! Every expectation is the official compiler's output for the same source.
+//!
+//! These rows no longer discriminate: with the `NestingSelector` arm restored to
+//! its pre-fix `return true`, all six still pass, because another path reaches
+//! the same verdict first. What guards that arm is the corpus warning ratchet
+//! (four `css_unused_selector` entries move), not this file.
 
 use rsvelte_core::{CompileOptions, CssMode, GenerateMode, compile};
 
