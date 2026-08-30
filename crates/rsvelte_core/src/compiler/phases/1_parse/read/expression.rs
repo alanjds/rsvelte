@@ -11670,7 +11670,17 @@ fn convert_function_expression_for_program(
     let mut obj = Map::new();
     obj.set_field("type", Value::String("FunctionExpression".to_string()));
     push_span_fields(&mut obj, start, end, line_offsets);
-    obj.set_field("id", Value::Null);
+    // acorn keeps a named function expression's own identifier; dropping it hid
+    // the name from every consumer of the serialized program, the scope walk
+    // included.
+    if let Some(id) = &func.id {
+        let id_start = offset + id.span.start as usize;
+        let id_end = offset + id.span.end as usize;
+        let id_expr = create_identifier(&id.name, id_start, id_end, line_offsets);
+        obj.set_field("id", id_expr.as_json().clone());
+    } else {
+        obj.set_field("id", Value::Null);
+    }
     obj.set_field("generator", Value::Bool(func.generator));
     obj.set_field("async", Value::Bool(func.r#async));
 
@@ -11719,9 +11729,9 @@ fn convert_function_expression_for_program(
 /// `JsNode::Raw(Value)` blob, so the function body subtree routes through the
 /// typed analyze walker. Serializes byte-identically to the Value blob (modulo
 /// the `expression: false` field, which the official ESTree output also emits
-/// and the Value blob was missing). `id` is always `null` to match the Value
-/// blob, and params keep the TS-aware `convert_formal_parameter` shape (TS bits
-/// fall through to `JsNode::Raw` via `expr_to_node`).
+/// and the Value blob was missing). Params keep the TS-aware
+/// `convert_formal_parameter` shape (TS bits fall through to `JsNode::Raw` via
+/// `expr_to_node`).
 fn convert_function_expression_for_program_as_node(
     arena: &ParseArena,
     func: &oxc_ast::ast::Function,
@@ -11782,11 +11792,22 @@ fn convert_function_expression_for_program_as_node(
         ))
     });
 
+    let id = func.id.as_ref().map(|id| {
+        let id_start = offset + id.span.start as usize;
+        let id_end = offset + id.span.end as usize;
+        arena.alloc_js_node(expr_to_node(create_identifier(
+            &id.name,
+            id_start,
+            id_end,
+            line_offsets,
+        )))
+    });
+
     JsNode::FunctionExpression {
         start: start as u32,
         end: end as u32,
         loc: create_typed_loc(start, end, line_offsets),
-        id: None,
+        id,
         params: arena.alloc_js_children(params),
         body,
         generator: func.generator,

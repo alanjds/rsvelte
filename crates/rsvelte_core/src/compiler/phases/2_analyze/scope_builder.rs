@@ -2078,6 +2078,17 @@ impl<'a> ScopeBuilder<'a> {
                 // Create a new scope for the function body (non-porous)
                 let old_scope = self.push_function_scope();
                 self.function_depth += 1;
+                // Same declaration as the typed walk's `FunctionExpression` arm.
+                if let Some(id) = &func_expr.id {
+                    let start = self.current_script_offset as u32 + id.span.start;
+                    let end = self.current_script_offset as u32 + id.span.end;
+                    self.declare_binding(
+                        id.name.to_string(),
+                        BindingKind::Normal,
+                        DeclarationKind::Function,
+                        Some((start, end)),
+                    );
+                }
                 // Record function body start → scope index mapping for visitor phase
                 if let Some(ref body) = func_expr.body {
                     let key = (self.current_script_offset + body.span.start as usize) as u32;
@@ -3280,11 +3291,27 @@ impl<'a> ScopeBuilder<'a> {
                 self.function_depth -= 1;
                 self.pop_scope(old_scope);
             }
-            JsNode::FunctionExpression { body, params, .. } => {
+            JsNode::FunctionExpression {
+                id, body, params, ..
+            } => {
                 let body_id = *body;
                 let params_range = *params;
+                let id_node = id.map(|id| self.arena.get_js_node(id));
                 let old_scope = self.push_function_scope();
                 self.function_depth += 1;
+                // Upstream declares a named function expression's own name in the
+                // scope it opens, and every declaration reaches `root.conflicts`.
+                if let Some(JsNode::Identifier {
+                    name, start, end, ..
+                }) = id_node
+                {
+                    self.declare_binding(
+                        name.to_string(),
+                        BindingKind::Normal,
+                        DeclarationKind::Function,
+                        Some((*start, *end)),
+                    );
+                }
                 if let Some(body_id) = body_id {
                     let body_node = self.arena.get_js_node(body_id);
                     if let Some(start) = node_start(body_node) {
