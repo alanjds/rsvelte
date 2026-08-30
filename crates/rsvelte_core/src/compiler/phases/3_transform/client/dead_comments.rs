@@ -9,10 +9,13 @@
 //! rsvelte carries the same code as source text, where every body is located and the
 //! cursor never dies, so the pass has to remove what upstream drops.
 //!
-//! Three kills exist. `3-transform/client/visitors/ClassBody.js` lowers a public rune
+//! Four kills exist. `3-transform/client/visitors/ClassBody.js` lowers a public rune
 //! field into builder-made `get` / `set` methods whose `BlockStatement` has no `loc`.
 //! A reactive destructuring assignment with a non-identifier RHS is lowered through a
-//! builder-made arrow-function body. And the enclosing `Program` is itself builder-made
+//! builder-made arrow-function body. `AssignmentExpression.js` appends
+//! `$.invalidate_inner_signals(() => { … })` to a mutation of a binding that backs a
+//! legacy `<select bind:value>`, and that arrow's block is builder-made too. And the
+//! enclosing `Program` is itself builder-made
 //! for a `<script module>`, so its cursor starts dead — unlike a `.svelte.(js|ts)` module
 //! (`print_module_program` simulates the real cursor) or a component's instance script
 //! (upstream assigns `component_block.loc = instance.loc`). `Rules` selects which apply.
@@ -21,6 +24,7 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     AssignmentExpression, AssignmentTarget, BlockStatement, ClassBody, ClassElement, Expression,
     FunctionBody, MethodDefinitionKind, Program, PropertyKey, Statement, StaticBlock,
+    UpdateExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -45,6 +49,9 @@ pub(crate) struct Rules<'a> {
     /// Names whose assignment transform makes a destructuring assignment grow an
     /// unlocated IIFE body. Empty outside a component instance script.
     pub destructure_iife_targets: &'a [String],
+    /// Names carrying `legacy_indirect_bindings`, whose member mutation grows an
+    /// unlocated `$.invalidate_inner_signals` thunk. Legacy mode only.
+    pub invalidate_inner_signals_targets: &'a [String],
 }
 
 impl Rules<'static> {
@@ -53,6 +60,7 @@ impl Rules<'static> {
         program_unlocated: false,
         rune_accessors: true,
         destructure_iife_targets: &[],
+        invalidate_inner_signals_targets: &[],
     };
 
     /// A `<script module>`, whose `Program` is builder-made.
@@ -61,16 +69,22 @@ impl Rules<'static> {
             program_unlocated: true,
             rune_accessors: runes,
             destructure_iife_targets: &[],
+            invalidate_inner_signals_targets: &[],
         }
     }
 }
 
 impl<'a> Rules<'a> {
-    pub(crate) const fn component(runes: bool, destructure_iife_targets: &'a [String]) -> Self {
+    pub(crate) const fn component(
+        runes: bool,
+        destructure_iife_targets: &'a [String],
+        invalidate_inner_signals_targets: &'a [String],
+    ) -> Self {
         Self {
             program_unlocated: false,
             rune_accessors: runes,
             destructure_iife_targets,
+            invalidate_inner_signals_targets,
         }
     }
 }
@@ -129,7 +143,8 @@ fn may_have_dead_comments(src: &str, rules: Rules<'_>) -> bool {
                 || memchr::memmem::find(bytes, b"$derived").is_some()))
             || (!rules.destructure_iife_targets.is_empty()
                 && bytes.contains(&b'=')
-                && (bytes.contains(&b'{') || bytes.contains(&b'['))))
+                && (bytes.contains(&b'{') || bytes.contains(&b'[')))
+            || (!rules.invalidate_inner_signals_targets.is_empty() && bytes.contains(&b'.')))
 }
 
 fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Option<String> {
@@ -141,6 +156,7 @@ fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Opt
         events: Vec::new(),
         rune_accessors: rules.rune_accessors,
         destructure_iife_targets: rules.destructure_iife_targets,
+        invalidate_inner_signals_targets: rules.invalidate_inner_signals_targets,
         src,
     };
     collector.visit_program(program);
@@ -198,12 +214,22 @@ struct EventCollector<'s> {
     events: Vec<(u32, Event)>,
     rune_accessors: bool,
     destructure_iife_targets: &'s [String],
+    invalidate_inner_signals_targets: &'s [String],
     src: &'s str,
 }
 
 impl<'s> EventCollector<'s> {
     /// A comment on the same line as the accessor's field is still flushed as that
     /// field's trailing comment, so a kill only reaches the next line.
+    /// `AssignmentExpression.js` only appends the thunk when the mutated binding
+    /// carries `legacy_indirect_bindings`; a shadowing local of the same name is
+    /// treated as the binding, matching the destructure kill above.
+    fn invalidates(&self, name: &str) -> bool {
+        self.invalidate_inner_signals_targets
+            .iter()
+            .any(|target| target == name)
+    }
+
     fn kill_at(&mut self, offset: u32) {
         let rest = &self.src.as_bytes()[offset as usize..];
         let Some(nl) = memchr::memchr(b'\n', rest) else {
@@ -239,7 +265,23 @@ impl<'a> Visit<'a> for EventCollector<'_> {
                 self.events.push((it.span.start, Event::Kill));
             }
         }
+        // The thunk is appended after the mutation, and `$.mutate(obj, …)` still
+        // flushes a comment trailing the source assignment's own line.
+        if let Some(root) = assignment_target_member_root(&it.left)
+            && self.invalidates(root)
+        {
+            self.kill_at(it.span.end);
+        }
         walk::walk_assignment_expression(self, it);
+    }
+
+    fn visit_update_expression(&mut self, it: &UpdateExpression<'a>) {
+        if let Some(root) = simple_target_member_root(&it.argument)
+            && self.invalidates(root)
+        {
+            self.kill_at(it.span.end);
+        }
+        walk::walk_update_expression(self, it);
     }
 
     fn visit_class_body(&mut self, it: &ClassBody<'a>) {
@@ -265,6 +307,29 @@ impl<'a> Visit<'a> for EventCollector<'_> {
     fn visit_static_block(&mut self, it: &StaticBlock<'a>) {
         self.events.push((it.span.start, Event::Revive));
         walk::walk_static_block(self, it);
+    }
+}
+
+/// The root identifier of a member-expression assignment target, or `None` when
+/// the target is a bare name (which takes the `assign` transform, not `mutate`).
+fn assignment_target_member_root<'a>(target: &'a AssignmentTarget<'_>) -> Option<&'a str> {
+    let member = target.as_member_expression()?;
+    member_root(member)
+}
+
+fn simple_target_member_root<'a>(
+    target: &'a oxc_ast::ast::SimpleAssignmentTarget<'_>,
+) -> Option<&'a str> {
+    member_root(target.as_member_expression()?)
+}
+
+fn member_root<'a>(member: &'a oxc_ast::ast::MemberExpression<'_>) -> Option<&'a str> {
+    let mut object = member.object();
+    loop {
+        match object {
+            Expression::Identifier(id) => return Some(id.name.as_str()),
+            _ => object = object.as_member_expression()?.object(),
+        }
     }
 }
 
@@ -345,6 +410,47 @@ mod tests {
 
     fn strip(src: &str) -> Option<String> {
         strip_dead_comments(src, Rules::ACCESSORS)
+    }
+
+    fn strip_invalidate(src: &str) -> Option<String> {
+        let targets = [String::from("obj")];
+        strip_dead_comments(src, Rules::component(false, &[], &targets))
+    }
+
+    #[test]
+    fn a_select_bound_mutation_kills_from_the_next_line() {
+        let src = "let obj = { v: 1 };\nfunction bump() {\n\tobj.v = 3; // kept\n\t// gone\n\tobj.v = 4;\n}\n";
+        let out = strip_invalidate(src).unwrap();
+        assert!(out.contains("// kept"));
+        assert!(!out.contains("// gone"));
+    }
+
+    #[test]
+    fn a_located_body_after_the_mutation_revives_the_cursor() {
+        let src = "let obj = { v: 1 };\nfunction bump() {\n\tobj.v = 3;\n}\n// gone\nfunction after() {\n\t// kept\n\treturn 1;\n}\n";
+        let out = strip_invalidate(src).unwrap();
+        assert!(out.contains("// kept"));
+        assert!(!out.contains("// gone"));
+    }
+
+    #[test]
+    fn an_update_expression_kills_the_same_way() {
+        let src =
+            "let obj = { v: 1 };\nfunction bump() {\n\tobj.v++;\n\t// gone\n\tobj.v = 4;\n}\n";
+        let out = strip_invalidate(src).unwrap();
+        assert!(!out.contains("// gone"));
+    }
+
+    #[test]
+    fn a_bare_assignment_takes_the_assign_transform_and_kills_nothing() {
+        let src = "let obj = { v: 1 };\nfunction bump() {\n\tobj = { v: 3 };\n}\n// kept\n";
+        assert!(strip_invalidate(src).is_none());
+    }
+
+    #[test]
+    fn a_binding_outside_the_target_list_kills_nothing() {
+        let src = "let other = { v: 1 };\nfunction bump() {\n\tother.v = 3;\n}\n// kept\n";
+        assert!(strip_invalidate(src).is_none());
     }
 
     fn strip_module(src: &str) -> Option<String> {
@@ -449,7 +555,7 @@ mod tests {
     #[test]
     fn a_reactive_destructure_iife_kills_later_comments() {
         let targets = vec!["$value".to_string()];
-        let rules = Rules::component(false, &targets);
+        let rules = Rules::component(false, &targets, &[]);
         let src = "({ $value } = { $value: 1 }) // gone\n// gone too\n";
         let out = strip_dead_comments(src, rules).unwrap();
         assert!(!out.contains("// gone"));
@@ -458,7 +564,7 @@ mod tests {
     #[test]
     fn a_plain_destructure_grows_no_iife_and_keeps_comments() {
         let targets = vec!["$value".to_string()];
-        let rules = Rules::component(false, &targets);
+        let rules = Rules::component(false, &targets, &[]);
         let src = "({ plain } = { plain: 1 }) // kept\n";
         assert!(strip_dead_comments(src, rules).is_none());
     }
@@ -466,7 +572,7 @@ mod tests {
     #[test]
     fn a_located_body_after_a_destructure_iife_revives_the_cursor() {
         let targets = vec!["$value".to_string()];
-        let rules = Rules::component(false, &targets);
+        let rules = Rules::component(false, &targets, &[]);
         let src = "({ $value } = { $value: 1 }) // gone\nfunction f() {\n\t// kept\n}\n";
         let out = strip_dead_comments(src, rules).unwrap();
         assert!(!out.contains("// gone"));

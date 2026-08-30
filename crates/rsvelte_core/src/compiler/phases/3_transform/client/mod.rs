@@ -615,8 +615,18 @@ pub(crate) fn transform_client(
             .filter(|(_, transform)| transform.assign.is_some())
             .map(|(name, _)| name.clone())
             .collect();
-        let dead_comment_rules =
-            dead_comments::Rules::component(analysis.runes, &destructure_iife_targets);
+        let invalidate_inner_signals_targets: Vec<String> = analysis
+            .root
+            .bindings
+            .iter()
+            .filter(|binding| !binding.legacy_indirect_bindings.is_empty())
+            .map(|binding| binding.name.clone())
+            .collect();
+        let dead_comment_rules = dead_comments::Rules::component(
+            analysis.runes,
+            &destructure_iife_targets,
+            &invalidate_inner_signals_targets,
+        );
         let dead_comments_stripped = match retained_scripts
             .and_then(|scripts| scripts.instance.as_ref())
             .filter(|retained| {
