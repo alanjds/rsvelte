@@ -52,7 +52,10 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     if attribute.in_value && attribute.name == "style" {
         return crate::css::hover(text, offset).map(markdown);
     }
+    // `HTMLPlugin.doHover` bails on `possiblyComponent(node)`, so a component's
+    // attributes get no HTML description.
     if !attribute.in_value
+        && !attribute.on_a_component()
         && let Some(data) = html_attribute(attribute.element_tag, attribute.name)
     {
         return Some(markdown(data.description.to_string()));
@@ -297,5 +300,17 @@ mod tests {
     fn a_style_body_is_still_answered_from_css() {
         let text = "<style>\n  h1 { color: red }\n</style>";
         assert!(hovered_tag(text, text.find("color").unwrap() + 1).is_some());
+    }
+
+    #[test]
+    fn a_components_attribute_has_no_html_description() {
+        let element = "<div class=\"a\">x</div>";
+        assert!(hovered_tag(element, element.find("class").unwrap() + 1).is_some());
+        let component = "<Widget class=\"a\">x</Widget>";
+        expect_none(component, component.find("class").unwrap() + 1);
+        // A `style` value is the CSS plugin's, which upstream does not gate on
+        // the tag being a component.
+        let styled = "<Widget style=\"color: red\">x</Widget>";
+        assert!(hovered_tag(styled, styled.find("color").unwrap() + 1).is_some());
     }
 }

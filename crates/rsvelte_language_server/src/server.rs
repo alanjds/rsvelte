@@ -3138,6 +3138,13 @@ impl Server {
                     CompletionRewriteContext::new(source_path.as_deref(), true);
                 let mut adopted_completion_data = None;
                 if let Ok(result) = &mut response.response_result {
+                    // Upstream never carries tsgo's enclosing-declaration span:
+                    // `LocationLink.create(uri, defLocation.range, defLocation.range, …)`.
+                    // Collapsing it before the mapping also keeps a link whose
+                    // enclosing statement merely touches an `Ωignore` region.
+                    if method == "textDocument/definition" {
+                        normalize_definition_result(result);
+                    }
                     if let Some(runtime) = &self.tsgo {
                         let mut mapper = TsgoResponseMapper::for_overlays_with_default_document(
                             &runtime.overlays,
@@ -3211,7 +3218,6 @@ impl Server {
                                 }
                             }
                         }
-                        "textDocument/definition" => normalize_definition_result(result),
                         "textDocument/hover" => {
                             normalize_hover_result(result);
                             if let Some(document) =
