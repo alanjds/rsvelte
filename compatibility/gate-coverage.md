@@ -448,7 +448,7 @@ onto real positions — and **4 from the `no-dupe-on-directives` start-tag fix**
 count with changed hashes says the identity moved, and says nothing about which field did it;
 inverting the hashes is what answers that.
 
-### Blind spot 27j — a net shrink is not "nothing was added": the key carries a content hash [D]
+### Blind spot 27k — a net shrink is not "nothing was added": the key carries a content hash [D]
 
 Every key ends in `[count=…,hash=…]` (or `[official=…,rsvelte=…]`), so **the same divergence
 gets a different key whenever its content changes**. A re-baseline that improves a response
