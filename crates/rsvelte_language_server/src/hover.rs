@@ -32,8 +32,14 @@ const ELSE: &str = ":else";
 
 #[must_use]
 pub fn hover(text: &str, offset: usize) -> Option<Hover> {
-    if EmbeddedRegions::new(text).contains(offset) {
+    let embedded = EmbeddedRegions::new(text);
+    if embedded.in_style(offset) {
         return crate::css::hover(text, offset).map(markdown);
+    }
+    // A script body belongs to tsgo; answering it here spells an import path as
+    // a CSS property.
+    if embedded.in_script(offset) {
+        return None;
     }
     let (window_start, window) = around(text, offset);
 
@@ -279,5 +285,17 @@ mod tests {
     fn a_tag_inside_a_script_body_is_left_alone() {
         let text = "<script>\n  const a = `{#if}`;\n</script>";
         expect_none(text, text.find("{#if}").unwrap() + 3);
+    }
+
+    #[test]
+    fn a_css_property_name_in_a_script_is_not_a_css_hover() {
+        let text = "<script>\n  import type { A } from \"../types.js\";\n</script>";
+        expect_none(text, text.find("types.js").unwrap() + 1);
+    }
+
+    #[test]
+    fn a_style_body_is_still_answered_from_css() {
+        let text = "<style>\n  h1 { color: red }\n</style>";
+        assert!(hovered_tag(text, text.find("color").unwrap() + 1).is_some());
     }
 }
