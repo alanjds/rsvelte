@@ -2132,6 +2132,24 @@ impl Server {
                 CompletionSite::Script
             });
         }
+        // A `<script>` / `<style>` start tag is not an `Element` in the Svelte
+        // AST — the block is hoisted to `instance` / `module` / `css` — so
+        // upstream's `svelteNode?.type === 'Element'` guard never fires there.
+        match crate::context::start_tag_context(text, offset) {
+            crate::context::StartTag::Attribute(attribute) => {
+                // An attribute value's `Text` has an `Attribute` parent, which
+                // is not in upstream's raw-text bail list, and `svelteNodeAt`
+                // answers `Text` rather than the element, so neither guard
+                // fires.
+                if attribute.in_value || is_embedded_tag(attribute.element_tag) {
+                    return Some(CompletionSite::Unguarded);
+                }
+            }
+            crate::context::StartTag::Bare { element_tag } if is_embedded_tag(element_tag) => {
+                return Some(CompletionSite::Unguarded);
+            }
+            crate::context::StartTag::Bare { .. } | crate::context::StartTag::None => {}
+        }
         if let Some(prefix) = crate::context::attribute_prefix_context(text, offset) {
             let component = prefix
                 .element_tag
@@ -4291,4 +4309,10 @@ const fn project_config_names() -> &'static [&'static str] {
         "vite.config.ts",
         "vite.config.mts",
     ]
+}
+
+/// Whether a start tag opens a block the Svelte parser hoists out of the
+/// template rather than keeping as an element.
+fn is_embedded_tag(tag: &str) -> bool {
+    tag.eq_ignore_ascii_case("script") || tag.eq_ignore_ascii_case("style")
 }

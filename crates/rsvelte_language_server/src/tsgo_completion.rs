@@ -38,10 +38,15 @@ pub enum CompletionSite {
     Script,
     TemplateExpression,
     RawTemplateText,
+    /// A position upstream's start-tag guards do not reach: `svelteNodeAt`
+    /// answers neither an `Element` nor a template `Text` there.
+    Unguarded,
     Style,
     BlockMarker,
     ElementStartTag,
-    ComponentStartTag { at_whitespace: bool },
+    ComponentStartTag {
+        at_whitespace: bool,
+    },
 }
 
 /// What the server should do with a tsgo completion response.
@@ -73,6 +78,7 @@ pub const fn completion_action(
         } if item_count > 500 => CompletionAction::NarrowToSvelte,
         CompletionSite::Script
         | CompletionSite::TemplateExpression
+        | CompletionSite::Unguarded
         | CompletionSite::ElementStartTag
         | CompletionSite::ComponentStartTag { .. } => CompletionAction::Forward,
     }
@@ -160,6 +166,7 @@ fn rewrite_completion_item_with_preference(item: &mut Value, prefer_components: 
         .get("label")
         .and_then(Value::as_str)
         .is_some_and(|label| RUNES.contains(&label));
+    strip_optional_marker(item);
     rewrite_visible_value(item);
     if prefer_components && (generated_component || rune) {
         let Some(object) = item.as_object_mut() else {
@@ -176,6 +183,30 @@ fn rewrite_completion_item_with_preference(item: &mut Value, prefer_components: 
             "commitCharacters".to_string(),
             Value::Array(vec![Value::String(">".to_string())]),
         );
+    }
+}
+
+/// tsgo marks an optional property by appending `?` to the label alone —
+/// `filterText`, `insertText`, `textEdit.newText` and `data.name` all keep the
+/// bare name. Upstream's label is `entry.name` (`toCompletionItem`), which has
+/// no such marker, so the name is restored where the `?` is only decoration.
+fn strip_optional_marker(item: &mut Value) {
+    let Some(label) = item.get("label").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(name) = label.strip_suffix('?') else {
+        return;
+    };
+    let bare = item
+        .pointer("/data/name")
+        .or_else(|| item.get("filterText"))
+        .and_then(Value::as_str);
+    if bare != Some(name) {
+        return;
+    }
+    let name = name.to_string();
+    if let Some(object) = item.as_object_mut() {
+        object.insert("label".to_string(), Value::String(name));
     }
 }
 
@@ -656,6 +687,24 @@ mod tests {
         // `SvelteStore` stays: upstream only drops it when tsgo reports
         // `kindModifiers: 'declare'`, which the LSP shape does not carry.
         assert_eq!(labels, ["Popover", "SvelteStore"]);
+    }
+
+    #[test]
+    fn tsgos_optional_marker_is_not_part_of_the_label() {
+        let mut response = json!({"items": [
+            {"label": "children?", "filterText": "children", "data": {"name": "children"}},
+            {"label": "on:copy?", "filterText": "on:copy", "data": {"name": "on:copy"}},
+            {"label": "a?", "data": {"name": "b"}},
+            {"label": "plain", "data": {"name": "plain"}}
+        ]});
+        rewrite_completion_response(&mut response);
+        let labels = response["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["children", "on:copy", "a?", "plain"]);
     }
 
     #[test]

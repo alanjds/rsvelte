@@ -196,13 +196,32 @@ enum Step<'a> {
     Found(AttributeContext<'a>),
     /// The start tag ended before the offset; resume the outer scan here.
     Resume(usize),
-    /// The offset is behind us — no attribute holds it.
-    Stop,
+    /// The offset is inside this start tag but not inside an attribute.
+    Bare,
+}
+
+/// Where in a start tag an offset sits.
+pub enum StartTag<'a> {
+    /// Inside one of the tag's attributes.
+    Attribute(AttributeContext<'a>),
+    /// Inside the tag but between its parts — the tag name, or whitespace.
+    Bare { element_tag: &'a str },
+    /// Not inside any start tag.
+    None,
 }
 
 /// The attribute at `offset`, if the offset is inside an element's start tag.
 #[must_use]
 pub fn attribute_context(text: &str, offset: usize) -> Option<AttributeContext<'_>> {
+    match start_tag_context(text, offset) {
+        StartTag::Attribute(context) => Some(context),
+        StartTag::Bare { .. } | StartTag::None => None,
+    }
+}
+
+/// The start tag holding `offset`, and where inside it the offset sits.
+#[must_use]
+pub fn start_tag_context(text: &str, offset: usize) -> StartTag<'_> {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -211,7 +230,7 @@ pub fn attribute_context(text: &str, offset: usize) -> Option<AttributeContext<'
             continue;
         }
         if i > offset {
-            return None;
+            return StartTag::None;
         }
         if text[i..].starts_with("<!--") {
             i = text[i + 4..]
@@ -219,7 +238,9 @@ pub fn attribute_context(text: &str, offset: usize) -> Option<AttributeContext<'
                 .map_or(bytes.len(), |e| i + 4 + e + 3);
             continue;
         }
-        let &next = bytes.get(i + 1)?;
+        let Some(&next) = bytes.get(i + 1) else {
+            return StartTag::None;
+        };
         if next == b'!' || next == b'/' {
             i = text[i..].find('>').map_or(bytes.len(), |e| i + e + 1);
             continue;
@@ -233,13 +254,14 @@ pub fn attribute_context(text: &str, offset: usize) -> Option<AttributeContext<'
         while bytes.get(name_end).is_some_and(|&b| is_tag_name_byte(b)) {
             name_end += 1;
         }
-        match scan_start_tag(text, name_end, offset, &text[name_start..name_end]) {
-            Step::Found(context) => return Some(context),
+        let element_tag = &text[name_start..name_end];
+        match scan_start_tag(text, name_end, offset, element_tag) {
+            Step::Found(context) => return StartTag::Attribute(context),
             Step::Resume(next) => i = next,
-            Step::Stop => return None,
+            Step::Bare => return StartTag::Bare { element_tag },
         }
     }
-    None
+    StartTag::None
 }
 
 /// Walk the attributes of a start tag whose name ends at `from`.
@@ -250,11 +272,8 @@ fn scan_start_tag<'a>(text: &'a str, from: usize, offset: usize, tag: &'a str) -
         while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
             i += 1;
         }
-        if i >= bytes.len() {
-            return Step::Stop;
-        }
-        if i > offset {
-            return Step::Stop;
+        if i >= bytes.len() || i > offset {
+            return Step::Bare;
         }
         match bytes[i] {
             b'>' => return Step::Resume(i + 1),
@@ -375,6 +394,38 @@ mod tests {
 
     fn regions(text: &str) -> EmbeddedRegions {
         EmbeddedRegions::new(text)
+    }
+
+    fn located(text: &str, needle: &str) -> String {
+        let offset = text.find(needle).unwrap() + needle.len();
+        match start_tag_context(text, offset) {
+            StartTag::Attribute(attribute) => format!(
+                "{}/{}{}",
+                attribute.element_tag,
+                attribute.name,
+                if attribute.in_value { "=value" } else { "" }
+            ),
+            StartTag::Bare { element_tag } => format!("{element_tag}/bare"),
+            StartTag::None => "none".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_start_tag_locates_its_parts() {
+        let text = "<div class=\"a b\" hidden>text</div>";
+        assert_eq!(located(text, "<di"), "div/bare");
+        assert_eq!(located(text, "cla"), "div/class");
+        assert_eq!(located(text, "\"a "), "div/class=value");
+        assert_eq!(located(text, "hid"), "div/hidden");
+        assert_eq!(located(text, ">te"), "none");
+    }
+
+    #[test]
+    fn an_embedded_block_is_located_by_its_own_tag_name() {
+        let text = "<script lang=\"ts\">\n  let a = 1;\n</script>";
+        assert_eq!(located(text, "<scr"), "script/bare");
+        assert_eq!(located(text, "lan"), "script/lang");
+        assert_eq!(located(text, "\"t"), "script/lang=value");
     }
 
     #[test]
