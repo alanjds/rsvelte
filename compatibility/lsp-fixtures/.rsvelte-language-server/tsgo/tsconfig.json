@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "allowArbitraryExtensions": true,
+    "allowImportingTsExtensions": true,
+    "jsx": "preserve",
+    "noEmit": true,
+    "rootDirs": [
+      "/Users/baseballyama/rsvelte-wt/d/compatibility/lsp-fixtures",
+      "/Users/baseballyama/rsvelte-wt/d/compatibility/lsp-fixtures/.rsvelte-language-server/tsgo/svelte"
+    ]
+  },
+  "files": [
+    "svelte-shims-v4.d.ts",
+    "svelte-jsx-v4.d.ts"
+  ],
+  "include": [
+    "svelte/**/*",
+    "/Users/baseballyama/rsvelte-wt/d/compatibility/lsp-fixtures/**/*"
+  ],
+  "extends": "/Users/baseballyama/rsvelte-wt/d/compatibility/lsp-fixtures/tsconfig.json"
+}

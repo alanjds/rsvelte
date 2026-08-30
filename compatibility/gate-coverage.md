@@ -107,6 +107,33 @@ the same tree, not by extending the original grid.
 
 ---
 
+## A named blind-spot class: the ported rule whose input never arrives
+
+**A rule transcribed from upstream — comment and all — where the comment's premise is about
+input the porting side does not produce.** The port compiles, its unit test passes, and the
+rule fires zero times on every real input, so nothing anywhere goes red. It is not a coarse key
+and not an empty population: the population is full and the *predicate* is unreachable.
+
+The worked example is upstream's `.svelte` component hover. `TypeScriptPlugin` truncates a
+declaration at `lastIndexOf('import')`, because the declaration it is handed comes from **tsc's
+`displayParts`**, which spell an `__sveltets_2_IsomorphicComponent` alias with the word
+`import` in it. rsvelte's declaration comes from **tsgo's rendering**, which contains no such
+word — so `lastIndexOf` is always `None` and the ported rule is inert. The unit test written
+alongside it passed because it fed the function a tsc-shaped string tsgo cannot produce: the
+test proved the rule, and proved nothing about the product.
+
+The defence is one question asked before writing the port: **what produces the input this
+comment is describing, and is it the same thing on my side?** Then a second, which is what
+turns the answer into a test: **construct the test input from the real producer**, not from the
+upstream source's example. A test whose input the product cannot generate is a non-discriminating
+test with a plausible shape, and it ships green.
+
+A cheaper detector, when the port is already written: run it on the corpus and count how often
+the branch is taken. A ported rule that fires **zero** times is either unreachable or untested —
+both worth knowing before it is merged, and neither visible in a diff.
+
+---
+
 ## Reading the corpus in one sentence
 
 The collected corpus samples the *marginal* distribution of published Svelte code. That is
@@ -376,6 +403,43 @@ one. The unmeasured question is whether a stable projection of a completion resp
 would restore per-field sensitivity; nobody has looked, and n=2 sweeps bound the churn only from
 below.
 
+**The corollary for anyone shrinking this ratchet: a field that always co-occurs moves the key by
+zero.** `isIncomplete` is the measured case. Over 40 completion requests on one corpus file
+upstream answers `true` and rsvelte `false` — 40 of 40 — which reads as a one-line fix worth 40
+entries. It is worth none: the number of requests whose *only* difference is `isIncomplete` is
+**0**, because every one of those 40 also differs in the item set. A second sweep over 50 files
+reproduces the shape at scale — `/isIncomplete:value-mismatch` is the fourth-largest of 22 cause
+signatures at 404 occurrences, and never appears alone. Under a key that counts *requests*, only
+the last divergence in a request is worth anything; a field's own frequency says nothing about
+what fixing it buys.
+
+The same 50-file sweep bounds the other direction of this row, and it is the more useful number:
+the divergent requests behind the corpus keys fall into **22** distinct
+`method | normalized-field-path : kind` signatures, saturating at 16 by the thirteenth file. The
+aggregate key is coarse, but what it aggregates is not a long tail — 3,000 sampled requests, 1,447
+divergent, 22 causes, of which the top five are all `textDocument/completion` and cover 72%.
+Method matters more than file: completion diverges on **98.5%** of its sampled requests against
+28.0% for hover and 18.2% for definition. Scope, because the count is a sample: `bits-ui` only,
+50 of 617 files, 20 positions per file, and the claim is about the size of the signature *set*,
+not about per-file counts.
+
+**And a signature count is not a work estimate until it is turned into a coverage curve**, because
+a request is fixed only when *every* signature it carries is. Recording the per-request signature
+set over 25 files (1,500 requests, 723 divergent, 21 signatures) and closing them greedily:
+
+| signatures closed | requests fully fixed | share |
+|---:|---:|---:|
+| 1 (`completion \| / : value-mismatch`) | 231 | 32% |
+| 4 | 417 | 58% |
+| 6 | 458 | 63% |
+| 12 | 707 | 98% |
+| 21 | 723 | 100% |
+
+Five of the 21 clear **zero** requests on their own — they only ever co-occur — which is the
+`isIncomplete` shape generalised. Read the curve, not the frequency table: the largest single
+signature by occurrence (`completion | /items : missing-rsvelte`, 436) clears 8 requests when
+closed in greedy order, while the largest by *coverage* clears 231.
+
 ### Blind spot 27h — the oracle is calibrated against upstream's snapshots, and the floor is loose [D]
 
 Every positive control this gate had was satisfied by an official server that answers *something*:
@@ -454,7 +518,7 @@ job's runtime on every one of the 16 shards — rather than reading anything fro
 **Unmeasured:** whether the corpus shards' official servers are in fact degraded. Nothing here
 measures that; the claim is only that no instrument in the corpus job would report it.
 
-### Blind spot 27k — the corpus repositories are never installed, so two thirds of the ratchet is measured on unresolved imports [D]
+### Blind spot 27l — the corpus repositories are never installed, so two thirds of the ratchet is measured on unresolved imports [D]
 
 `verify.mjs:303-308` names the hazard in a comment — "a server started against the wrong
 workspace root or an unresolved `node_modules` answers differently instead of failing, and those
