@@ -440,18 +440,44 @@ Five of the 21 clear **zero** requests on their own — they only ever co-occur 
 signature by occurrence (`completion | /items : missing-rsvelte`, 436) clears 8 requests when
 closed in greedy order, while the largest by *coverage* clears 231.
 
-**Both sweeps are measured on a population 27m shows is majority-degraded, and that changes what
-the numbers mean.** Their file selection is an evenly-spaced sample of bits-ui's 617 components,
-so it inherits the repository's composition: replaying the selection against 27m's classification,
-**34 of the 50** signature-sweep files and **14 of the 25** coverage-curve files are ones upstream
-cannot project at all. The signature *set* is still a set — a cause seen on a degraded file is
-still a cause — but the shares, the 98.5% completion divergence rate, and the greedy curve are
-weighted by an oracle that is answering from the instance script alone. Two projectable files
-measured the same day point the other way and are worth stating as the contrast rather than as a
-result: on them 1 of 34 definition divergences has `official == []`, against **46 of 61** on four
-degraded files, and their residue is almost entirely `missing-rsvelte` (24/24 and 9/10) — the
-opposite direction from the degraded population's `extra-rsvelte`. n=2; treat it as a reason to
-re-run the sweep on a filtered population, not as the answer.
+**Both sweeps are measured on a population 27m shows is majority-degraded — and re-running one on
+a clean population moved almost nothing, which is the part worth recording.** Their file selection
+is an evenly-spaced sample of bits-ui's 617 components, so it inherits the repository's
+composition: **34 of the 50** signature-sweep files and **14 of the 25** coverage-curve files are
+ones upstream cannot project at all. That looked like a reason to distrust the shares. Repeating
+the 50-file sweep over only the 217 projectable components says otherwise:
+
+| | mixed (68% degraded) | projectable only |
+|---|---:|---:|
+| signatures | 22 | **21** |
+| divergent / compared | 1447 / 3000 | **1455 / 2994** |
+| completion | 985 / 1000 | 951 / 998 |
+| hover | 280 / 1000 | 305 / 998 |
+| definition | 182 / 1000 | 199 / 998 |
+
+**"The population is degraded" and "the degradation moves this measurement" are two claims, and
+only the first was measured when this paragraph was first written.** The second is now measured
+and is small. What the degradation does move is the *direction* of a divergence, which the
+signature key does record: `official == []` is 1 of 34 definition divergences on two projectable
+files against **46 of 61** on four degraded ones.
+
+The clean sweep's greedy curve is the one to plan against, because it concentrates where the mixed
+one did not — **three signatures cover 71%**, all of them whole-result rather than per-field:
+
+| signatures closed | requests fully fixed | share |
+|---:|---:|---:|
+| 1 (`completion \| / : value-mismatch`) | 624 | 43% |
+| 2 (+ `hover \| / : value-mismatch`) | 863 | 59% |
+| 3 (+ `definition \| / : missing-rsvelte`) | 1033 | 71% |
+| 6 (+ `/items` both directions, `/items/@item/tags`) | 1267 | 87% |
+| 21 | 1455 | 100% |
+
+Two sub-causes of the third are already excluded by instrumenting the server over 90 requests on
+one clean file: the `map_request` early return that answers `[]` without asking tsgo
+(`server.rs:1980`) fired **0** times, and of 30 definition responses **21 were empty as tsgo sent
+them** with **0** dropped by rsvelte's response mapping. Whether the remaining split is a shadow
+position that points at the wrong token or a genuine tsgo/TypeScript disagreement is
+**unmeasured**.
 
 ### Blind spot 27h — the oracle is calibrated against upstream's snapshots, and the floor is loose [D]
 
