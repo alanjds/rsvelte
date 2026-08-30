@@ -12,25 +12,38 @@ use rsvelte_core::{Allocator, ParseOptions, parse};
 
 /// The `<script>` and `<style>` bodies of a document, which Svelte template
 /// completions and hovers must stay out of.
+///
+/// The two are kept apart because only a `<style>` body is CSS: a script offset
+/// that reaches the CSS provider is answered from the CSS property table.
 pub struct EmbeddedRegions {
-    bodies: Vec<Range<usize>>,
+    scripts: Vec<Range<usize>>,
+    styles: Vec<Range<usize>>,
 }
 
 impl EmbeddedRegions {
     #[must_use]
     pub fn new(text: &str) -> Self {
-        let bodies = parsed(text).unwrap_or_else(|| scanned(text));
-        Self { bodies }
+        parsed(text).unwrap_or_else(|| scanned(text))
     }
 
     #[must_use]
     pub fn contains(&self, offset: usize) -> bool {
-        self.bodies.iter().any(|body| body.contains(&offset))
+        self.in_script(offset) || self.in_style(offset)
+    }
+
+    #[must_use]
+    pub fn in_script(&self, offset: usize) -> bool {
+        self.scripts.iter().any(|body| body.contains(&offset))
+    }
+
+    #[must_use]
+    pub fn in_style(&self, offset: usize) -> bool {
+        self.styles.iter().any(|body| body.contains(&offset))
     }
 }
 
 /// The bodies as the compiler sees them, or `None` when it rejects the source.
-fn parsed(text: &str) -> Option<Vec<Range<usize>>> {
+fn parsed(text: &str) -> Option<EmbeddedRegions> {
     let allocator = Allocator::default();
     // A document is only ever parsed here to be located, so the script bodies
     // and non-CSS `<style lang>` blocks that would otherwise abort the parse
@@ -47,11 +60,14 @@ fn parsed(text: &str) -> Option<Vec<Range<usize>>> {
         .into_iter()
         .flatten()
         .filter_map(|script| body_of(text, script.start as usize, script.end as usize));
-    let style = root
+    let styles = root
         .css
         .as_deref()
         .map(|css| css.content.start as usize..css.content.end as usize);
-    Some(scripts.chain(style).collect())
+    Some(EmbeddedRegions {
+        scripts: scripts.collect(),
+        styles: styles.into_iter().collect(),
+    })
 }
 
 /// The content of a `<tag …>…</tag>` spanning `start..end`.
@@ -64,8 +80,11 @@ pub fn body_of(text: &str, start: usize, end: usize) -> Option<Range<usize>> {
 }
 
 /// The bodies located by scanning, for a document the compiler rejected.
-fn scanned(text: &str) -> Vec<Range<usize>> {
-    let mut bodies = Vec::new();
+fn scanned(text: &str) -> EmbeddedRegions {
+    let mut regions = EmbeddedRegions {
+        scripts: Vec::new(),
+        styles: Vec::new(),
+    };
     let mut offset = 0;
     while offset < text.len() {
         let Some((start, tag)) = ["script", "style"]
@@ -82,10 +101,14 @@ fn scanned(text: &str) -> Vec<Range<usize>> {
         let close = text[open..]
             .find(&format!("</{tag}"))
             .map_or(text.len(), |idx| open + idx);
-        bodies.push(open..close);
+        if tag == "style" {
+            regions.styles.push(open..close);
+        } else {
+            regions.scripts.push(open..close);
+        }
         offset = close.max(open);
     }
-    bodies
+    regions
 }
 
 /// The offset of the next `<tag` that is followed by a tag-name boundary.
@@ -379,7 +402,29 @@ mod tests {
     #[test]
     fn a_tag_whose_name_merely_starts_with_script_is_not_one() {
         let text = "<scriptish>{#</scriptish>";
-        assert!(!scanned(text).iter().any(|b| b.contains(&11)));
+        assert!(!scanned(text).contains(11));
+    }
+
+    #[test]
+    fn only_a_style_body_is_css() {
+        let text = "<script>const types = 1</script>\n<style>h1{color:blue}</style>";
+        let regions = regions(text);
+        assert!(parsed(text).is_some(), "the fixture should parse");
+        let script = text.find("types").unwrap();
+        let style = text.find("color").unwrap();
+        assert!(regions.in_script(script) && !regions.in_style(script));
+        assert!(regions.in_style(style) && !regions.in_script(style));
+    }
+
+    #[test]
+    fn only_a_style_body_is_css_without_the_parser() {
+        let text = "<script lang=\"ts\">let types: {</script><style>h1{color:blue}</style><p>{#";
+        assert!(parsed(text).is_none(), "the fixture should not parse");
+        let regions = regions(text);
+        let script = text.find("types").unwrap();
+        let style = text.find("color").unwrap();
+        assert!(regions.in_script(script) && !regions.in_style(script));
+        assert!(regions.in_style(style) && !regions.in_script(style));
     }
 
     fn attribute(text: &str, offset: usize) -> Option<AttributeContext<'_>> {

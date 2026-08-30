@@ -146,7 +146,7 @@ samples) — see `AGENTS.md` § "Generated shape matrix" and issue #2281.
 | 24 | `await_waterfall` runtime parity | the `await_waterfall` warnings a **mounted** rsvelte-compiled component logs vs. official's, 3 cases | one warning code, one component shape; nothing else about the running component is observed | [D] |
 | 25 | Differential output-preservation corpus hash | per `.svelte` source × client/server/client-dev/server-dev hash from base-core vs merge-ref-core | changes outside `crates/rsvelte_core`; every PR without the maintainer-applied `output-preserving` label | [S] |
 | 26 | esrap generated-output corpus | parsed JS output × official/rsvelte tree × 4 targets; AST equivalence, comment kind/body sequence, code/map equality, map bounds/order | production synthetic AST spans and whether a mapping points at the corresponding source token | [S] |
-| 27 | LSP differential parity | normalized JSON response field per request against the pinned official server and selected upstream snapshots | **every server notification**; incremental edit and resolve sequences; **inside a corpus `(file, method)`, everything but the divergent-request count** | [S] [D] |
+| 27 | LSP differential parity | normalized JSON response field per request against the pinned official server and selected upstream snapshots | **every server notification**; incremental edit and resolve sequences; **inside a corpus `(file, method)`, everything but the divergent-request count**; the oracle-calibration floor is skipped on the corpus job, which enrols 66.7% of the entries | [S] [D] |
 | 39 | svelte2tsx option axis | full TSX text per (option variant x source) against the official tool, options carried in the fixture | option values outside its grid (`rewriteExternalImports`, `runes`, most `namespace` x `mode` products); `emitDts`; the map, `exportedNames` and `events` | [S] [D] |
 | 38 | NAPI `cssHash` | the scope class the callback produces, and the callback's own argument list, against **official** | one component shape and one option set; only `css.code` / the class in `js.code`; nothing about the wasm or facade ports of the same option | [S] |
 | 39 | Print fixture suite (`tests/print.rs`) | per-sample printed Svelte text vs upstream's `output.svelte` | it compares the text, not **which code produced it** — a source-text shortcut around the whole AST printer was invisible for 43 of 43 samples | [D] |
@@ -424,6 +424,35 @@ on the run, not a measure of the oracle's quality. Two things it does not cover:
 corpus populations have no upstream snapshot at all, so **the oracle is calibrated on 125 of the
 gate's units and on none of the other ~14,000**; and the calibration reads the pristine document
 only — a post-edit phase (27b) is not calibrated, because upstream has no snapshot for one.
+
+### Blind spot 27j — the oracle calibration does not run on the suite that produces two thirds of the ratchet [D]
+
+27h describes a floor the run is held to. It is not held to it on the run that matters most.
+`verify.mjs:426` opens `assertOracleCalibration` with
+`if (!selectedSuites.includes("upstream-features")) return;`, and
+`.github/workflows/corpus-compat.yml:890` invokes the real-world job as `--suites corpus`. The two
+jobs are disjoint by construction — `lsp-fixtures-current` runs
+`--suites fixtures,upstream-features,upstream-testfiles` (line 812) and no corpus repository, and
+`lsp-corpus` runs the 16 corpus shards and no snapshot — so **every shard that measures a corpus
+repository skips the calibration entirely**, silently, by an early return rather than by a reported
+skip.
+
+The denominator is the whole of why this is a row rather than a footnote. Of the 32,669 baseline
+entries, **21,792 (66.7%) are corpus `aggregate:` keys**, against 8,771 `differential:fixtures`,
+1,284 `differential:upstream-testfiles` and 822 from the two `upstream-features` populations. So
+the population the floor guards is the third that is not enrolling most of the entries, and the
+two thirds that are enrol with no check on the oracle at all. A degraded official server in a
+corpus shard — the wrong workspace root, an unresolved `node_modules`, a `tsconfig` that did not
+load — produces answers, those answers become `divergentRequestCount=<n>` keys, and a shrink-only
+ratchet then defends them; the run that would have caught it is a different job.
+
+This is the same failure the floor was added to close, one population over, and it inherits 27h's
+own limits: the snapshots exist only for the 125 `upstream-features` units, so extending the
+calibration to `--suites corpus` means running that suite alongside — which costs the fixture
+job's runtime on every one of the 16 shards — rather than reading anything from the corpus itself.
+
+**Unmeasured:** whether the corpus shards' official servers are in fact degraded. Nothing here
+measures that; the claim is only that no instrument in the corpus job would report it.
 
 ### Blind spot 27i — a diagnostic's severity is unobservable, and lint findings are never paired at all [D]
 
