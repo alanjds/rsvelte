@@ -2007,6 +2007,14 @@ fn projected_import_extraction_preserves_legacy_output() {
         "import d from './d.json'\r\n\twith { type: 'json' };\r\nlet z = d;\r\n",
         "import d from './d.json' with {\n\ttype: 'json'\n};\nlet z = d;\n",
         "import d from './d.json'\nlet z = d\n",
+        // A comment inside an import's own span is left in the body rather than
+        // hoisted; without these rows the two ports agree vacuously about it.
+        "import {\n  a,\n  /* c */\n  b,\n} from 'm';\nlet z = a + b;\n",
+        "import { a, /* c */ b } from 'm';let z = a;\n",
+        "import { a, /* c0 */ b } from 'm';\nconst first = 1;\nimport { p, /* c1 */ q } from 'z';\nlet z = first;\n",
+        // CRLF: the joined text and the script no longer spell the same bytes
+        // across a line break, so the projected range falls back to empty.
+        "import {\r\n  a,\r\n  // c\r\n  b,\r\n} from 'm';\r\nlet z = a;\r\n",
     ] {
         let expected = extract_imports(script);
         let (imports, body, copied_chunks) = extract_imports_with_projection(script);
