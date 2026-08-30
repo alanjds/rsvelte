@@ -289,62 +289,10 @@ fn gather_possible_values(
             }
         }
 
-        Some("BinaryExpression") => {
-            // Handle string concatenation
-            if let Some(operator) = node.get("operator").and_then(|o| o.as_str()) {
-                if operator == "+" {
-                    // String concatenation
-                    let mut left_values = Vec::new();
-                    let mut right_values = Vec::new();
-
-                    if let Some(left) = node.get("left") {
-                        gather_possible_values(left, is_class, &mut left_values, is_nested);
-                    }
-                    if let Some(right) = node.get("right") {
-                        gather_possible_values(right, is_class, &mut right_values, is_nested);
-                    }
-
-                    // If either side is unknown, the whole thing is unknown
-                    if left_values.iter().any(|v| v == UNKNOWN_MARKER)
-                        || right_values.iter().any(|v| v == UNKNOWN_MARKER)
-                    {
-                        values.push(UNKNOWN_MARKER.to_string());
-                    } else {
-                        // Combine all possibilities
-                        for left in &left_values {
-                            for right in &right_values {
-                                values.push(format!("{}{}", left, right));
-                            }
-                        }
-                    }
-                } else {
-                    // Other operators we can't determine statically
-                    values.push(UNKNOWN_MARKER.to_string());
-                }
-            }
-        }
-
-        Some("TemplateLiteral") => {
-            // Handle template literals: `foo ${bar} baz`
-            if let Some(quasis) = node.get("quasis").and_then(|q| q.as_array())
-                && let Some(expressions) = node.get("expressions").and_then(|e| e.as_array())
-            {
-                // If there are expressions, we can't determine the value statically
-                if !expressions.is_empty() {
-                    values.push(UNKNOWN_MARKER.to_string());
-                } else if quasis.len() == 1 {
-                    // Static template literal with no expressions
-                    if let Some(value) = quasis[0]
-                        .get("value")
-                        .and_then(|v| v.get("cooked"))
-                        .and_then(|c| c.as_str())
-                    {
-                        values.push(value.to_string());
-                    }
-                }
-            }
-        }
-
+        // Upstream's `gather_possible_values` handles Literal, Conditional,
+        // Logical and (for a class) Array / Object, and treats EVERY other node
+        // as unknown — a template literal and a `+` concatenation included. An
+        // arm that evaluates one of those prunes a rule upstream emits.
         Some("TSAsExpression")
         | Some("TSSatisfiesExpression")
         | Some("TSNonNullExpression")
