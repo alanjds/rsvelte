@@ -710,22 +710,24 @@ type-argument arm's `move_range` path — but it changes which chunk the `;` mar
 which is exactly the ordering `process_instance_script_tag.rs:301-310` comments as load-bearing,
 so it needs the corpus svelte2tsx text gate rather than a unit test alone.
 
-### 19. What compiler options and shim files does the shadow program get? — [D], opened deliberately
+### 19. What compiler options and shim files does the shadow program get? — [D], **closed**
 
-**Upstream:** one function, `plugins/typescript/service.ts`'s `createLanguageService`. It forces
+**Upstream:** two functions. `plugins/typescript/service.ts`'s `createLanguageService` forces
 `target: ts.ScriptTarget.Latest` when the project declares none and raises anything below ES2015
-to ES2015 (`:792-795`), builds its no-project fallback with `include: []` "to not flood the
-initial files" (`:874-878`), and takes its shim set from svelte2tsx's `get_global_types`, which
-always contains `svelte-native-jsx.d.ts` (`svelte2tsx/index.js:5685`).
+to ES2015 (`:792-795`), and builds its no-project fallback with `include: []` "to not flood the
+initial files" (`:874-878`). `svelte2tsx/src/helpers/files.ts`'s `get_global_types` (`:15-27`)
+names the shim set: `svelte-shims-v4.d.ts` and `svelte-native-jsx.d.ts` always, the project's own
+`svelte-html.d.ts` when the installed Svelte 4+ has one, and `svelte-jsx-v4.d.ts` **only as the
+fallback for a package that does not**.
 
 **Ports.** `rsvelte_language_server` `tsgo_overlay.rs::write_tsconfig` /
-`materialize_support_files`, and `rsvelte_check` `svelte_check/overlay.rs`. They write the same
-kind of generated tsconfig beside the same two vendored shims, and neither calls the other.
+`materialize_support_files`, and `rsvelte_check` `svelte_check/overlay.rs`.
 
-**Demonstrated, and this row is the unusual case where the divergence was created here on
-purpose.** All three rules were missing from *both* ports; the language-server one now carries
-them and the svelte-check one does not. Measured on three mini-workspaces against the live
-official server, completion at a script-body position:
+**What made this row worth keeping open is that the two ports were behind each other in opposite
+directions.** The `target` and `include` rules were missing from both, and the language server was
+given them first — deliberately, and recorded here as an asymmetry rather than left silent.
+Measured on three mini-workspaces against the live official server, completion at a script-body
+position:
 
 | workspace | official has `Temporal`/`DisposableStack`/`AsyncDisposableStack`/`SuppressedError`/`svelteNative` | rsvelte LSP before | rsvelte LSP after |
 |---|---|---|---|
@@ -738,11 +740,22 @@ every `.d.ts` in the repository into the program, so bits-ui's own `declare glob
 (`bitsEscapeLayers` and five siblings) were offered as completions at **55 of 285** sampled
 script-body positions where official offers nothing.
 
-**Why the asymmetry was left.** svelte-check's unit is a type-checked project, so the same change
-moves `check-known-failures.json`, and neither layer of that gate is runnable from the worktree
-this was measured in — Layer 2 needs `submodules/cmsaasstarter` and the skeleton monorepo
-installed from their own lockfiles. Closing this row is degree 1 (`rsvelte_check`'s overlay takes
-the same three rules) plus one run of the check gate; it is not a design question.
+Then the *shim* rule turned out to run the other way: `rsvelte_check` had
+`get_global_types`'s `svelte-html.d.ts` condition and no `svelte-native-jsx.d.ts`, while the
+language server had `svelte-native-jsx.d.ts` and shipped `svelte-jsx-v4.d.ts` unconditionally —
+each port holding the half the other lacked. **A port being ahead on one rule is no evidence
+about the next rule**, so an inventory row is closed by the whole function, not by the rule that
+motivated it.
+
+**Closed** by one `rsvelte_check::overlay::global_type_files` that both ports call, and one
+`SHIM_FILES` they both materialize. The shim half measures **zero** on the LSP corpus: swapping
+`svelte-jsx-v4.d.ts` for the project's `svelte-html.d.ts` left every completion label at 25
+bits-ui components byte-identical, because both shims take their element vocabulary from the
+installed `svelte/elements`. The positive control is an ablation — removing *both* from the
+tsconfig's `files` takes an `<svg>` attribute position from 640 items to 0, and restoring them
+returns 640 — so the file does reach the program and the null is about the two shims agreeing,
+not about the change not landing. `check-known-failures.json` moves with this
+(`rsvelte_check`'s shim set gains `svelte-native-jsx.d.ts`).
 
 
 ## Adding a row, and closing one
