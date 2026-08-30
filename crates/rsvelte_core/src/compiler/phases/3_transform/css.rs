@@ -1795,6 +1795,13 @@ fn is_complex_selector_unused_impl(complex: &Value, ctx: &CssContext) -> bool {
             return false; // :host by itself is always used
         }
 
+        // `&:is(a, b)` means `&a, &b`, not `& a`: only substituting each branch
+        // into the compound combines the enclosing chain with the branch, and
+        // every check below sees the pseudo as opaque.
+        if let Some(verdict) = is_functional_compound_unused(complex, rel_selectors, ctx) {
+            return verdict;
+        }
+
         // Check for sibling combinator patterns (+ and ~)
         if is_sibling_combinator_unused(rel_selectors, ctx) {
             return true;
@@ -6027,6 +6034,54 @@ fn is_functional_branch_unused(
         }
         None => is_complex_selector_unused(complex, ctx),
     }
+}
+
+/// Decide a complex selector carrying an `:is()` / `:where()` by substituting
+/// each of its branches into the enclosing compound: the original is reachable
+/// exactly when one substitution is. `None` when a branch is not a single
+/// combinator-free compound, which `substitute_is_branch` cannot inline.
+fn is_functional_compound_unused(
+    complex: &Value,
+    rel_selectors: &[Value],
+    ctx: &CssContext,
+) -> Option<bool> {
+    for (ri, rel) in rel_selectors.iter().enumerate() {
+        let selectors = rel.get("selectors").and_then(|s| s.as_array())?;
+        for (si, sel) in selectors.iter().enumerate() {
+            if sel.get("type").and_then(|t| t.as_str()) != Some("PseudoClassSelector") {
+                continue;
+            }
+            let name = sel.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name != "is" && name != "where" {
+                continue;
+            }
+            let Some(branches) = sel
+                .get("args")
+                .and_then(|a| a.get("children"))
+                .and_then(|c| c.as_array())
+                .filter(|c| !c.is_empty())
+            else {
+                continue;
+            };
+            let inlinable = branches.iter().all(|branch| {
+                branch
+                    .get("children")
+                    .and_then(|c| c.as_array())
+                    .is_some_and(|rs| {
+                        rs.len() == 1
+                            && rs[0].get("combinator").is_none_or(|c| c.is_null())
+                            && rs[0].get("selectors").and_then(|s| s.as_array()).is_some()
+                    })
+            });
+            if !inlinable {
+                continue;
+            }
+            return Some(branches.iter().all(|branch| {
+                is_functional_branch_unused(branch, Some(BranchHost { complex, ri, si }), ctx)
+            }));
+        }
+    }
+    None
 }
 
 /// Check if a selector inside `:is()`/`:where()`/`:has()` is definitely unused,
