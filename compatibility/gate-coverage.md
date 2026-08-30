@@ -663,6 +663,39 @@ onto real positions — and **4 from the `no-dupe-on-directives` start-tag fix**
 count with changed hashes says the identity moved, and says nothing about which field did it;
 inverting the hashes is what answers that.
 
+### Blind spot 27n — the edit phase never asks a question of the document it broke [D]
+
+`edits.mjs:14` inserts an **unclosed** `{#if __rsvelte_lsp_probe}` and says why: "Unclosed on
+purpose: the repair path is only exercised if the intermediate document is one neither compiler
+accepts." That intermediate document is never asked anything. `verify.mjs:744-765` sends every
+change of `editChanges(text)` first and calls `compareRequestsBounded` only after the loop, and
+the script's last change restores the source byte for byte — so both phases compare **the same
+parseable document**, and the phase-2 key differs from its phase-1 twin only by server state.
+The gate has no view of a mid-edit document's *answers*, which is the state a real editor is in
+whenever completion matters.
+
+**Evidence [D].** `ProjectionEngine::project` on five shapes, same options as the LSP overlay:
+
+| source | result |
+|---|---|
+| `<p>{b.x}</p>` | Ok |
+| `<p>{b.}</p>` | `Err(Parse { js_parse_error, span (57,57) })` |
+| `<p class={b.}></p>` | `Err(Parse { js_parse_error, span (63,63) })` |
+| `<p>{b</p>` | `Err(Parse { js_parse_error, span (58,58) })` |
+| `b.` inside `<script>` | Ok |
+
+So the failure is **template-position only** — a half-typed member expression in a `<script>`
+body still projects — and upstream recovers from all five through acorn-typescript. Every
+tsgo-backed answer in a document whose template is mid-edit is therefore dead here and live
+upstream, and **the ratchet cannot hold a single entry for it**.
+
+**Scope, because the next reader will reach for the wrong rule.** AGENTS.md's "do not loosen the
+compiler parser to match `svelte-eslint-parser`" is about the **compiler**, whose population is
+published code that compiles — 0 of 6,788 real-world sources reach that divergence. This row is
+about the **projection's error recovery**, whose population is a document being typed, where a
+half-written expression is the normal case rather than an adversarial one. The two rules point
+opposite ways on the same-looking input, and only the population separates them.
+
 ---
 
 ## 1. Compiler output parity — `scripts/compat-corpus/verify.mjs`
