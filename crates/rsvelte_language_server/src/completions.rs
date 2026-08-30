@@ -43,7 +43,13 @@ pub fn completions_with_strict_mode(
     strict_mode: bool,
 ) -> Option<CompletionList> {
     let embedded = EmbeddedRegions::new(text);
-    if embedded.in_style(offset) {
+    if let Some(style) = embedded.style_at(offset) {
+        // `shouldExcludeCompletion` (`CSSPlugin.ts:585-593`) — `sass` is not on
+        // upstream's list because it is answered by emmet, which rsvelte has no
+        // port of, so it stays with the CSS provider rather than going silent.
+        if matches!(style.language.as_deref(), Some("stylus" | "styl")) {
+            return None;
+        }
         return crate::css::completions(text, offset);
     }
     // A script body belongs to tsgo, not to the CSS provider.
@@ -845,6 +851,21 @@ mod tests {
             item(text, offset, "id").kind,
             Some(CompletionItemKind::VALUE)
         );
+    }
+
+    /// `shouldExcludeCompletion` (`CSSPlugin.ts:585-593`).
+    #[test]
+    fn a_stylus_block_is_not_answered_from_css() {
+        let body = |lang: &str| format!("<style lang=\"{lang}\">\n  h1\n    colo\n</style>");
+        for lang in ["stylus", "styl"] {
+            let text = body(lang);
+            assert_eq!(labels_at(&text, text.find("colo").unwrap() + 4), None);
+        }
+        let text = body("text/stylus");
+        assert_eq!(labels_at(&text, text.find("colo").unwrap() + 4), None);
+        // The positive control: a language upstream does not exclude answers.
+        let text = body("scss");
+        assert!(labels_at(&text, text.find("colo").unwrap() + 4).is_some());
     }
 
     /// `HTMLPlugin.ts:188-191`: a component's start tag gets no HTML attributes.

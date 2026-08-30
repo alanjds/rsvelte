@@ -17,7 +17,15 @@ use rsvelte_core::{Allocator, ParseOptions, parse};
 /// that reaches the CSS provider is answered from the CSS property table.
 pub struct EmbeddedRegions {
     scripts: Vec<Range<usize>>,
-    styles: Vec<Range<usize>>,
+    styles: Vec<StyleRegion>,
+}
+
+/// A `<style>` body and the language it declares.
+pub struct StyleRegion {
+    pub body: Range<usize>,
+    /// `getLangAttribute` (`lib/documents/utils.ts:464-476`): the `lang`
+    /// attribute, else `type`, with any `text/` prefix removed.
+    pub language: Option<Box<str>>,
 }
 
 impl EmbeddedRegions {
@@ -28,7 +36,8 @@ impl EmbeddedRegions {
 
     #[must_use]
     pub fn contains(&self, offset: usize) -> bool {
-        self.in_script(offset) || self.in_style(offset)
+        self.scripts.iter().any(|body| body.contains(&offset))
+            || self.styles.iter().any(|style| style.body.contains(&offset))
     }
 
     #[must_use]
@@ -38,8 +47,59 @@ impl EmbeddedRegions {
 
     #[must_use]
     pub fn in_style(&self, offset: usize) -> bool {
-        self.styles.iter().any(|body| body.contains(&offset))
+        self.style_at(offset).is_some()
     }
+
+    /// The `<style>` whose body holds `offset`, for the callers that need the
+    /// language as well as the position.
+    #[must_use]
+    pub fn style_at(&self, offset: usize) -> Option<&StyleRegion> {
+        self.styles
+            .iter()
+            .find(|style| style.body.contains(&offset))
+    }
+}
+
+/// The language a `<style …>` open tag declares, as `getLangAttribute` reads it.
+fn style_language(open_tag: &str) -> Option<Box<str>> {
+    for name in ["lang", "type"] {
+        if let Some(value) = attribute_value(open_tag, name) {
+            let value = value.trim().to_ascii_lowercase();
+            let value = value.strip_prefix("text/").unwrap_or(&value).to_string();
+            if !value.is_empty() {
+                return Some(value.into_boxed_str());
+            }
+        }
+    }
+    None
+}
+
+fn attribute_value<'a>(open_tag: &'a str, name: &str) -> Option<&'a str> {
+    let mut rest = open_tag;
+    while let Some(index) = rest.find(name) {
+        let before = rest[..index].chars().next_back();
+        let after = &rest[index + name.len()..];
+        rest = after;
+        if before.is_some_and(|character| !character.is_whitespace()) {
+            continue;
+        }
+        let after = after.trim_start();
+        let Some(after) = after.strip_prefix('=') else {
+            continue;
+        };
+        let after = after.trim_start();
+        let quote = after.chars().next()?;
+        if quote == '"' || quote == '\'' {
+            return after[1..].split(quote).next();
+        }
+        return Some(
+            after
+                .split([' ', '\t', '\n', '>', '/'])
+                .next()
+                .unwrap_or(after),
+        );
+    }
+    None
 }
 
 /// The bodies as the compiler sees them, or `None` when it rejects the source.
@@ -60,13 +120,17 @@ fn parsed(text: &str) -> Option<EmbeddedRegions> {
         .into_iter()
         .flatten()
         .filter_map(|script| body_of(text, script.start as usize, script.end as usize));
-    let styles = root
-        .css
-        .as_deref()
-        .map(|css| css.content.start as usize..css.content.end as usize);
+    let styles = root.css.as_deref().map_or_else(Vec::new, |css| {
+        let body = css.content.start as usize..css.content.end as usize;
+        let open_tag = text.get(css.start as usize..body.start).unwrap_or("");
+        vec![StyleRegion {
+            language: style_language(open_tag),
+            body,
+        }]
+    });
     Some(EmbeddedRegions {
         scripts: scripts.collect(),
-        styles: styles.into_iter().collect(),
+        styles,
     })
 }
 
@@ -102,7 +166,10 @@ fn scanned(text: &str) -> EmbeddedRegions {
             .find(&format!("</{tag}"))
             .map_or(text.len(), |idx| open + idx);
         if tag == "style" {
-            regions.styles.push(open..close);
+            regions.styles.push(StyleRegion {
+                language: style_language(&text[start..open]),
+                body: open..close,
+            });
         } else {
             regions.scripts.push(open..close);
         }
@@ -531,6 +598,33 @@ mod tests {
         assert_eq!(context.element_tag, "div");
         assert!(!context.in_value);
         assert!(context.can_have_event_modifier());
+    }
+
+    #[test]
+    fn a_style_tag_reports_its_language() {
+        let language = |text: &str| {
+            EmbeddedRegions::new(text)
+                .styles
+                .first()
+                .and_then(|style| style.language.clone())
+                .map(String::from)
+        };
+        assert_eq!(language("<style></style>"), None);
+        assert_eq!(
+            language("<style lang=\"scss\"></style>"),
+            Some("scss".into())
+        );
+        assert_eq!(language("<style lang='less'></style>"), Some("less".into()));
+        assert_eq!(
+            language("<style type=\"text/stylus\"></style>"),
+            Some("stylus".into())
+        );
+        // `lang` wins over `type`, and a name a longer one merely contains does
+        // not answer for it.
+        assert_eq!(
+            language("<style data-lang=\"x\" lang=\"sass\"></style>"),
+            Some("sass".into())
+        );
     }
 
     #[test]

@@ -33,7 +33,11 @@ const ELSE: &str = ":else";
 #[must_use]
 pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     let embedded = EmbeddedRegions::new(text);
-    if embedded.in_style(offset) {
+    if let Some(style) = embedded.style_at(offset) {
+        // `shouldExcludeHover` (`CSSPlugin.ts:606-616`).
+        if matches!(style.language.as_deref(), Some("sass" | "stylus" | "styl")) {
+            return None;
+        }
         return crate::css::hover(text, offset).map(markdown);
     }
     // A script body belongs to tsgo; answering it here spells an import path as
@@ -294,6 +298,19 @@ mod tests {
     fn a_css_property_name_in_a_script_is_not_a_css_hover() {
         let text = "<script>\n  import type { A } from \"../types.js\";\n</script>";
         expect_none(text, text.find("types.js").unwrap() + 1);
+    }
+
+    /// `shouldExcludeHover` (`CSSPlugin.ts:606-616`) excludes `sass` too, which
+    /// `shouldExcludeCompletion` does not.
+    #[test]
+    fn a_sass_or_stylus_block_gets_no_css_hover() {
+        for lang in ["sass", "stylus", "styl"] {
+            let text = format!("<style lang=\"{lang}\">\n  h1 {{ color: red }}\n</style>");
+            expect_none(&text, text.find("color").unwrap() + 1);
+        }
+        // The positive control: `less` is not on upstream's list.
+        let text = "<style lang=\"less\">\n  h1 { color: red }\n</style>";
+        assert!(hovered_tag(text, text.find("color").unwrap() + 1).is_some());
     }
 
     #[test]
