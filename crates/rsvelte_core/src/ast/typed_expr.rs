@@ -1991,6 +1991,10 @@ impl Serialize for JsNode {
                 if let Some(ik) = import_kind {
                     map.serialize_entry("importKind", ik.as_str())?;
                 }
+                // acorn-typescript emits `attributes` only where the source
+                // wrote an `assert`/`with` clause, but rsvelte never populates
+                // the list, so suppressing it here would turn one listed
+                // divergence into another instead of removing it.
                 ser_children!(map, "attributes", attributes);
                 ser_comments!(map, "ImportDeclaration", *start, *end);
                 map.end()

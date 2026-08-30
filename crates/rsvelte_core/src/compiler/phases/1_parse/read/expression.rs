@@ -8120,6 +8120,35 @@ fn first_non_ecmascript_whitespace(content: &str, irregular: &[oxc_span::Span]) 
         .min()
 }
 
+/// acorn-typescript stamps `importKind`/`exportKind` on every import and export
+/// and acorn stamps none, so the field's presence is a fact about the parser
+/// rather than about the statement.
+fn estree_module_kind(
+    arena: &ParseArena,
+    kind: oxc_ast::ast::ImportOrExportKind,
+) -> Option<CompactString> {
+    if kind == oxc_ast::ast::ImportOrExportKind::Type {
+        Some(CompactString::from("type"))
+    } else if arena.is_ts_program() {
+        Some(CompactString::from("value"))
+    } else {
+        None
+    }
+}
+
+/// Restores the arena's TypeScript flag when a program conversion returns, so a
+/// nested conversion cannot leave the outer one reading the wrong parser.
+struct TsProgramGuard<'a> {
+    arena: &'a ParseArena,
+    previous: bool,
+}
+
+impl Drop for TsProgramGuard<'_> {
+    fn drop(&mut self) {
+        self.arena.set_ts_program(self.previous);
+    }
+}
+
 fn convert_parsed_program<'ast>(
     arena: &ParseArena,
     program: &OxcProgram<'_>,
@@ -8137,6 +8166,10 @@ fn convert_parsed_program<'ast>(
         script_tag_start,
         script_tag_end,
     } = params;
+    let _ts_guard = TsProgramGuard {
+        arena,
+        previous: arena.set_ts_program(is_typescript),
+    };
     {
         // Mirror upstream acorn's throw-on-error behaviour: capture the first
         // parse error (acorn reports `err.pos` where it stopped consuming
@@ -8973,11 +9006,7 @@ fn convert_statement_for_program(
                 line_offsets,
             ));
 
-            let import_kind = if import_decl.import_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let import_kind = estree_module_kind(arena, import_decl.import_kind);
 
             Some(JsNode::ImportDeclaration {
                 start: start as u32,
@@ -10221,11 +10250,7 @@ fn convert_import_specifier(
                 line_offsets,
             ));
 
-            let import_kind = if import_spec.import_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let import_kind = estree_module_kind(arena, import_spec.import_kind);
 
             JsNode::ImportSpecifier {
                 start: start as u32,
@@ -13932,11 +13957,7 @@ fn convert_export_named_as_node(
                 line_offsets,
             ));
 
-            let export_kind = if spec.export_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let export_kind = estree_module_kind(arena, spec.export_kind);
 
             JsNode::ExportSpecifier {
                 start: spec_start as u32,
@@ -13949,11 +13970,7 @@ fn convert_export_named_as_node(
         })
         .collect();
 
-    let export_kind = if kind == oxc_ast::ast::ImportOrExportKind::Type {
-        Some(CompactString::from("type"))
-    } else {
-        None
-    };
+    let export_kind = estree_module_kind(arena, kind);
 
     let source = src.map(|source| {
         let source_start = offset + source.span.start as usize;
