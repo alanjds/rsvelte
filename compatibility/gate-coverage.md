@@ -2956,28 +2956,40 @@ repro mutation-tests it. **Still open for the rest of the corpus** — a submodu
 introduces a new real-world file is the same lottery, and there is no cheap fix, because
 "newly added" is a diff against the merge base rather than a property of the manifest.
 
-### Blind spot 20g — `eligible` uses ratchet listing as a proxy for "the seed matches unmutated", and the proxy fails on exactly the set it wanted to exclude [D]
+### Blind spot 20g — `eligible` is drawn from a ratchet whose comparison ignores the one dimension this gate measures [D]
 
 `eligible` is `manifest ∖ (union of the four output ratchets)` (`:145-152`), because a seed that
-diverges *unmutated* cannot attribute a mutant. That is the right intent implemented against the
-wrong quantity: being listed is not the same as diverging, in either direction. A listed id may
-already pass (the stale side of a two-sided ratchet — 280 of 613 listed pairs were byte-equal
-when measured on 2026-08-31), and an **unlisted id may diverge**, which is the direction that
-lets an unattributable seed into the population.
+diverges *unmutated* cannot attribute a mutant. The intent is right; the source is not. Gate 1
+falls back to `ast_equiv_batch` with **comments ignored** (`verify.mjs:588`, "The empty argv is
+load-bearing"), so a component whose only divergence is a comment scores `match` there and is
+**correctly** unlisted. This gate, however, splits `comment-mismatch` out as its own class. A
+comment-divergent seed is therefore **guaranteed** to pass the eligibility filter and
+**guaranteed** to be unattributable here — systematically, for the whole `comment-mismatch`
+class, not marginally.
 
-**[D]** Measured 2026-08-31 with the mutation gate's own comparison and no comment inserted:
-**116 match / 6 comment-mismatch over the 38 enrolled seeds**, with the divergence coming from
-**2 seeds** — `layerchart/…/Canvas.svelte` (all four targets) and `…/NotebookView.svelte`
-(client, client-dev). So **6 of the 14 residual `comment-mismatch` pairs are not attributable to
-the mutation at all**; no change to comment handling can move them. Reducing `Canvas.svelte`
-gives a 12-line hand-reproducible defect (a template-expression function body containing only a
-comment loses the comment in client output, across all seven template slots, with a body
-containing one statement as the passing control) — a real divergence in a file no output ratchet
-lists, which is also why the same file reached this gate's seed set.
+**[D]** Measured 2026-08-31 with the gate's own comparison and no comment inserted:
+**116 match / 6 comment-mismatch over the 38 enrolled seeds**, the divergence coming from
+**2 seeds** — `layerchart/…/layers/Canvas.svelte` (all four targets) and
+`open-webui/…/NotebookView.svelte` (client, client-dev). So **6 of the 14 residual
+`comment-mismatch` pairs are not attributable to the mutation at all**; no change to comment
+handling can move them. Running gate 1's own `ast_equiv_batch` over those six pairs plus a third
+file found the same way (`svelthree/…/AmbientLight.svelte`, client) returns **`equivalent` for
+every one** — all three are comment-only, which is exactly why none is listed.
 
-Closing it needs the property itself rather than the proxy: run each seed **unmutated** once and
-exclude the ones that already diverge. Cost is one extra compile per seed, and it produces the
-`match`-baseline this gate currently assumes without measuring.
+Two things follow. Reducing `Canvas.svelte` gives a 12-line hand-reproducible defect — a
+template-expression function body containing only a comment loses the comment in client output,
+across all seven template slots, with a body containing one statement as the passing control —
+so the seeds are diverging for a real reason that **no output ratchet can express**. And the fix
+for this blind spot is not "the output ratchet's population has a hole": it is that a filter must
+be drawn from a comparison that sees what the gate compares. Run each seed **unmutated** once
+under *this* gate's own comparison and exclude the ones that already diverge; cost is one extra
+compile per seed.
+
+**A note on how this row was nearly written wrong.** The first version claimed the population had
+a hole, on the argument that "oxfmt does not delete comments, so the divergence cannot be a
+normalization artifact". That argument is sound and rules out the *normalizer* — and says nothing
+about the *comparator*, which is a different stage that ignores comments by design. Eliminating
+one candidate is not confirming another.
 
 ---
 
