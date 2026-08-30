@@ -2220,7 +2220,9 @@ fn resolve_explicit_nesting_chains(
         if i > 0 && !matches!(combinator_name(rel), " " | ">") {
             return None;
         }
-        if compound_is_nesting_only(rel) {
+        if compound_is_nesting_only(rel)
+            || head_nesting_level_is_evaluable(std::slice::from_ref(rel))
+        {
             if i > 0 && multi_compound_parent {
                 return None;
             }
@@ -2244,13 +2246,21 @@ fn resolve_explicit_nesting_chains(
         }
         let mut chain: Vec<Value> = Vec::new();
         for rel in rel_selectors {
-            if !compound_is_nesting_only(rel) {
+            let nesting_only = compound_is_nesting_only(rel);
+            if !nesting_only && !head_nesting_level_is_evaluable(std::slice::from_ref(rel)) {
                 chain.push(rel.clone());
                 continue;
             }
             let combinator = rel.get("combinator").cloned();
+            let last = parent.len() - 1;
             for (j, parent_rel) in parent.iter().enumerate() {
-                let mut cloned = parent_rel.clone();
+                // `&.x` constrains the element the parent chain ends on, so the
+                // extra selectors join that compound instead of the chain
+                // gaining a level.
+                let mut cloned = match (nesting_only, j == last) {
+                    (false, true) => merge_nesting_head(parent_rel, rel)?,
+                    _ => parent_rel.clone(),
+                };
                 if j == 0
                     && let Value::Object(map) = &mut cloned
                 {
