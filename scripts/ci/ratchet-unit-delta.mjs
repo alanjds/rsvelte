@@ -26,8 +26,13 @@ const keysOf = (text) => {
 	const j = JSON.parse(text);
 	return Array.isArray(j) ? j.map(String) : Object.keys(j);
 };
-// Both bracket shapes end the key, so one anchored strip covers them.
-const unit = (k) => k.replace(/\[[^[\]]*\]$/, '');
+// Two ways a key carries its CONTENT rather than its identity, and both end it:
+// the `[count=…,hash=…]` / `[official=…,rsvelte=…]` bracket, and the corpus
+// aggregate's `|divergentRequestCount=<n>` — which is 21,792 of the LSP ratchet's
+// 32,441 keys, so a rule that strips only the bracket reports two thirds of that
+// file's churn as new units. `|phase=edit` is identity and must survive, which is
+// why the count suffix is named rather than matched as any trailing `=<digits>`.
+const unit = (k) => k.replace(/\[[^[\]]*\]$/, '').replace(/\|divergentRequestCount=\d+$/, '');
 
 let base;
 try {
