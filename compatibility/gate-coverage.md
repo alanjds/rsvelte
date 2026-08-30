@@ -1277,6 +1277,19 @@ arrow through one prop name, and the write is always a member expression — a b
 `p = p + 1` reassignment is `binding-position`'s `assignment.right` row and is not repeated
 here. **[S]**
 
+**And the same confounding recurs one level down, in the hand-written shadow grids rather than in
+this family.** The client's `reference_is_plain_local` veto — "does this write target resolve to
+the component's binding or to a shadow" — was measured by ablation over a 24-cell grid crossing
+the shadow's HOST (instance function, template handler, each-block handler) with the WRITE SHAPE
+(`=`, `++`, `--`, member vs bare). Removing the veto moved **6** cells, and all six are prop
+bindings: `$bindable()` and legacy `export let`. A `$state` shadowed by a local and an each item
+shadowed by a local moved **0** cells in both directions, because `context.state.transform` only
+carries an entry for a prop — so those rows reach the veto and cannot discriminate it. The
+grid therefore measures the veto's reach for one binding kind and is **unmeasured** for the
+others; crossing shadow × write shape with shadow × **binding kind** is what would size it. Same
+lesson as this section's: the thing varied has to be crossed with the thing held fixed, not
+merely adjacent to it. **[D]** for the prop rows, **unmeasured** for the rest.
+
 ### Blind spot 5r — every gate compares rsvelte to ONE pinned oracle, so a defect the oracle shares is invisible everywhere
 
 The whole pipeline's question is "does rsvelte emit what `submodules/svelte` emits". Where the
