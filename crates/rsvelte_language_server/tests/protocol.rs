@@ -846,7 +846,10 @@ fn official_settings_drive_tag_close_and_strict_attribute_completions() {
         .into_iter()
         .find(|item| item["label"] == "on:click")
         .unwrap();
-    assert_eq!(click["insertText"], json!("on:click$2=\"{$1}\""));
+    // `htmlCompletion.js:213-219` carries the snippet in a `textEdit`, never in
+    // `insertText`.
+    assert_eq!(click["insertText"], Value::Null);
+    assert_eq!(click["textEdit"]["newText"], json!("on:click$2=\"{$1}\""));
     assert_eq!(server.shutdown(), Some(0));
 }
 
