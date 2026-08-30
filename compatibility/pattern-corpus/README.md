@@ -1138,6 +1138,16 @@ upstream deconflicts to `function input_1()`. The object, array and nested-objec
 rows are three shapes of the same slot; a function PARAMETER default was already
 right, which is why the two had to be probed apart.
 
+`issues/handler-local-update-through-the-json-path.svelte` pins the JSON port of
+the update lowering. `convert_update_expression` went from
+`extract_identifier_name_from_json` straight to `transform.get(&name)` with no
+shadow test, while its typed twin and `try_transform_update` both refuse a name
+whose reference belongs to a plain local — so a `var` shadowing a component
+signal was updated through the signal (`$.update(v)` for `v++`). A `var`
+declared in a `for` HEAD is a separate, still-open cause and is deliberately not
+in this file: phase 2 leaves the local binding's reference list empty and the
+outer signal owns the position, so the position-keyed test cannot see it.
+
 ## Adding a file
 
 See [Adding a pattern file](../../scripts/compat-corpus/README.md#adding-a-pattern-file).
