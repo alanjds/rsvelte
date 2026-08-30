@@ -126,6 +126,11 @@ pub fn collect_css_unused_warnings(
                 &reparsed
             }
         };
+        // `branch_is_marked_unused` reads a set the walk itself fills, so a rule
+        // asked before its own `:is()` branch is marked answers against an empty
+        // set. The printer runs the marking pass first for that reason; so must
+        // this one, or the two disagree on where a rule's warning belongs.
+        mark_unused_functional_branches(children, css_content, css_start, &ctx);
         collect_unused_warnings_from_nodes(
             children,
             css_content,
