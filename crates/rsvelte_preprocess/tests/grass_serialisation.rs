@@ -76,24 +76,60 @@ fn a_declaration_after_a_nested_rule_is_hoisted() {
 /// Not render-neutral — `0.4` is not a valid `grid-row`, so the browser drops the declaration.
 /// Reported in `upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md`.
 #[test]
-fn a_slash_list_is_divided_under_a_nested_not() {
-    // dart-sass emits `grid-row: 2/5` here. Both conditions are load-bearing.
+fn a_nested_not_makes_every_later_slash_divide() {
+    // dart-sass emits `grid-row: 2/5` in all four. The leak outlives the rule that
+    // triggered it, so a pin on the trigger alone would not see three of them.
     assert_eq!(
         scss(".p { .q:not(.r) { grid-row: 2/5; } }"),
         ".p .q:not(.r) {\n  grid-row: 0.4;\n}"
     );
-    // Drop either one and the two agree, so neither alone would discriminate.
     assert_eq!(
-        scss(".p { .q { grid-row: 2/5; } }"),
-        ".p .q {\n  grid-row: 2/5;\n}"
+        scss(".p { .q:not(.r) { color: red; } .s { grid-row: 2/5; } }"),
+        ".p .q:not(.r) {\n  color: red;\n}\n.p .s {\n  grid-row: 0.4;\n}"
     );
     assert_eq!(
-        scss(".q:not(.r) { grid-row: 2/5; }"),
-        ".q:not(.r) {\n  grid-row: 2/5;\n}"
+        scss(".p { .q:not(.r) { color: red; } grid-row: 2/5; }"),
+        ".p {\n  grid-row: 0.4;\n}\n.p .q:not(.r) {\n  color: red;\n}"
     );
-    // `:not` is the only pseudo-class that does it.
     assert_eq!(
-        scss(".p { .q:is(.r) { grid-row: 2/5; } }"),
-        ".p .q:is(.r) {\n  grid-row: 2/5;\n}"
+        scss(".p { .q:not(.r) { color: red; } }\n.s { grid-row: 2/5; }"),
+        ".p .q:not(.r) {\n  color: red;\n}\n\n.s {\n  grid-row: 0.4;\n}"
+    );
+}
+
+/// The trigger is the Sass `not` KEYWORD followed by `(`, in the one position where the
+/// parser must try a declaration first. Every row here agrees with dart-sass, and each
+/// removes exactly one of the two conditions — without them the pin above passes on a
+/// build where only `:not` is special-cased, or only nesting is.
+#[test]
+fn the_slash_survives_without_the_not_keyword_or_without_the_nesting() {
+    for source in [
+        ".p { .q { grid-row: 2/5; } }",
+        ".p { .q:nots(.r) { grid-row: 2/5; } }",
+        ".p { .q:xnot(.r) { grid-row: 2/5; } }",
+        ".p { .q:is(.r) { grid-row: 2/5; } }",
+        ".p { .q:and(.r) { grid-row: 2/5; } }",
+        ".p { .q:not { grid-row: 2/5; } }",
+    ] {
+        assert!(scss(source).contains("grid-row: 2/5"), "divided: {source}");
+    }
+    // At the top level a declaration is illegal, so the ambiguity never arises.
+    assert_eq!(
+        scss(".q:not(.r) { color: red; }\n.s { grid-row: 2/5; }"),
+        ".q:not(.r) {\n  color: red;\n}\n\n.s {\n  grid-row: 2/5;\n}"
+    );
+}
+
+/// Neither neighbouring case is part of the defect: both compilers divide here, so a pin
+/// built on either would report agreement as a bug.
+#[test]
+fn a_variable_operand_and_calc_divide_on_both_sides() {
+    assert_eq!(
+        scss("$n: 2;\na { grid-row: $n/5; }"),
+        "a {\n  grid-row: 0.4;\n}"
+    );
+    assert_eq!(
+        scss(".p { .q:not(.r) { grid-row: calc(2/5); } }"),
+        ".p .q:not(.r) {\n  grid-row: 0.4;\n}"
     );
 }

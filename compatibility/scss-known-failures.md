@@ -123,20 +123,24 @@ flattener that silently dropped nodes would report everything as render-neutral.
 
 ```
 musicat/src/App.svelte#style0
-  dart-sass:  .queue:not(.panel.queue) { grid-row: 2/5 }
-  grass:      .queue:not(.panel.queue) { grid-row: 0.4 }
+  dart-sass:  grid-row: 2/5   grid-row: 2/5   grid-column: 1/5
+  grass:      grid-row: 0.4   grid-row: 0.4   grid-column: 0.2
 ```
 
 `grid-row: 0.4` is not a valid value, so the browser drops the declaration — this is the only
-entry in the ratchet that produces output a browser rejects.
+entry in the ratchet that produces output a browser rejects. **Three** declarations in that file
+are corrupted, not the one the ratchet's first differing line shows.
 
 **The obvious reduction is wrong, and it fails in the direction that reads as a fix.** "`grass`
 evaluates `2/5` as division" describes nothing: the two agree on `a { grid-row: 2/5 }`, on the
 same rule inside `@media`, on `$n/5` (both divide, dart-sass with a `slash-div` warning) and on
-`calc(2/5)` (both fold to `0.4`). The divergence needs the rule to be **nested inside another
-rule** *and* its own compound selector to carry **`:not(...)`** — `:is()`, `:where()`, `:has()`,
-`:nth-child()`, `:hover` and `[attr]` in the same slot all keep the list, and so does `&:not(.r)`.
-Written as the one-condition version, the pin passes with the defect present. See
+`calc(2/5)` (both fold to `0.4`). The trigger is the Sass **`not` keyword followed by `(`**, in a
+rule **nested inside another rule** — `:nots(`, `:xnot(`, `:is(`, `:and(`, a bare `:not` with no
+paren, and `:not(` at the top level all keep the list. And the corrupted declaration need not be
+the one under `:not` at all: **once triggered, every later slash list in the file divides** —
+a sibling rule, the parent rule, a deeper rule, and a rule after the whole nested block. That is
+why the ratchet's count understates it and why the pin asserts four positions rather than one.
+See
 [`upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md`](../upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md).
 
 The second `content-differs` unit is

@@ -743,6 +743,31 @@ only the **option** path dedupes upstream. The `<svelte:options accessors />` *t
 raised from `2-analyze/index.js` with no `warn_once` at all, so it warns on every compile in
 both compilers — and that half this gate does see.
 
+### Blind spot 2f — phase 2's `Identifier` visitor never enters a template expression's function body
+
+The gate compares whatever `result.warnings` holds, so it can only see a warning that is
+*raised*. **[D]** Instrumented on a component whose instance script and whose template each
+contain a rune read inside a nested function: `2_analyze/visitors/identifier.rs` fires **3**
+times on the instance script and **0** times on the template expression's arrow body. The
+consequence is not one missing warning — it is that **every warning class the `Identifier`
+visitor raises is unreachable in that position**, `state_referenced_locally` among them. The
+warning gates cannot distinguish "no warning is due here" from "no visitor ran here", because
+both produce an empty list and an empty list matches an empty list whenever upstream also
+stays quiet.
+
+This is recorded rather than fixed: the scope is phase 2's visitor dispatch, and it was found
+while narrowing a repro during a re-baseline window. The repro
+(`compatibility/pattern-corpus/issues/rune-local-in-a-template-function-is-not-a-plain-local.svelte`)
+was narrowed to read its runes through a closure so it does not depend on this hole, which is
+exactly why the hole needs its own row — the narrowing removed the only artifact that pointed
+at it.
+
+A second, smaller lesson from the same narrowing, worth a line because it cost a full
+four-target run to diagnose: **a `//` comment written as a note inside a repro's handler is
+compiler input.** Official prints `var // …` and swallows the rest of the line, so all four
+targets diverged on a file whose only new content was an explanatory comment. Repro notes go in
+an HTML comment or in the README row, never in a script-level `//`.
+
 ---
 
 ## 4. Compiler error parity
