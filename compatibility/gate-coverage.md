@@ -146,7 +146,7 @@ samples) — see `AGENTS.md` § "Generated shape matrix" and issue #2281.
 | 24 | `await_waterfall` runtime parity | the `await_waterfall` warnings a **mounted** rsvelte-compiled component logs vs. official's, 3 cases | one warning code, one component shape; nothing else about the running component is observed | [D] |
 | 25 | Differential output-preservation corpus hash | per `.svelte` source × client/server/client-dev/server-dev hash from base-core vs merge-ref-core | changes outside `crates/rsvelte_core`; every PR without the maintainer-applied `output-preserving` label | [S] |
 | 26 | esrap generated-output corpus | parsed JS output × official/rsvelte tree × 4 targets; AST equivalence, comment kind/body sequence, code/map equality, map bounds/order | production synthetic AST spans and whether a mapping points at the corresponding source token | [S] |
-| 27 | LSP differential parity | normalized JSON response field per request against the pinned official server and selected upstream snapshots | **every server notification**; incremental edit and resolve sequences; **inside a corpus `(file, method)`, everything but the divergent-request count**; the oracle-calibration floor is skipped on the corpus job, which enrols 66.7% of the entries | [S] [D] |
+| 27 | LSP differential parity | normalized JSON response field per request against the pinned official server and selected upstream snapshots | **every server notification**; incremental edit and resolve sequences; **inside a corpus `(file, method)`, everything but the divergent-request count**; the oracle-calibration floor is skipped on the corpus job, which enrols 66.7% of the entries, and that job never installs the repositories it measures | [S] [D] |
 | 39 | svelte2tsx option axis | full TSX text per (option variant x source) against the official tool, options carried in the fixture | option values outside its grid (`rewriteExternalImports`, `runes`, most `namespace` x `mode` products); `emitDts`; the map, `exportedNames` and `events` | [S] [D] |
 | 38 | NAPI `cssHash` | the scope class the callback produces, and the callback's own argument list, against **official** | one component shape and one option set; only `css.code` / the class in `js.code`; nothing about the wasm or facade ports of the same option | [S] |
 | 39 | Print fixture suite (`tests/print.rs`) | per-sample printed Svelte text vs upstream's `output.svelte` | it compares the text, not **which code produced it** — a source-text shortcut around the whole AST printer was invisible for 43 of 43 samples | [D] |
@@ -453,6 +453,45 @@ job's runtime on every one of the 16 shards — rather than reading anything fro
 
 **Unmeasured:** whether the corpus shards' official servers are in fact degraded. Nothing here
 measures that; the claim is only that no instrument in the corpus job would report it.
+
+### Blind spot 27k — the corpus repositories are never installed, so two thirds of the ratchet is measured on unresolved imports [D]
+
+`verify.mjs:303-308` names the hazard in a comment — "a server started against the wrong
+workspace root or an unresolved `node_modules` answers differently instead of failing, and those
+answers would then be enrolled as legitimate ratchet entries defending the degradation" — and adds
+the calibration floor as its defence. 27j records that the floor does not run on `--suites corpus`.
+This row records that for that suite the named condition is not a risk but a **guarantee**.
+
+`corpus-compat.yml:859` checks the four corpus repositories out with
+`git submodule update --init --depth 1` and nothing installs them; the job installs the root
+workspace and `submodules/language-tools` only (lines 869-875). `lsp-benchmark.yml:52-54` does run
+`pnpm --dir submodules/bits-ui install`, so the contrast is inside this repository: the job that
+measures *speed* on bits-ui installs it and the job that measures *parity* does not.
+
+Measured on `navigation-menu.svelte` with the same servers and `initialize` parameters the gate
+sends, `textDocument/diagnostic` returns:
+
+```
+official: 1  — ts/-1 46:2 Unexpected character '@'
+rsvelte:  5  — ts/2307 1:37  Cannot find module 'svelte-toolbelt' …
+                ts/2307 4:26  Cannot find module '$lib/internal/create-id.js' …
+                ts/2307 5:22  Cannot find module '$lib/internal/noop.js' …
+                ts/7006 27:4  Parameter 'v' implicitly has an 'any' type.
+                ts/7006 38:4  Parameter 'v' implicitly has an 'any' type.
+```
+
+`svelte` itself resolves — TypeScript walks up to the checkout's own root `node_modules` — so the
+population is not uniformly typeless; it is a mixture in which every bare specifier the corpus repo
+declares for itself, and every `$lib/*` alias its own `tsconfig` would supply, is missing. What the
+corpus units therefore compare is largely **how the two servers behave on symbols neither can
+resolve**, which is a real comparison but not the one the gate's name implies. On six shard-0 files
+the largest remaining hover class is 42 requests where upstream answers TypeScript's
+unresolved-alias quick info — ` ```typescript\nimport boxWith\n``` ` — and tsgo answers nothing.
+
+**Unmeasured:** how the composition moves once the repositories are installed. Nothing here says
+the divergence count falls; it says the population changes, and a class that is 42 of 184 on this
+tree is not evidence about a tree with `node_modules`. Installing them also changes the ratchet
+keys, which is why this is a row rather than a patch.
 
 ### Blind spot 27i — a diagnostic's severity is unobservable, and lint findings are never paired at all [D]
 
