@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { refuseUnrepresentativeBaseline } from "../compat-corpus/baseline-guard.mjs";
+import { svelteVersionForServer } from "./pin-official-svelte.mjs";
 import {
   calibrationView,
   normalizeExpected,
@@ -188,6 +189,26 @@ if (!process.env.OFFICIAL_LSP_COMMAND) {
   if (!fs.existsSync(builtServer)) {
     throw new Error(
       "official language server is not built; run `pnpm --dir submodules/language-tools --filter svelte-language-server build`",
+    );
+  }
+}
+// `importPackage.ts:29-31` pushes the project directory onto the official
+// server's resolution paths only `if (isTrusted)`, and this gate runs untrusted,
+// so the server loads the Svelte installed beside itself. Under Svelte 4 its
+// svelte2tsx falls back to a Svelte 4 parser and `document.isSvelte5` is false:
+// the oracle does not fail, it answers differently, and those answers enrol into
+// a shrink-only ratchet that then defends the degradation.
+{
+  const script = officialCommand.find((argument) => argument.endsWith(".js"));
+  const resolved = script
+    ? svelteVersionForServer(script)
+    : { version: null, path: null };
+  console.log(
+    `[lsp-verify] official server resolves svelte ${resolved.version ?? "(none)"}${resolved.path ? ` from ${resolved.path}` : ""}`,
+  );
+  if (resolved.version && Number(resolved.version.split(".")[0]) < 5) {
+    throw new Error(
+      `the official server resolves svelte ${resolved.version}; run \`node scripts/compat-lsp/pin-official-svelte.mjs\` so it projects with the Svelte 5 parser this repository pins`,
     );
   }
 }

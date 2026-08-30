@@ -751,6 +751,8 @@ jobs:
           cd submodules/language-tools
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm --filter svelte-language-server... build
+          cd "$GITHUB_WORKSPACE"
+          node scripts/compat-lsp/pin-official-svelte.mjs
 
       - name: Build lint wasm (nodejs target)
         run: pnpm run build:wasm:lint-node

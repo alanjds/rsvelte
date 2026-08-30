@@ -640,6 +640,28 @@ divergence count. It replaces the population — the ratchet keys turn over comp
 real defects on those 1,476 files become visible for the first time. The remaining 12,936 keys, on
 files upstream does project, are the part of the residue this row says nothing about.
 
+**Closed by pinning the oracle's own Svelte, not by installing the corpus.** Installing the
+repositories cannot fix this at all under the configuration the gate uses: `importPackage.ts:29-31`
+pushes the linted project's directory onto the resolution paths only `if (isTrusted)`, and the
+harness initializes with `isTrusted: false`, so a `node_modules/svelte` inside a corpus repository
+is never consulted. `scripts/compat-lsp/pin-official-svelte.mjs` relinks
+`language-server/node_modules/svelte` at the Svelte this repository's own lockfile pins, and
+`verify.mjs` refuses to run against a major below 5, printing the version and the path it resolved.
+Nothing is installed and no project code runs. Measured on `bits-ui` with the same predicate this
+row uses: **400/617 files fail to project under 4.2.20 and 0/617 under 5.56.10**, and the aggregate
+divergent-request count over the four repositories falls 3,906 → 2,324 (−40.5%). Read the second
+number carefully: **no unit leaves the gate** — 40 of 54 are re-keyed to a lower
+`divergentRequestCount`, so the numerator is requests, never units.
+
+Two field-level consequences are worth keeping, because the aggregate count cannot express either.
+`diff.mjs:16` buckets a completion item by `[label, kind, sortText, filterText]`, and
+`HTMLPlugin.ts:239` sets `sortText` only when `document.isSvelte5`: under 4.2.20 the oracle omits it
+on every legacy `on:` item, so those items **never pair** and not one of their other fields is
+compared — shared labels at `<div on` go 14 → 29 when the oracle resolves 5. And Svelte 5's own
+`*.svelte` ambient declaration names its default export `Comp` (`svelte/types/index.d.ts`), which
+4.2.20's does not, so an auto-import rsvelte correctly offers reads as an extra item under the
+degraded oracle.
+
 ### Blind spot 27i — a diagnostic's severity is unobservable, and lint findings are never paired at all [D]
 
 `diff.mjs:19` keys a diagnostic on `digest([value.code, value.source, value.range?.start])`. The
