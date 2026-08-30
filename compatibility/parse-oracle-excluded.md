@@ -12,6 +12,17 @@ listed here rather than absorbed, and the list is shrink-only in both directions
 unlisted oracle rejection fails the run, and a listed pair whose official output now parses also
 fails the run.
 
+### DoD-4 attribution — **U**
+
+Attribution of `parse-oracle-excluded.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 2 | `upstream_issues/3609-svelte-snippet-param-shadowed-by-const.md` | official's own client output declares one name twice, so the "is this JavaScript?" oracle has no reference for the pair |
+
+The pair leaves this list the day upstream stops emitting a redeclaration; the shrink-only
+check in both directions is what makes that automatic rather than something to remember.
+
 ## The entries
 
 ### `compiler-errors/samples/const-tag-snippet-invalid-reference-1/main.svelte` — `client`, `client-dev`

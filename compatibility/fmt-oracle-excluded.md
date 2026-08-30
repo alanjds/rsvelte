@@ -13,6 +13,23 @@ deleted) and notices if an excluded id now matches byte-for-byte (the oracle bug
 was fixed upstream, or rsvelte was wrongly changed to reproduce it — avoid the
 latter).
 
+
+### DoD-4 attribution
+
+Attribution of `fmt-oracle-excluded.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 3 | [`deliberate-divergences`](deliberate-divergences.md#a-props-line-comment-keeps-the-separator-slot-the-compiler-reads) | the `$props()` comment slot the #3515 repros depend on |
+| 4 | [`deliberate-divergences`](deliberate-divergences.md#the-formatters-javascript-engine-is-oxc-not-prettier) | `engine-divergence` — oxc's line-breaking, not prettier's |
+| 6 | [`deliberate-divergences`](deliberate-divergences.md#the-formatter-declines-an-input-its-own-parser-rejects) | `invalid-input` and `migrate` — inputs no compiler accepts, and Svelte 4 migrator output |
+
+The 16 `oracle-bug` entries are **deliberately absent from this table**. They are roughly eight
+distinct oxfmt / prettier-plugin-svelte defects and only one — the `{@const}` line comment — has
+been filed. Listing all sixteen against that one report would make the gate green on a citation
+that does not cover them, which is the failure mode a citation is most likely to hide. Each gets
+a row when its own report is filed with both outputs measured.
+
 ## oracle-bug — the `oxfmt(svelte:true)` oracle output is itself wrong/corrupt
 
 Matching the oracle would require rsvelte to emit broken output. rsvelte-fmt is

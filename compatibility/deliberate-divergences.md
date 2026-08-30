@@ -558,3 +558,118 @@ finding-level comparison, so a rule only one side ships is never enabled during 
 All five are invisible to the other eight lint gates by construction, which is why this gate
 keys on membership at all. The first version keyed on membership *alone* and reported 29
 differences; adding severity to the key took it to 50 and surfaced the 21 real ones.
+
+---
+
+## A `$props()` line comment keeps the separator slot the compiler reads
+
+**Ratchet** `compatibility/fmt-oracle-excluded.json`, the three
+`pattern/issues/3515-props-*-line-comment.svelte` entries.
+**Pinned by** `compatibility/pattern-corpus/issues/3515-props-default-line-comment.svelte`,
+`compatibility/pattern-corpus/issues/3515-props-plain-line-comment.svelte` and
+`compatibility/pattern-corpus/issues/3515-props-rest-line-comment.svelte`, which the
+compiler's own output-equality gate compiles on all four targets.
+
+### Input
+
+```svelte
+<script>
+	let { a } =
+		// why the default is what it is
+		$props();
+</script>
+```
+
+### Both outputs
+
+- `oxfmt(svelte: true)` — prettier for the Svelte structure — keeps the comment as a **leading
+  separator** of the initializer and inserts a blank line before it.
+- `rsvelte-fmt` — oxc for the embedded JS — attaches the same comment **after** the initializer
+  expression.
+
+Both are valid JavaScript and both round-trip. They differ in which slot the comment occupies.
+
+### Why rsvelte's form is the correct one here
+
+The slot is not cosmetic: #3515 is a compiler defect whose repro depends on the comment sitting
+between the declarator and its `$props()` initializer. Moving it to prettier's slot makes the
+three repros stop reproducing what they exist to reproduce, so matching the oracle here would
+cost a compiler gate to buy a formatter gate. The formatter follows oxc for embedded JavaScript
+by design (see the section below); this is one instance of that decision, not a separate one.
+
+---
+
+## The formatter's JavaScript engine is oxc, not prettier
+
+**Ratchet** `compatibility/fmt-oracle-excluded.json`, the four `flowbite-svelte/…` entries.
+**Pinned by** `crates/rsvelte_formatter/tests/expression.rs` and
+`crates/rsvelte_formatter/tests/css_native.rs`, which assert oxc's own line-breaking and CSS
+output rather than prettier's.
+
+### Input
+
+Long expressions in Svelte positions — a ternary inside a `class=` attribute, an IIFE whose
+arrow takes one parameter, a template literal's `${}` inside `<script>`, and an `{#if}` header
+holding `unique && value.some(…)` beside a member chain.
+
+### Both outputs, measured by `scripts/compat-corpus/fmt.mjs`
+
+Four different break points, all valid, none reachable from the other by changing the print
+width: the oracle breaks a ternary's **condition** at `===`, the arrow's **parameter list**, and
+**only** the inner member chain in the `{#if}` header; `oxc_formatter` breaks the nested
+conditions, the IIFE's **call argument**, and the `&&` / call-args respectively.
+
+### Why rsvelte's form is the correct one
+
+`rsvelte-fmt` formats embedded JavaScript with `oxc_formatter` on purpose — it is the same
+engine `oxfmt` uses for standalone JavaScript, and the whole point of the port is not to carry
+prettier. Reproducing prettier's break priorities would mean re-implementing prettier's
+`Doc` algebra inside the oxc printer for the Svelte path only, and the two would then disagree
+with each other on the same JavaScript depending on whether it sat in a `.js` file or a
+`<script>` block — which is the defect shape the oracle itself already has (`oxfmt x.css` and
+`oxfmt --svelte` print the same custom property differently).
+
+### Why no gate sees it
+
+The formatter-parity gate compares against `oxfmt(svelte: true)`, whose JavaScript comes from
+prettier; the svelte.dev formatter gate is a hard gate with no tolerance and would fail on any
+of these, which is why they are excluded rather than listed. Nothing in the tree compares
+`rsvelte-fmt`'s JavaScript against `oxfmt`'s **standalone** JavaScript, where the two agree —
+that comparison would show the divergence is the oracle's inconsistency and not rsvelte's.
+
+---
+
+## The formatter declines an input its own parser rejects
+
+**Ratchet** `compatibility/fmt-oracle-excluded.json`, the four `invalid-input` entries and the
+two `migrate` entries.
+**Pinned by** `compatibility/pattern-corpus/adversarial/css/rejected-global-keyframes-selector.svelte`
+and `crates/rsvelte_formatter/tests/style_block.rs`.
+
+### Input
+
+Four inputs no compiler accepts — a snippet parameter written `c?: number = 5` (TS1015),
+snippet rest parameters (`snippet_invalid_rest_parameter`), `h1:nth-of-type(+12)` and
+`:global(@keyframes shared)` (`css_expected_identifier`, #3120) — and two Svelte 4→5 **migrator
+outputs**, which use `let:` directives and `slot=` attributes.
+
+### Both outputs
+
+`prettier-plugin-svelte` formats all six: it validates nothing beyond its own parse. `rsvelte-fmt`
+reports the parse error, or falls back to emitting the block verbatim where the CSS parser is the
+one that refuses.
+
+### Why rsvelte's form is the correct one
+
+A formatter that rewrites a file its own compiler cannot compile is a formatter that can silently
+change the meaning of code nobody can check. Falling back to the source is the conservative
+answer. The migrator outputs are a scope statement rather than a behaviour: this repository is a
+Svelte 5 compiler port and `Migrate 0/76` is recorded as out of scope, so a Svelte 4 construct is
+not an input `rsvelte-fmt` is required to format.
+
+### Why no gate sees it
+
+The parity gate's unit is (source, oracle output); an input the subject declines has no output to
+compare, so the pair can only be excluded or scored as a failure. Excluding it is what keeps the
+gate's remaining population meaningful — and the exclusion list is shrink-only in both
+directions, so an entry that starts formatting fails the run.

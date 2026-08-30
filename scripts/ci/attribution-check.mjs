@@ -97,8 +97,13 @@ for (const f of ratchets) {
 		continue;
 	}
 	const sum = b.rows.reduce((a, r) => a + r.n, 0);
-	if (sum !== n) {
-		fail(`${b.file}:${b.line}  attribution of ${f} sums to ${sum}, the ratchet holds ${n}`);
+	if (sum < n) {
+		// A partial table is the honest shape while some clusters are still being
+		// filed, so say which entries are uncovered rather than reporting a
+		// bookkeeping mismatch — the two read very differently to whoever is next.
+		fail(`${b.file}:${b.line}  ${f}: ${sum} of ${n} entries attributed, ${n - sum} carry no target`);
+	} else if (sum > n) {
+		fail(`${b.file}:${b.line}  attribution of ${f} sums to ${sum}, the ratchet holds only ${n}`);
 	}
 	for (const r of b.rows) {
 		const cited = [...r.target.matchAll(/`([^`]+)`/g)].map((x) => x[1]);

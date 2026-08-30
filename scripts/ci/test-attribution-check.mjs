@@ -65,7 +65,7 @@ const check = (name, cond, detail) => {
 {
 	const f = { ...PASSING, 'a-known-failures.json': JSON.stringify(['one', 'two', 'three', 'four']) };
 	const r = run(f);
-	check('a sum that misses the ratchet length fails', r.code === 1 && /sums to 3, the ratchet holds 4/.test(r.out), r.out);
+	check('a partial table names the uncovered entries', r.code === 1 && /3 of 4 entries attributed, 1 carry no target/.test(r.out), r.out);
 }
 {
 	const f = { ...PASSING };
