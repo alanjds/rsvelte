@@ -3614,6 +3614,32 @@ fn level_is_structurally_evaluable(rels: &[Value]) -> bool {
     })
 }
 
+/// A level `level_is_structurally_evaluable` rejects only because its HEAD
+/// compound carries a `&`. [`merge_nesting_head`] folds that `&` into the
+/// compound it names before the chain is matched, so the level is evaluable
+/// once it has a parent to fold into. A `&` anywhere but the head stays out.
+fn head_nesting_level_is_evaluable(rels: &[Value]) -> bool {
+    let Some((head, rest)) = rels.split_first() else {
+        return false;
+    };
+    let Some(head_sels) = head.get("selectors").and_then(|s| s.as_array()) else {
+        return false;
+    };
+    if !head_sels
+        .iter()
+        .any(|s| s.get("type").and_then(|t| t.as_str()) == Some("NestingSelector"))
+    {
+        return false;
+    }
+    if !head_sels.iter().all(|s| {
+        s.get("type").and_then(|t| t.as_str()) == Some("NestingSelector")
+            || structural_simple_selector_is_evaluable(s)
+    }) {
+        return false;
+    }
+    level_is_structurally_evaluable(rest) || rest.is_empty()
+}
+
 /// The complex-selector list of a bare `:is(...)`/`:where(...)` compound (a
 /// single simple selector, no combinator on the head besides the implicit
 /// null), mirroring [`global_inner_complex_rels`]'s `args` shape. `None` for
@@ -3647,7 +3673,7 @@ fn collect_relative_selector_branches(rels: &[Value], out: &mut Vec<Vec<Value>>)
     // Upstream links a nested rule to its parent through `get_relative_selectors`,
     // which drops the parent's trailing `:global(...)` before matching.
     let rels = truncate_trailing_globals(rels);
-    if level_is_structurally_evaluable(rels) {
+    if level_is_structurally_evaluable(rels) || head_nesting_level_is_evaluable(rels) {
         out.push(rels.to_vec());
         return;
     }
@@ -3706,6 +3732,20 @@ fn with_descendant_head(rel: &Value) -> Value {
 /// to `.grand .foo > .a` and `.x, .y { & + & { … } }` yields one chain per
 /// branch instead of bailing on the comma list. Returns `None` only when a
 /// level contributes zero evaluable branches at all.
+/// Fold a nested level whose head compound carries a `&` into the compound that
+/// `&` stands for, keeping the lower level's combinator. `None` when the head
+/// has no `&` (an implicit descendant) or the substitution is not expressible.
+fn merge_nesting_head(lower_subject: &Value, head: &Value) -> Option<Value> {
+    let head_selectors = head.get("selectors").and_then(|s| s.as_array())?;
+    let lower_selectors = lower_subject.get("selectors").and_then(|s| s.as_array())?;
+    let merged = replace_nesting_in_selectors(head_selectors, lower_selectors)?;
+    let mut out = lower_subject.clone();
+    if let Value::Object(map) = &mut out {
+        map.insert("selectors".to_string(), Value::Array(merged));
+    }
+    Some(out)
+}
+
 fn build_parent_chains(preludes: &[&Value], level: usize) -> Option<Vec<Vec<Value>>> {
     if level == 0 {
         return None;
@@ -3723,7 +3763,19 @@ fn build_parent_chains(preludes: &[&Value], level: usize) -> Option<Vec<Vec<Valu
     for lower in &lower_chains {
         for branch in &own_branches {
             let mut chain = lower.clone();
-            chain.push(with_descendant_head(&branch[0]));
+            // A level that opens with `&` names the SAME element as the level
+            // below it, so it merges into that compound; only a level with no
+            // `&` is an implicit descendant of it.
+            match chain
+                .last()
+                .and_then(|last| merge_nesting_head(last, &branch[0]))
+            {
+                Some(merged) => {
+                    let subject = chain.len() - 1;
+                    chain[subject] = merged;
+                }
+                None => chain.push(with_descendant_head(&branch[0])),
+            }
             chain.extend(branch[1..].iter().cloned());
             chains.push(chain);
         }
@@ -3808,19 +3860,34 @@ fn extract_selector_info_resolving_nesting(rel: &Value, ctx: &CssContext) -> Sel
         return info;
     }
 
-    let parent_preludes = ctx.parent_preludes.borrow();
-    let Some(parent) = parent_preludes.last() else {
-        return info;
-    };
-
+    // One answer to "what does `&` stand for": the subject compound of every
+    // alternative the enclosing rules resolve to, which is also what a `&`
+    // inside an argument list is substituted with. It declines a level it
+    // cannot evaluate structurally (`:has(...)`), where the immediate parent's
+    // own compounds still constrain and dropping them would prune the rule.
     let mut branches: Vec<SelectorInfo> = Vec::new();
-    if let Some(children) = parent.get("children").and_then(|c| c.as_array()) {
-        for complex in children {
-            if let Some(rels) = complex.get("children").and_then(|c| c.as_array())
-                && rels.len() == 1
-                && let Some(sels) = rels[0].get("selectors").and_then(|s| s.as_array())
-            {
-                branches.push(extract_selector_info_from_selectors(sels));
+    match nesting_substitute_alternatives(ctx) {
+        Some(alternatives) => {
+            branches.extend(
+                alternatives
+                    .iter()
+                    .map(|sels| extract_selector_info_from_selectors(sels)),
+            );
+        }
+        None => {
+            let parent_preludes = ctx.parent_preludes.borrow();
+            let Some(parent) = parent_preludes.last() else {
+                return info;
+            };
+            if let Some(children) = parent.get("children").and_then(|c| c.as_array()) {
+                for complex in children {
+                    if let Some(rels) = complex.get("children").and_then(|c| c.as_array())
+                        && rels.len() == 1
+                        && let Some(sels) = rels[0].get("selectors").and_then(|s| s.as_array())
+                    {
+                        branches.push(extract_selector_info_from_selectors(sels));
+                    }
+                }
             }
         }
     }
