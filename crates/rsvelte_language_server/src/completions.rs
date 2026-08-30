@@ -33,7 +33,7 @@ const WINDOW: usize = 10;
 
 #[must_use]
 pub fn completions(text: &str, offset: usize) -> Option<CompletionList> {
-    completions_with_strict_mode(text, offset, false)
+    completions_with_strict_mode(text, offset, false, true)
 }
 
 #[must_use]
@@ -41,6 +41,16 @@ pub fn completions_with_strict_mode(
     text: &str,
     offset: usize,
     strict_mode: bool,
+    markdown_documentation: bool,
+) -> Option<CompletionList> {
+    build_completions(text, offset, strict_mode, markdown_documentation)
+}
+
+fn build_completions(
+    text: &str,
+    offset: usize,
+    strict_mode: bool,
+    markdown_documentation: bool,
 ) -> Option<CompletionList> {
     let embedded = EmbeddedRegions::new(text);
     if let Some(style) = embedded.style_at(offset) {
@@ -59,7 +69,7 @@ pub fn completions_with_strict_mode(
     let before = preceding(text, offset);
 
     if let Some(prefix) = tag_prefix(text, offset) {
-        return Some(html_tag_completions(prefix));
+        return Some(html_tag_completions(prefix, markdown_documentation));
     }
 
     if let Some((element_tag, replace)) = match start_tag_context(text, offset) {
@@ -85,6 +95,7 @@ pub fn completions_with_strict_mode(
             element_tag,
             replace,
             strict_mode,
+            markdown_documentation,
         ));
     }
 
@@ -157,6 +168,7 @@ fn html_attribute_completions(
     element: &str,
     replace: std::ops::Range<usize>,
     strict_mode: bool,
+    markdown: bool,
 ) -> CompletionList {
     // `htmlCompletion.js:205-213` also skips a name the tag already carries;
     // that dedup is not ported, so a written attribute is still offered.
@@ -208,7 +220,10 @@ fn html_attribute_completions(
                     } else {
                         CompletionItemKind::VALUE
                     }),
-                    documentation: Some(markdown(attribute.description.to_string())),
+                    documentation: Some(html_documentation(
+                        markdown,
+                        attribute.description.to_string(),
+                    )),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     sort_text,
                     text_edit: Some(lsp_types::CompletionTextEdit::Edit(TextEdit {
@@ -232,7 +247,7 @@ fn tag_prefix(text: &str, offset: usize) -> Option<&str> {
     .then_some(prefix)
 }
 
-fn html_tag_completions(prefix: &str) -> CompletionList {
+fn html_tag_completions(prefix: &str, markdown: bool) -> CompletionList {
     CompletionList {
         is_incomplete: false,
         items: TAGS
@@ -241,7 +256,7 @@ fn html_tag_completions(prefix: &str) -> CompletionList {
             .map(|tag| CompletionItem {
                 label: tag.name.to_string(),
                 kind: Some(CompletionItemKind::CLASS),
-                documentation: Some(markdown(tag.description.to_string())),
+                documentation: Some(html_documentation(markdown, tag.description.to_string())),
                 ..CompletionItem::default()
             })
             .chain(
@@ -251,7 +266,10 @@ fn html_tag_completions(prefix: &str) -> CompletionList {
                     .map(|tag| CompletionItem {
                         label: (*tag).to_string(),
                         kind: Some(CompletionItemKind::CLASS),
-                        documentation: Some(markdown("A standard HTML element.".to_string())),
+                        documentation: Some(html_documentation(
+                            markdown,
+                            "A standard HTML element.".to_string(),
+                        )),
                         ..CompletionItem::default()
                     }),
             )
@@ -502,6 +520,20 @@ fn component_documentation(window: &str) -> Option<CompletionList> {
     })
 }
 
+/// `generateDocumentation` (`dataProvider.js:197-199`) spells the HTML data
+/// tables' prose the way the client asked for it, while the Svelte plugin's own
+/// tables (`getCompletions.ts:262`, `getModifierData.ts:52`) are always Markdown.
+fn html_documentation(markdown_supported: bool, value: String) -> Documentation {
+    Documentation::MarkupContent(MarkupContent {
+        kind: if markdown_supported {
+            MarkupKind::Markdown
+        } else {
+            MarkupKind::PlainText
+        },
+        value,
+    })
+}
+
 const fn markdown(value: String) -> Documentation {
     Documentation::MarkupContent(MarkupContent {
         kind: MarkupKind::Markdown,
@@ -659,6 +691,38 @@ mod tests {
         assert_eq!(content.kind, MarkupKind::Markdown);
         assert_eq!(content.value, SvelteTag::Html.documentation());
         assert!(content.value.starts_with("`{@html ...}`\\\n"));
+    }
+
+    /// `generateDocumentation` (`dataProvider.js:197-199`) reads the client's
+    /// `documentationFormat`; `getCompletions.ts:262` and `getModifierData.ts:52`
+    /// do not, so the two families must answer this differently.
+    #[test]
+    fn only_the_html_tables_follow_the_client_documentation_format() {
+        let kind = |source: &str, offset: usize, label: &str, markdown: bool| {
+            let items = completions_with_strict_mode(source, offset, false, markdown)
+                .unwrap()
+                .items;
+            let item = items.iter().find(|i| i.label == label).unwrap();
+            let Some(Documentation::MarkupContent(content)) = &item.documentation else {
+                panic!("{label} carried no markup documentation");
+            };
+            content.kind.clone()
+        };
+        for markdown in [true, false] {
+            let expected = if markdown {
+                MarkupKind::Markdown
+            } else {
+                MarkupKind::PlainText
+            };
+            assert_eq!(kind("<div ", 5, "class", markdown), expected);
+            assert_eq!(kind("<di", 3, "div", markdown), expected);
+            // The Svelte plugin's own tables are Markdown either way.
+            assert_eq!(kind("{@", 2, "html", markdown), MarkupKind::Markdown);
+            assert_eq!(
+                kind("<div on:click|", 14, "once", markdown),
+                MarkupKind::Markdown
+            );
+        }
     }
 
     #[test]

@@ -857,6 +857,7 @@ impl Server {
                     text,
                     offset,
                     strict_mode: self.settings.format_config.strict_mode.unwrap_or(false),
+                    markdown_documentation: self.client.markdown_documentation,
                 });
             }
             None => self.forward_tsgo_request(tsgo_fallback),
@@ -4184,6 +4185,14 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
     match method {
         "textDocument/completion" => {
             let mut fallback = fallback;
+            // `PluginHost.ts:278-281` ORs the flag over every contributing
+            // plugin; hardcoding it says the list is exhaustive when tsgo has
+            // just said it is not.
+            let incomplete = [&*result, &fallback].into_iter().any(|list| {
+                list.get("isIncomplete")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            });
             let fallback_items = fallback
                 .get_mut("items")
                 .and_then(serde_json::Value::as_array_mut);
@@ -4193,7 +4202,10 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
             if let (Some(fallback_items), Some(result_items)) = (fallback_items, result_items) {
                 fallback_items.append(result_items);
                 if let Some(object) = fallback.as_object_mut() {
-                    object.insert("isIncomplete".to_string(), serde_json::Value::Bool(false));
+                    object.insert(
+                        "isIncomplete".to_string(),
+                        serde_json::Value::Bool(incomplete),
+                    );
                 }
                 *result = fallback;
             }
