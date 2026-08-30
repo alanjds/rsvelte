@@ -926,6 +926,27 @@ Rules, in the order they are cheap:
    which one (`-p <crate> --lib --tests`), because the reader cannot tell from
    the output whether your file was in it.
 
+### Three things answer to "the official compiler", and they disagree
+
+An ad-hoc probe that does `import { compile } from 'svelte/compiler'` does **not** get the
+compiler the gates use. Measured on one input (`{ a: function () {} }` in an instance script):
+
+| entry point | `VERSION` | output |
+|---|---|---|
+| `svelte/compiler` (npm) | 5.56.10 | `a: function () {` |
+| `submodules/svelte/packages/svelte/src/compiler/index.js` | 5.56.10 | `a() {` |
+| `submodules/svelte/packages/svelte/compiler/index.js` (built) | **5.56.8** | `a() {` |
+
+The gates use the **source** path, centralised as `OFFICIAL_COMPILER_REL` in
+`scripts/compat-corpus/oracle.mjs`; use it in a probe too. **`VERSION` proves nothing** — two
+of the three disagree on output while reporting the same string, and the third reports a
+different string while agreeing. This cost a near-miss: a correct `auto_method` lowering was
+diagnosed as a defect and nearly deleted from three ports, because the npm build prints
+`close: function ($$arg) {` where the submodule prints `close($$arg) {`.
+
+No gate compares generated code against the npm build (`test-wasm-compile-options.mjs` imports
+it only to ask whether an option *throws*), so the hazard is probes, not gates.
+
 ### Working with Subagents
 
 Use the `Agent` tool for substantial work — feature implementation, multi-file refactors, broad code exploration, or anything likely to consume meaningful context.
