@@ -2956,6 +2956,29 @@ repro mutation-tests it. **Still open for the rest of the corpus** — a submodu
 introduces a new real-world file is the same lottery, and there is no cheap fix, because
 "newly added" is a diff against the merge base rather than a property of the manifest.
 
+### Blind spot 20g — `eligible` uses ratchet listing as a proxy for "the seed matches unmutated", and the proxy fails on exactly the set it wanted to exclude [D]
+
+`eligible` is `manifest ∖ (union of the four output ratchets)` (`:145-152`), because a seed that
+diverges *unmutated* cannot attribute a mutant. That is the right intent implemented against the
+wrong quantity: being listed is not the same as diverging, in either direction. A listed id may
+already pass (the stale side of a two-sided ratchet — 280 of 613 listed pairs were byte-equal
+when measured on 2026-08-31), and an **unlisted id may diverge**, which is the direction that
+lets an unattributable seed into the population.
+
+**[D]** Measured 2026-08-31 with the mutation gate's own comparison and no comment inserted:
+**116 match / 6 comment-mismatch over the 38 enrolled seeds**, with the divergence coming from
+**2 seeds** — `layerchart/…/Canvas.svelte` (all four targets) and `…/NotebookView.svelte`
+(client, client-dev). So **6 of the 14 residual `comment-mismatch` pairs are not attributable to
+the mutation at all**; no change to comment handling can move them. Reducing `Canvas.svelte`
+gives a 12-line hand-reproducible defect (a template-expression function body containing only a
+comment loses the comment in client output, across all seven template slots, with a body
+containing one statement as the passing control) — a real divergence in a file no output ratchet
+lists, which is also why the same file reached this gate's seed set.
+
+Closing it needs the property itself rather than the proxy: run each seed **unmutated** once and
+exclude the ones that already diverge. Cost is one extra compile per seed, and it produces the
+`match`-baseline this gate currently assumes without measuring.
+
 ---
 
 ## 21. Published-artifact glibc floor — `scripts/release/check-glibc-floor.sh`
