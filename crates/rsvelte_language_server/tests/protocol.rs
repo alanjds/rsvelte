@@ -1089,9 +1089,10 @@ fn serves_completions_and_hover() {
 
     // Hover over `#each` documents the block.
     let hover = server.hover(&uri, 5, 5);
-    let contents = hover["contents"]["value"].as_str().unwrap();
+    // `getHoverInfo.ts:56` answers a tag with `{ contents: <string> }`; a
+    // `MarkupContent` wrapper around the same text is a different wire response.
+    let contents = hover["contents"].as_str().unwrap();
     assert!(contents.starts_with("`{#each ...}`"), "{contents}");
-    assert_eq!(hover["contents"]["kind"], json!("markdown"));
 
     // Hover inside `<script>` is the TypeScript plugin's business, not ours.
     assert_eq!(server.hover(&uri, 1, 8), Value::Null);
@@ -1199,7 +1200,12 @@ fn the_settings_switch_completion_and_hover_off() {
     server.settle_configuration();
     did_open(&mut server, &uri, "<p>{#each a as b}{/each}</p>\n{#");
 
-    assert_eq!(server.completion_response(&uri, 1, 2), Value::Null);
+    // `PluginHost.getCompletions` has no path that returns null: a disabled
+    // plugin contributes nothing and the host still answers a `CompletionList`.
+    assert_eq!(
+        server.completion_response(&uri, 1, 2),
+        json!({ "isIncomplete": false, "items": [] })
+    );
     assert_eq!(server.hover(&uri, 0, 5), Value::Null);
 
     assert_eq!(server.shutdown(), Some(0));
