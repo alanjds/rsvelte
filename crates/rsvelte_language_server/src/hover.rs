@@ -3,7 +3,7 @@
 //! A port of the official language server's
 //! `plugins/svelte/features/getHoverInfo.ts`.
 
-use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+use lsp_types::{Hover, HoverContents, MarkedString, MarkupContent, MarkupKind};
 
 use crate::context::{EmbeddedRegions, attribute_context};
 use crate::html_data::attribute as html_attribute;
@@ -39,7 +39,7 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
 
     if opens_a_tag(window) {
         let tag = tag_at(text, window_start, window, offset)?;
-        return Some(markdown(tag.documentation().to_string()));
+        return Some(plain(tag.documentation().to_string()));
     }
 
     let attribute = attribute_context(text, offset)?;
@@ -57,7 +57,7 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     let modifier = MODIFIERS.iter().find(|modifier| {
         around_offset(attribute.name_start, attribute.name, modifier.name, offset)
     })?;
-    Some(markdown(modifier.documentation()))
+    Some(plain(modifier.documentation()))
 }
 
 /// The `WINDOW` characters before `offset` plus what follows them, as the
@@ -119,6 +119,15 @@ fn around_offset(haystack_start: usize, haystack: &str, needle: &str, offset: us
     start <= offset && start + needle.len() >= offset
 }
 
+/// `getHoverInfo.ts` hands back `{ contents: <string> }`; a `MarkupContent`
+/// wrapper around the same text is a different response on the wire.
+const fn plain(value: String) -> Hover {
+    Hover {
+        contents: HoverContents::Scalar(MarkedString::String(value)),
+        range: None,
+    }
+}
+
 const fn markdown(value: String) -> Hover {
     Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -135,11 +144,14 @@ mod tests {
 
     fn hovered_tag(content: &str, offset: usize) -> Option<String> {
         let hover = hover(content, offset)?;
-        let HoverContents::Markup(content) = hover.contents else {
-            panic!("expected markdown hover");
-        };
-        assert_eq!(content.kind, MarkupKind::Markdown);
-        Some(content.value)
+        match hover.contents {
+            HoverContents::Scalar(MarkedString::String(value)) => Some(value),
+            HoverContents::Markup(content) => {
+                assert_eq!(content.kind, MarkupKind::Markdown);
+                Some(content.value)
+            }
+            _ => panic!("expected a hover body"),
+        }
     }
 
     fn expect_tag(content: &str, offset: usize, tag: SvelteTag) {
