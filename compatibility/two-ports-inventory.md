@@ -710,6 +710,40 @@ type-argument arm's `move_range` path — but it changes which chunk the `;` mar
 which is exactly the ordering `process_instance_script_tag.rs:301-310` comments as load-bearing,
 so it needs the corpus svelte2tsx text gate rather than a unit test alone.
 
+### 19. What compiler options and shim files does the shadow program get? — [D], opened deliberately
+
+**Upstream:** one function, `plugins/typescript/service.ts`'s `createLanguageService`. It forces
+`target: ts.ScriptTarget.Latest` when the project declares none and raises anything below ES2015
+to ES2015 (`:792-795`), builds its no-project fallback with `include: []` "to not flood the
+initial files" (`:874-878`), and takes its shim set from svelte2tsx's `get_global_types`, which
+always contains `svelte-native-jsx.d.ts` (`svelte2tsx/index.js:5685`).
+
+**Ports.** `rsvelte_language_server` `tsgo_overlay.rs::write_tsconfig` /
+`materialize_support_files`, and `rsvelte_check` `svelte_check/overlay.rs`. They write the same
+kind of generated tsconfig beside the same two vendored shims, and neither calls the other.
+
+**Demonstrated, and this row is the unusual case where the divergence was created here on
+purpose.** All three rules were missing from *both* ports; the language-server one now carries
+them and the svelte-check one does not. Measured on three mini-workspaces against the live
+official server, completion at a script-body position:
+
+| workspace | official has `Temporal`/`DisposableStack`/`AsyncDisposableStack`/`SuppressedError`/`svelteNative` | rsvelte LSP before | rsvelte LSP after |
+|---|---|---|---|
+| no `tsconfig.json` | all five | none | all five |
+| `target: ES5` | `svelteNative` only | none | `svelteNative` only |
+| `target: ESNext` | all five | four (no `svelteNative`) | all five |
+
+The `include` rule is the largest of the three by effect: with no project config rsvelte pulled
+every `.d.ts` in the repository into the program, so bits-ui's own `declare global`s
+(`bitsEscapeLayers` and five siblings) were offered as completions at **55 of 285** sampled
+script-body positions where official offers nothing.
+
+**Why the asymmetry was left.** svelte-check's unit is a type-checked project, so the same change
+moves `check-known-failures.json`, and neither layer of that gate is runnable from the worktree
+this was measured in — Layer 2 needs `submodules/cmsaasstarter` and the skeleton monorepo
+installed from their own lockfiles. Closing this row is degree 1 (`rsvelte_check`'s overlay takes
+the same three rules) plus one run of the check gate; it is not a design question.
+
 
 ## Adding a row, and closing one
 
