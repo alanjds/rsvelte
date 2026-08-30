@@ -1581,6 +1581,48 @@ fn code_lens_respects_its_setting() {
 
 /// A client that declares neither capability gets folding ranges with
 /// characters and a flat `SymbolInformation` list.
+/// `FoldingRangeProvider.ts:54-56` drops a range inside one line for a client
+/// that folds by line. `folding.rs` decides that from a flag the client state
+/// carries, and nothing else asserts that the capability reaches it.
+#[test]
+fn a_line_folding_client_is_never_sent_a_range_inside_one_line() {
+    const ONE_LINERS: &str = concat!(
+        "<script>\n",
+        "  let a = 1;\n",
+        "</script>\n",
+        "\n",
+        "{#if a}<span>x</span>{/if}\n",
+        "<div>\n",
+        "  <p>y</p>\n",
+        "</div>\n",
+    );
+    let dir = temp_dir("folding-line-only");
+    let uri = file_uri(&dir.join("App.svelte"));
+    let (mut server, _) = server_with(json!({ "foldingRange": { "lineFoldingOnly": true } }));
+    did_open(&mut server, &uri, ONE_LINERS);
+
+    let folds = server.folding_ranges(&uri);
+    assert!(!folds.is_empty(), "the document folds at all");
+    for fold in &folds {
+        assert_ne!(
+            fold["startLine"], fold["endLine"],
+            "a line-folding client was sent {fold}"
+        );
+    }
+
+    let (mut character, _) = server_with(json!({ "foldingRange": {} }));
+    did_open(&mut character, &uri, ONE_LINERS);
+    assert!(
+        character
+            .folding_ranges(&uri)
+            .iter()
+            .any(|fold| fold["startLine"] == fold["endLine"]),
+        "a character-folding client keeps them, so the assertion above can fail"
+    );
+    assert_eq!(server.shutdown(), Some(0));
+    assert_eq!(character.shutdown(), Some(0));
+}
+
 #[test]
 fn a_client_without_the_modern_capabilities_is_served_the_old_shapes() {
     let dir = temp_dir("structure-flat");
