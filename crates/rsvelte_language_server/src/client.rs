@@ -46,6 +46,10 @@ pub struct ClientState {
     pub semantic_token_modifiers: Vec<String>,
     /// Whether project JavaScript such as `svelte.config.js` may be executed.
     pub is_trusted: bool,
+    /// `HTMLCompletion.doesSupportMarkdown` (`htmlCompletion.js:554-563`): the
+    /// documentation a completion item carries is Markdown only where the
+    /// client asked for it, and plain text otherwise.
+    pub markdown_documentation: bool,
 }
 
 impl ClientState {
@@ -94,6 +98,12 @@ impl ClientState {
                 .pointer("/initializationOptions/isTrusted")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
+            markdown_documentation: params.get("capabilities").is_none_or(|_| {
+                params
+                    .pointer("/capabilities/textDocument/completion/completionItem/documentationFormat")
+                    .and_then(Value::as_array)
+                    .is_some_and(|formats| formats.iter().any(|format| format == "markdown"))
+            }),
         }
     }
 

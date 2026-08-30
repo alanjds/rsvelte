@@ -50,19 +50,45 @@ use crate::svelte2tsx::{
 /// to upstream — tsgo consumes them verbatim.
 const SHIM_SVELTE_SHIMS_V4: &str = include_str!("shims/svelte-shims-v4.d.ts");
 const SHIM_SVELTE_JSX_V4: &str = include_str!("shims/svelte-jsx-v4.d.ts");
+const SHIM_SVELTE_NATIVE_JSX: &str = include_str!("shims/svelte-native-jsx.d.ts");
 
 /// Filenames the shims are written under inside the cache dir. Names
 /// match upstream so diagnostics / `isSvelteShim`-style checks line up.
-const SHIM_FILES: &[(&str, &str)] = &[
+pub const SHIM_FILES: &[(&str, &str)] = &[
     (SHIM_SHIMS_V4_NAME, SHIM_SVELTE_SHIMS_V4),
     (SHIM_JSX_V4_NAME, SHIM_SVELTE_JSX_V4),
+    (SHIM_NATIVE_JSX_NAME, SHIM_SVELTE_NATIVE_JSX),
 ];
 
-const SHIM_SHIMS_V4_NAME: &str = "svelte-shims-v4.d.ts";
-const SHIM_JSX_V4_NAME: &str = "svelte-jsx-v4.d.ts";
+pub const SHIM_SHIMS_V4_NAME: &str = "svelte-shims-v4.d.ts";
+pub const SHIM_JSX_V4_NAME: &str = "svelte-jsx-v4.d.ts";
+pub const SHIM_NATIVE_JSX_NAME: &str = "svelte-native-jsx.d.ts";
 
 /// The `svelte` package file that supersedes the vendored JSX shim.
 const SVELTE_HTML_DTS: &str = "svelte-html.d.ts";
+
+/// The global type files upstream's `get_global_types` names for the svelte
+/// installed above `workspace`: the vendored shim basenames, plus the
+/// package's own `svelte-html.d.ts` when it has one
+/// (`svelte2tsx/src/helpers/files.ts:15-27`). The JSX shim is a *fallback*
+/// for a package without that file, so shipping both puts two `svelteHTML`
+/// namespaces in one program.
+#[must_use]
+pub fn global_type_files(workspace: &Path) -> (Vec<&'static str>, Option<PathBuf>) {
+    let root = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let svelte_html = resolve_svelte_package(&root).and_then(|pkg| {
+        if pkg.major == Some(3) {
+            return None;
+        }
+        let path = pkg.dir.join(SVELTE_HTML_DTS);
+        path.is_file().then_some(path)
+    });
+    let mut shims = vec![SHIM_SHIMS_V4_NAME, SHIM_NATIVE_JSX_NAME];
+    if svelte_html.is_none() {
+        shims.push(SHIM_JSX_V4_NAME);
+    }
+    (shims, svelte_html)
+}
 
 /// Cache-dir name of the rewritten copy of the installed svelte's bundled
 /// declarations (see [`materialize_svelte_types_shadow`]).
@@ -123,21 +149,9 @@ fn select_global_types(workspace: &Path, cache_dir: &Path) -> GlobalTypes {
     // a different directory than the CLI's cwd a relative `--workspace`
     // resolves against.
     let root = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    let package = resolve_svelte_package(&root);
-    let svelte_html = package.as_ref().and_then(|pkg| {
-        if pkg.major == Some(3) {
-            return None;
-        }
-        let path = pkg.dir.join(SVELTE_HTML_DTS);
-        path.is_file().then_some(path)
-    });
-    let svelte_types = package
-        .as_ref()
+    let (shims, svelte_html) = global_type_files(&root);
+    let svelte_types = resolve_svelte_package(&root)
         .and_then(|pkg| materialize_svelte_types_shadow(&pkg.dir, cache_dir));
-    let mut shims = vec![SHIM_SHIMS_V4_NAME];
-    if svelte_html.is_none() {
-        shims.push(SHIM_JSX_V4_NAME);
-    }
     GlobalTypes {
         shims,
         svelte_html,
@@ -5705,7 +5719,10 @@ mod tests {
         fake_svelte_package(&tmp, "5.56.8", true);
 
         let selected = select_global_types(&tmp, &tmp.join(".svelte-check"));
-        assert_eq!(selected.shims, vec![SHIM_SHIMS_V4_NAME]);
+        assert_eq!(
+            selected.shims,
+            vec![SHIM_SHIMS_V4_NAME, SHIM_NATIVE_JSX_NAME]
+        );
         assert_eq!(selected.svelte_html, expected_svelte_html(&tmp));
 
         let _ = fs::remove_dir_all(&tmp);
@@ -5720,7 +5737,7 @@ mod tests {
         let selected = select_global_types(&tmp, &tmp.join(".svelte-check"));
         assert_eq!(
             selected.shims,
-            vec![SHIM_SHIMS_V4_NAME, SHIM_JSX_V4_NAME],
+            vec![SHIM_SHIMS_V4_NAME, SHIM_NATIVE_JSX_NAME, SHIM_JSX_V4_NAME],
             "without a project `svelte-html.d.ts` the vendored JSX shim is the \
              only source of `svelteHTML.IntrinsicElements`"
         );
@@ -5738,7 +5755,10 @@ mod tests {
         fake_svelte_package(&tmp, "3.59.2", true);
 
         let selected = select_global_types(&tmp, &tmp.join(".svelte-check"));
-        assert_eq!(selected.shims, vec![SHIM_SHIMS_V4_NAME, SHIM_JSX_V4_NAME]);
+        assert_eq!(
+            selected.shims,
+            vec![SHIM_SHIMS_V4_NAME, SHIM_NATIVE_JSX_NAME, SHIM_JSX_V4_NAME]
+        );
         assert_eq!(selected.svelte_html, None);
 
         let _ = fs::remove_dir_all(&tmp);
@@ -5751,7 +5771,10 @@ mod tests {
         fs::create_dir_all(tmp.join("src")).unwrap();
 
         let selected = select_global_types(&tmp.join("src"), &tmp.join(".svelte-check"));
-        assert_eq!(selected.shims, vec![SHIM_SHIMS_V4_NAME, SHIM_JSX_V4_NAME]);
+        assert_eq!(
+            selected.shims,
+            vec![SHIM_SHIMS_V4_NAME, SHIM_NATIVE_JSX_NAME, SHIM_JSX_V4_NAME]
+        );
         assert_eq!(selected.svelte_html, None);
 
         let _ = fs::remove_dir_all(&tmp);

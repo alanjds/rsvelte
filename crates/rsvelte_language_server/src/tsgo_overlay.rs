@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use lsp_types::{Position, Range, Uri};
+use rsvelte_check::overlay::{SHIM_FILES, global_type_files};
 use rsvelte_projection::{
     ProjectionEngine, ProjectionMap, RewriteExternalImportsOptions, Svelte2TsxMode,
     Svelte2TsxNamespace, Svelte2TsxOptions, SvelteVersion,
@@ -26,16 +27,6 @@ const CACHE_DIRECTORY: &str = ".rsvelte-language-server";
 const TSGO_DIRECTORY: &str = "tsgo";
 const SHADOW_DIRECTORY: &str = "svelte";
 const OVERLAY_TSCONFIG: &str = "tsconfig.json";
-const SHIM_SHIMS_NAME: &str = "svelte-shims-v4.d.ts";
-const SHIM_JSX_NAME: &str = "svelte-jsx-v4.d.ts";
-const SHIM_NATIVE_JSX_NAME: &str = "svelte-native-jsx.d.ts";
-const SHIM_SHIMS: &str =
-    include_str!("../../rsvelte_check/src/svelte_check/shims/svelte-shims-v4.d.ts");
-const SHIM_JSX: &str =
-    include_str!("../../rsvelte_check/src/svelte_check/shims/svelte-jsx-v4.d.ts");
-/// `get_global_types` puts this in every shim set it builds, Svelte 3 or 4+.
-const SHIM_NATIVE_JSX: &str =
-    include_str!("../../rsvelte_check/src/svelte_check/shims/svelte-native-jsx.d.ts");
 const IGNORE_START: &str = "/*Ωignore_startΩ*/";
 const IGNORE_END: &str = "/*Ωignore_endΩ*/";
 
@@ -881,11 +872,7 @@ impl TsgoOverlay {
 
     fn materialize_support_files(&self) -> Result<(), TsgoOverlayError> {
         reject_symlink_components(&self.cache_dir, &self.cache_dir)?;
-        for (name, contents) in [
-            (SHIM_SHIMS_NAME, SHIM_SHIMS),
-            (SHIM_JSX_NAME, SHIM_JSX),
-            (SHIM_NATIVE_JSX_NAME, SHIM_NATIVE_JSX),
-        ] {
+        for (name, contents) in SHIM_FILES {
             let path = self.cache_dir.join(name);
             reject_symlink_components(&path, &self.cache_dir)?;
             write_if_changed(&path, contents)?;
@@ -911,11 +898,12 @@ impl TsgoOverlay {
             // repository — and its `declare global`s — into the program.
             include.push(format!("{}/**/*", path_for_tsconfig(root)));
         }
-        let mut files = vec![
-            SHIM_SHIMS_NAME.to_string(),
-            SHIM_JSX_NAME.to_string(),
-            SHIM_NATIVE_JSX_NAME.to_string(),
-        ];
+        let (shims, svelte_html) = global_type_files(&self.workspace);
+        let mut files = shims
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        files.extend(svelte_html.as_deref().map(path_for_tsconfig));
         files.extend(specs.files.unwrap_or_default());
         let mut config = json!({
             "compilerOptions": {
@@ -1888,6 +1876,7 @@ fn path_to_uri(path: &Path) -> Result<Uri, TsgoOverlayError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsvelte_check::overlay::{SHIM_JSX_V4_NAME, SHIM_NATIVE_JSX_NAME, SHIM_SHIMS_V4_NAME};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestWorkspace(PathBuf);
@@ -1993,8 +1982,8 @@ mod tests {
         assert!(shadow_path.parent().unwrap().is_dir());
         assert!(!shadow_path.exists());
         assert!(overlay.tsconfig_path().is_file());
-        assert!(overlay.cache_dir().join(SHIM_SHIMS_NAME).is_file());
-        assert!(overlay.cache_dir().join(SHIM_JSX_NAME).is_file());
+        assert!(overlay.cache_dir().join(SHIM_SHIMS_V4_NAME).is_file());
+        assert!(overlay.cache_dir().join(SHIM_JSX_V4_NAME).is_file());
         assert!(overlay.unresolved_shadow_routes().is_empty());
     }
 
@@ -2030,8 +2019,8 @@ mod tests {
             &overlay.workspace().join("src/**/*.ts")
         ))));
         let files = config["files"].as_array().unwrap();
-        assert!(files.contains(&json!(SHIM_SHIMS_NAME)));
-        assert!(files.contains(&json!(SHIM_JSX_NAME)));
+        assert!(files.contains(&json!(SHIM_SHIMS_V4_NAME)));
+        assert!(files.contains(&json!(SHIM_JSX_V4_NAME)));
         assert!(files.contains(&json!(path_for_tsconfig(
             &overlay.workspace().join("ambient.d.ts")
         ))));
@@ -2129,6 +2118,26 @@ mod tests {
                 .unwrap()
                 .contains(&json!(SHIM_NATIVE_JSX_NAME))
         );
+    }
+
+    #[test]
+    fn the_jsx_shim_is_a_fallback_for_a_package_without_svelte_html() {
+        // `get_global_types` pushes `svelte-jsx-v4.d.ts` only when the
+        // installed svelte has no `svelte-html.d.ts`; shipping both would put
+        // two `svelteHTML` namespaces in one program.
+        let workspace = TestWorkspace::new("jsx-shim-fallback");
+        let svelte = workspace.0.join("node_modules").join("svelte");
+        write(&svelte.join("package.json"), r#"{"version":"5.0.0"}"#);
+
+        let (without, html) = global_type_files(&workspace.0);
+        assert_eq!(html, None);
+        assert!(without.contains(&SHIM_JSX_V4_NAME));
+
+        write(&svelte.join("svelte-html.d.ts"), "");
+        let (with, html) = global_type_files(&workspace.0);
+        assert!(html.is_some_and(|path| path.ends_with("svelte/svelte-html.d.ts")));
+        assert!(!with.contains(&SHIM_JSX_V4_NAME));
+        assert!(with.contains(&SHIM_SHIMS_V4_NAME) && with.contains(&SHIM_NATIVE_JSX_NAME));
     }
 
     #[test]

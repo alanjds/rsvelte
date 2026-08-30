@@ -846,7 +846,10 @@ fn official_settings_drive_tag_close_and_strict_attribute_completions() {
         .into_iter()
         .find(|item| item["label"] == "on:click")
         .unwrap();
-    assert_eq!(click["insertText"], json!("on:click$2=\"{$1}\""));
+    // `htmlCompletion.js:213-219` carries the snippet in a `textEdit`, never in
+    // `insertText`.
+    assert_eq!(click["insertText"], Value::Null);
+    assert_eq!(click["textEdit"]["newText"], json!("on:click$2=\"{$1}\""));
     assert_eq!(server.shutdown(), Some(0));
 }
 
@@ -1087,11 +1090,11 @@ fn serves_completions_and_hover() {
     // 23 == CompletionItemKind.Event
     assert_eq!(items[0]["kind"], json!(23));
 
-    // Hover over `#each` documents the block.
+    // Hover over `#each` documents the block. `getHoverInfo.ts:56` returns
+    // `{ contents: documentation[tag] }` — a bare string, not `MarkupContent`.
     let hover = server.hover(&uri, 5, 5);
-    let contents = hover["contents"]["value"].as_str().unwrap();
+    let contents = hover["contents"].as_str().unwrap();
     assert!(contents.starts_with("`{#each ...}`"), "{contents}");
-    assert_eq!(hover["contents"]["kind"], json!("markdown"));
 
     // Hover inside `<script>` is the TypeScript plugin's business, not ours.
     assert_eq!(server.hover(&uri, 1, 8), Value::Null);

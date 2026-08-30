@@ -836,8 +836,11 @@ impl Server {
                 return;
             }
         };
+        // `rsvelte.completion.enable` has no upstream counterpart, so
+        // `PluginHost.ts:298` — which is about every plugin declining — does not
+        // govern a server the user configured not to answer at all.
         if !self.settings.completion_enable {
-            self.respond(Response::new_ok(id, empty_completion_list()));
+            self.respond_nothing(id);
             return;
         }
         if !self.settings.native_completion_enabled() {
@@ -854,6 +857,7 @@ impl Server {
                     text,
                     offset,
                     strict_mode: self.settings.format_config.strict_mode.unwrap_or(false),
+                    markdown_documentation: self.client.markdown_documentation,
                 });
             }
             None => self.forward_tsgo_request(tsgo_fallback),
@@ -2132,17 +2136,39 @@ impl Server {
                 CompletionSite::Script
             });
         }
-        if let Some(prefix) = crate::context::attribute_prefix_context(text, offset) {
-            let component = prefix
-                .element_tag
-                .starts_with(|character: char| character.is_ascii_uppercase());
-            return Some(if component {
-                CompletionSite::ComponentStartTag {
-                    at_whitespace: prefix.prefix.is_empty(),
-                }
-            } else {
-                CompletionSite::ElementStartTag
-            });
+        // A `<script>` / `<style>` start tag is not an `Element` in the Svelte
+        // AST — the block is hoisted to `instance` / `module` / `css` — so
+        // upstream's `svelteNode?.type === 'Element'` guard never fires there.
+        let start_tag = crate::context::start_tag_context(text, offset);
+        if let crate::context::StartTag::Attribute(attribute) = &start_tag
+            // An attribute value's `Text` has an `Attribute` parent, which is
+            // not in upstream's raw-text bail list, and `svelteNodeAt` answers
+            // `Text` rather than the element, so neither guard fires.
+            && attribute.in_value
+        {
+            return Some(CompletionSite::Unguarded);
+        }
+        if let Some((element_tag, in_tag_name)) = match &start_tag {
+            crate::context::StartTag::Attribute(attribute) => Some((attribute.element_tag, false)),
+            crate::context::StartTag::Bare { element_tag } => Some((*element_tag, false)),
+            crate::context::StartTag::TagName { element_tag } => Some((*element_tag, true)),
+            crate::context::StartTag::None => None,
+        } {
+            if is_embedded_tag(element_tag) {
+                return Some(CompletionSite::Unguarded);
+            }
+            return Some(
+                if element_tag.starts_with(|character: char| character.is_ascii_uppercase()) {
+                    CompletionSite::ComponentStartTag {
+                        // Upstream answers nothing at a component's own name;
+                        // narrowing is the shape that reproduces it.
+                        at_whitespace: in_tag_name
+                            || might_be_at_start_tag_whitespace(text, offset),
+                    }
+                } else {
+                    CompletionSite::ElementStartTag
+                },
+            );
         }
         let before = text.get(..offset)?;
         let brace = before.rfind('{');
@@ -3302,6 +3328,9 @@ impl Server {
                         );
                         *result = resolve.lens;
                     }
+                    if method == "textDocument/foldingRange" {
+                        drop_degenerate_folding_ranges(result, self.client.line_folding_only);
+                    }
                     if let Some(fallback) = fallback_result {
                         merge_tsgo_result(&method, result, fallback);
                     }
@@ -4132,6 +4161,22 @@ fn is_project_config(uri: &Uri) -> bool {
         .any(|name| uri.as_str().rsplit('/').next() == Some(name))
 }
 
+/// `FoldingRangeProvider.ts:54-56`: a client that folds by line has no use for a
+/// range inside one line, and an inverted range is never emitted.
+fn drop_degenerate_folding_ranges(result: &mut serde_json::Value, line_folding_only: bool) {
+    let Some(ranges) = result.as_array_mut() else {
+        return;
+    };
+    ranges.retain(|range| {
+        let line = |key| range.get(key).and_then(serde_json::Value::as_u64);
+        match (line("startLine"), line("endLine")) {
+            (Some(start), Some(end)) if line_folding_only => start < end,
+            (Some(start), Some(end)) => start <= end,
+            _ => true,
+        }
+    });
+}
+
 fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: serde_json::Value) {
     if result.is_null() {
         *result = fallback;
@@ -4140,6 +4185,14 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
     match method {
         "textDocument/completion" => {
             let mut fallback = fallback;
+            // `PluginHost.ts:278-281` ORs the flag over every contributing
+            // plugin; hardcoding it says the list is exhaustive when tsgo has
+            // just said it is not.
+            let incomplete = [&*result, &fallback].into_iter().any(|list| {
+                list.get("isIncomplete")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            });
             let fallback_items = fallback
                 .get_mut("items")
                 .and_then(serde_json::Value::as_array_mut);
@@ -4149,7 +4202,10 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
             if let (Some(fallback_items), Some(result_items)) = (fallback_items, result_items) {
                 fallback_items.append(result_items);
                 if let Some(object) = fallback.as_object_mut() {
-                    object.insert("isIncomplete".to_string(), serde_json::Value::Bool(false));
+                    object.insert(
+                        "isIncomplete".to_string(),
+                        serde_json::Value::Bool(incomplete),
+                    );
                 }
                 *result = fallback;
             }
@@ -4291,4 +4347,69 @@ const fn project_config_names() -> &'static [&'static str] {
         "vite.config.ts",
         "vite.config.mts",
     ]
+}
+
+/// Whether a start tag opens a block the Svelte parser hoists out of the
+/// template rather than keeping as an element.
+fn is_embedded_tag(tag: &str) -> bool {
+    tag.eq_ignore_ascii_case("script") || tag.eq_ignore_ascii_case("style")
+}
+
+/// `CompletionProvider.ts:497-501`, which tests `/\s[\s>/]/` against the two
+/// characters straddling the cursor — narrower than "nothing typed yet".
+fn might_be_at_start_tag_whitespace(text: &str, offset: usize) -> bool {
+    let before = text.get(..offset).and_then(|text| text.chars().next_back());
+    let at = text.get(offset..).and_then(|text| text.chars().next());
+    before.is_some_and(char::is_whitespace)
+        && at.is_some_and(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+#[cfg(test)]
+mod folding_tests {
+    use super::drop_degenerate_folding_ranges;
+
+    fn kept(line_folding_only: bool) -> Vec<u64> {
+        let mut result = serde_json::json!([
+            { "startLine": 0, "endLine": 3 },
+            { "startLine": 1, "endLine": 1 },
+            { "startLine": 5, "endLine": 4 },
+            { "startLine": 6 }
+        ]);
+        drop_degenerate_folding_ranges(&mut result, line_folding_only);
+        result
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|range| range["startLine"].as_u64().unwrap())
+            .collect()
+    }
+
+    /// `FoldingRangeProvider.ts:54-56` keeps a single-line range only when the
+    /// client folds by character; an inverted range is dropped either way, and a
+    /// range with no `endLine` is not this filter's business.
+    #[test]
+    fn a_single_line_range_survives_only_a_character_folding_client() {
+        assert_eq!(kept(true), [0, 6]);
+        assert_eq!(kept(false), [0, 1, 6]);
+    }
+}
+
+#[cfg(test)]
+mod start_tag_tests {
+    use super::might_be_at_start_tag_whitespace;
+
+    fn at(text: &str, needle: &str) -> bool {
+        might_be_at_start_tag_whitespace(text, text.find(needle).unwrap() + needle.len())
+    }
+
+    #[test]
+    fn only_whitespace_before_an_empty_slot_counts() {
+        assert!(at("<Comp >", "<Comp "));
+        assert!(at("<Comp />", "<Comp "));
+        assert!(at("<Comp  a>", "<Comp "));
+        // A name is being typed, so the slot is not empty.
+        assert!(!at("<Comp a>", "<Comp "));
+        // Nothing before the cursor is whitespace.
+        assert!(!at("<Comp a >", "<Comp a"));
+    }
 }
