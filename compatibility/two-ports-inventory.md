@@ -890,6 +890,29 @@ call is `NUMBER` to upstream's `globals` table (`Math.random()`, `Number('3')`) 
 the same gap #3539's residue records for the constant folder, reached through a different caller.
 Measured together: 5 divergences over a 116-comparison grid of argument shape x host.
 
+The globals half is now fixed, and it is the first change in this campaign whose blast radius is
+**not zero** — which finally gave the corpus sweep the positive control every "0 of 34,728" above
+was missing. It moves exactly one entry, `ha-fusion/src/lib/Main/ConditionalMedia.svelte`, and it
+moves it *toward* official: `const remainingSeconds = Math.round(remaining / 1000)` is NUMBER
+upstream, so the `console.debug` of it is not wrapped. (The file stays a listed client-dev failure
+for an unrelated comment-placement reason; this removes one line of its divergence.)
+
+Three things it cost. **A membership test that only ever feeds a fold cannot be checked by the
+fold**: `is_global_keypath` matched any `Math.` prefix, so `Math.notAThing` was a global here and
+UNKNOWN upstream — invisible for as long as the only consumer folded (both answer unknown) and
+wrong the instant one reads the TYPE. It is now upstream's exact 46 keys. **The shadow test has to
+be by scope, not by name**: `const Math = { … }` in one function silenced `Math.random()` in every
+other, which is the same name-vs-scope hazard the lint campaign recorded one level down; the
+reference-position set answers it exactly. And **phase 2 records function-locals in
+`root.bindings`**, so the analysis-side name lookup had to be confined to the module and instance
+scopes — the reference set already covers everything below them.
+
+That leaves the template-handler half, and probing it showed the sub-cause is **not** in phase 3 at
+all: for `onclick={() => { const a = 1; … }}`, phase 2 records `a` with `initial: None` — twice,
+once in the arrow's own scope and once in the root FRAGMENT scope — so no phase-3 evaluator could
+answer it correctly even with the right scope index. It is recorded here as phase 2's, alongside
+the `reference_is_plain_local` residue above.
+
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
 which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`
