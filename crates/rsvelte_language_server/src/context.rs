@@ -204,7 +204,9 @@ enum Step<'a> {
 pub enum StartTag<'a> {
     /// Inside one of the tag's attributes.
     Attribute(AttributeContext<'a>),
-    /// Inside the tag but between its parts — the tag name, or whitespace.
+    /// Inside the tag's own name.
+    TagName { element_tag: &'a str },
+    /// Inside the tag but between its parts — whitespace, or a `{…}` spread.
     Bare { element_tag: &'a str },
     /// Not inside any start tag.
     None,
@@ -215,7 +217,7 @@ pub enum StartTag<'a> {
 pub fn attribute_context(text: &str, offset: usize) -> Option<AttributeContext<'_>> {
     match start_tag_context(text, offset) {
         StartTag::Attribute(context) => Some(context),
-        StartTag::Bare { .. } | StartTag::None => None,
+        StartTag::TagName { .. } | StartTag::Bare { .. } | StartTag::None => None,
     }
 }
 
@@ -255,6 +257,9 @@ pub fn start_tag_context(text: &str, offset: usize) -> StartTag<'_> {
             name_end += 1;
         }
         let element_tag = &text[name_start..name_end];
+        if offset <= name_end {
+            return StartTag::TagName { element_tag };
+        }
         match scan_start_tag(text, name_end, offset, element_tag) {
             Step::Found(context) => return StartTag::Attribute(context),
             Step::Resume(next) => i = next,
@@ -405,6 +410,7 @@ mod tests {
                 attribute.name,
                 if attribute.in_value { "=value" } else { "" }
             ),
+            StartTag::TagName { element_tag } => format!("{element_tag}/name"),
             StartTag::Bare { element_tag } => format!("{element_tag}/bare"),
             StartTag::None => "none".to_string(),
         }
@@ -413,7 +419,7 @@ mod tests {
     #[test]
     fn a_start_tag_locates_its_parts() {
         let text = "<div class=\"a b\" hidden>text</div>";
-        assert_eq!(located(text, "<di"), "div/bare");
+        assert_eq!(located(text, "<di"), "div/name");
         assert_eq!(located(text, "cla"), "div/class");
         assert_eq!(located(text, "\"a "), "div/class=value");
         assert_eq!(located(text, "hid"), "div/hidden");
@@ -421,9 +427,22 @@ mod tests {
     }
 
     #[test]
+    fn a_dotted_component_name_is_one_name_and_whitespace_is_not_part_of_it() {
+        // A `.` is a tag-name byte, so the cursor inside `Root` is still in
+        // the name and not in an attribute of a tag called `RadioGroup`.
+        let text = "<RadioGroup.Root class=\"a\"  disabled>x</RadioGroup.Root>";
+        assert_eq!(located(text, "<RadioGroup.Ro"), "RadioGroup.Root/name");
+        // Whitespace with the next attribute still ahead of the cursor.
+        assert_eq!(located(text, "class=\"a\" "), "RadioGroup.Root/bare");
+        // An attribute name that follows a value — the position that used to
+        // fall through to raw template text once the tag carried an `=`.
+        assert_eq!(located(text, "disab"), "RadioGroup.Root/disabled");
+    }
+
+    #[test]
     fn an_embedded_block_is_located_by_its_own_tag_name() {
         let text = "<script lang=\"ts\">\n  let a = 1;\n</script>";
-        assert_eq!(located(text, "<scr"), "script/bare");
+        assert_eq!(located(text, "<scr"), "script/name");
         assert_eq!(located(text, "lan"), "script/lang");
         assert_eq!(located(text, "\"t"), "script/lang=value");
     }

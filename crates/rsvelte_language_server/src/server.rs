@@ -2135,32 +2135,36 @@ impl Server {
         // A `<script>` / `<style>` start tag is not an `Element` in the Svelte
         // AST — the block is hoisted to `instance` / `module` / `css` — so
         // upstream's `svelteNode?.type === 'Element'` guard never fires there.
-        match crate::context::start_tag_context(text, offset) {
-            crate::context::StartTag::Attribute(attribute) => {
-                // An attribute value's `Text` has an `Attribute` parent, which
-                // is not in upstream's raw-text bail list, and `svelteNodeAt`
-                // answers `Text` rather than the element, so neither guard
-                // fires.
-                if attribute.in_value || is_embedded_tag(attribute.element_tag) {
-                    return Some(CompletionSite::Unguarded);
-                }
-            }
-            crate::context::StartTag::Bare { element_tag } if is_embedded_tag(element_tag) => {
+        let start_tag = crate::context::start_tag_context(text, offset);
+        if let crate::context::StartTag::Attribute(attribute) = &start_tag
+            // An attribute value's `Text` has an `Attribute` parent, which is
+            // not in upstream's raw-text bail list, and `svelteNodeAt` answers
+            // `Text` rather than the element, so neither guard fires.
+            && attribute.in_value
+        {
+            return Some(CompletionSite::Unguarded);
+        }
+        if let Some((element_tag, in_tag_name)) = match &start_tag {
+            crate::context::StartTag::Attribute(attribute) => Some((attribute.element_tag, false)),
+            crate::context::StartTag::Bare { element_tag } => Some((*element_tag, false)),
+            crate::context::StartTag::TagName { element_tag } => Some((*element_tag, true)),
+            crate::context::StartTag::None => None,
+        } {
+            if is_embedded_tag(element_tag) {
                 return Some(CompletionSite::Unguarded);
             }
-            crate::context::StartTag::Bare { .. } | crate::context::StartTag::None => {}
-        }
-        if let Some(prefix) = crate::context::attribute_prefix_context(text, offset) {
-            let component = prefix
-                .element_tag
-                .starts_with(|character: char| character.is_ascii_uppercase());
-            return Some(if component {
-                CompletionSite::ComponentStartTag {
-                    at_whitespace: prefix.prefix.is_empty(),
-                }
-            } else {
-                CompletionSite::ElementStartTag
-            });
+            return Some(
+                if element_tag.starts_with(|character: char| character.is_ascii_uppercase()) {
+                    CompletionSite::ComponentStartTag {
+                        // Upstream answers nothing at a component's own name;
+                        // narrowing is the shape that reproduces it.
+                        at_whitespace: in_tag_name
+                            || might_be_at_start_tag_whitespace(text, offset),
+                    }
+                } else {
+                    CompletionSite::ElementStartTag
+                },
+            );
         }
         let before = text.get(..offset)?;
         let brace = before.rfind('{');
@@ -4315,4 +4319,33 @@ const fn project_config_names() -> &'static [&'static str] {
 /// template rather than keeping as an element.
 fn is_embedded_tag(tag: &str) -> bool {
     tag.eq_ignore_ascii_case("script") || tag.eq_ignore_ascii_case("style")
+}
+
+/// `CompletionProvider.ts:497-501`, which tests `/\s[\s>/]/` against the two
+/// characters straddling the cursor — narrower than "nothing typed yet".
+fn might_be_at_start_tag_whitespace(text: &str, offset: usize) -> bool {
+    let before = text.get(..offset).and_then(|text| text.chars().next_back());
+    let at = text.get(offset..).and_then(|text| text.chars().next());
+    before.is_some_and(char::is_whitespace)
+        && at.is_some_and(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+#[cfg(test)]
+mod start_tag_tests {
+    use super::might_be_at_start_tag_whitespace;
+
+    fn at(text: &str, needle: &str) -> bool {
+        might_be_at_start_tag_whitespace(text, text.find(needle).unwrap() + needle.len())
+    }
+
+    #[test]
+    fn only_whitespace_before_an_empty_slot_counts() {
+        assert!(at("<Comp >", "<Comp "));
+        assert!(at("<Comp />", "<Comp "));
+        assert!(at("<Comp  a>", "<Comp "));
+        // A name is being typed, so the slot is not empty.
+        assert!(!at("<Comp a>", "<Comp "));
+        // Nothing before the cursor is whitespace.
+        assert!(!at("<Comp a >", "<Comp a"));
+    }
 }
