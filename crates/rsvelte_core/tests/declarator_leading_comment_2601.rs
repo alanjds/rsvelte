@@ -101,3 +101,17 @@ fn a_variable_actually_named_after_the_keyword_is_untouched() {
     assert!(out.contains("let letter = 1;"), "{out}");
     assert!(out.contains("let constant = 2;"), "{out}");
 }
+
+/// A comment sharing the declarator's line was written there and keeps that
+/// line: only a comment that ENDED its own line is one esrap moves. The prop
+/// lowering re-emits the declaration from its own text, so a peel that does not
+/// separate the two either drops this one or breaks the line upstream keeps.
+#[test]
+fn a_same_line_block_comment_keeps_the_declarators_line() {
+    let out =
+        client("<script>\n\texport let /* same line */ a = [],\n\t\tb = 2;\n</script>\n{a}{b}\n");
+    assert!(
+        out.contains("let /* same line */ a = $.prop($$props, 'a', 24, () => []);"),
+        "{out}"
+    );
+}

@@ -289,6 +289,24 @@ mod tests {
     }
 
     #[test]
+    fn a_prop_wins_over_a_state_source() {
+        // Both sets are name-keyed, so the order of the arms is observable, and
+        // the assign port picks the prop form for the same input.
+        let out = transform_store_member_mutate_ast_with_props(
+            "$store.prop = 5;",
+            &ssv(&["$store"]),
+            &ssv(&["store"]),
+            &ssv(&["store"]),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "$.store_mutate(store(), $.untrack($store).prop = 5, $.untrack($store));"
+        );
+    }
+
+    #[test]
     fn non_reactive_state_store_source_stays_bare() {
         let out = transform_store_member_mutate_ast_with_props(
             "$store.prop = 5;",

@@ -761,7 +761,7 @@ pub(super) fn transform_let_with_reexported_props(
 /// its first declarator, which is where esrap flushes them.
 fn reprint_declaration_comments(
     results: &mut [String],
-    comments: &[String],
+    comments: &[(String, bool)],
     leading_ws: &str,
     kw: &str,
 ) {
@@ -775,10 +775,16 @@ fn reprint_declaration_comments(
         return;
     };
     let mut rebuilt = format!("{leading_ws}{kw} ");
-    for comment in comments {
+    for (comment, own_line) in comments {
         rebuilt.push_str(comment);
-        rebuilt.push('\n');
-        rebuilt.push_str(leading_ws);
+        // A comment that shared the declarator's line was written there and
+        // keeps that line; only one that ended its own line breaks.
+        if *own_line {
+            rebuilt.push('\n');
+            rebuilt.push_str(leading_ws);
+        } else {
+            rebuilt.push(' ');
+        }
     }
     rebuilt.push_str(tail);
     *first = rebuilt;
@@ -1391,7 +1397,7 @@ pub(super) fn transform_export_let(line: &str, analysis: &ComponentAnalysis) -> 
 /// Peel the comments `declaration_split` moved between the keyword and the
 /// declarator. Only a comment that ends its line is one of those; a comment
 /// sharing the declarator's line was written there and stays put.
-fn split_own_line_leading_comments(text: &str) -> (Vec<String>, &str) {
+fn split_own_line_leading_comments(text: &str) -> (Vec<(String, bool)>, &str) {
     let mut comments = Vec::new();
     let mut rest = text;
     loop {
@@ -1410,13 +1416,15 @@ fn split_own_line_leading_comments(text: &str) -> (Vec<String>, &str) {
             break;
         };
         let after = &trimmed[end..];
-        if !after
+        let own_line = after
             .trim_start_matches([' ', '\t', '\r'])
-            .starts_with('\n')
-        {
+            .starts_with('\n');
+        // A `//` that does not end its line cannot be re-emitted inline — it
+        // would swallow the declarator — so it stays for `strip_js_comments`.
+        if !own_line && trimmed.starts_with("//") {
             break;
         }
-        comments.push(trimmed[..end].trim_end().to_string());
+        comments.push((trimmed[..end].trim_end().to_string(), own_line));
         rest = after;
     }
     (comments, rest.trim())

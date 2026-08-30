@@ -98,3 +98,28 @@ fn leaves_a_nested_declaration_and_its_neighbours_alone() {
         "an unaffected statement was reflowed: {out}"
     );
 }
+
+/// A BLOCK comment that stood on its own line between two declarators keeps that
+/// line. `collapse_lines` joins a declarator's lines with a space, so the peel
+/// has to run on the raw slice — asked after the collapse, an own-line block
+/// comment is indistinguishable from one written beside the declarator, and the
+/// two print differently.
+#[test]
+fn an_own_line_block_comment_between_declarators_keeps_its_line() {
+    let out =
+        client("<script>\n\texport let a = 1,\n\t\t/** doc */\n\t\tb = 2;\n</script>\n{a}{b}\n");
+    assert!(
+        out.contains("let /** doc */\n\tb = $.prop($$props, 'b', 8, 2);"),
+        "{out}"
+    );
+}
+
+/// CONTROL: the same comment written beside the declarator stays beside it.
+#[test]
+fn a_same_line_block_comment_between_declarators_stays_inline() {
+    let out = client("<script>\n\texport let a = 1,\n\t\t/** doc */ b = 2;\n</script>\n{a}{b}\n");
+    assert!(
+        out.contains("let /** doc */ b = $.prop($$props, 'b', 8, 2);"),
+        "{out}"
+    );
+}
