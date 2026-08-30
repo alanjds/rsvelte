@@ -4270,6 +4270,74 @@ measurement of a configuration in which the changed code does not execute.
 (`--dev` exists), but `hmr`, `css`, `discloseVersion` and the `runes` override are set by
 callers and pinned by the runner, and no one has enumerated which of them gate work.
 
+## 41. Signal discipline — `scripts/compat-corpus/signal-discipline-verify.mjs`
+
+**Unit.** One `(corpus entry, client mode)` compile, 34,728 x 2 of them. Like §37, nothing is
+compared against official: the gate asserts a **property of the generated program**. Every
+`$.set` / `$.get` / `$.mutate` / `$.update` / `$.update_pre` / `$.increment` must take a first
+argument the same program did not declare as an ordinary value, and every `name(<assignment>,
+true)` prop write must have a callee initialised from `$.prop` / `$.rest_props`. Violations are
+printed, never panicked — release is `panic = "abort"`. Implemented in
+`3_transform/client/signal_discipline.rs`, run by the `Signal discipline` step of
+`corpus-compat.yml` (and `pnpm run corpus:signal-discipline`). Hard gate, no ratchet.
+
+The harness refuses a verdict three ways, because each failure mode reads exactly like a pass:
+without `RSVELTE_ASSERT_SIGNAL_DISCIPLINE` it exits 2 rather than sweeping a compiler that cannot
+report; below 1000 manifest components it exits 2; and without the compiler's own
+`RSVELTE_SIGNAL_DISCIPLINE_ARMED` line it exits 2, because a binding predating the check prints
+nothing at all.
+
+**Why it exists.** `two-ports-inventory.md` row 17: upstream resolves a write target once through
+`scope.get`, and 32 of rsvelte's 44 `*_ast.rs` passes compare identifier *text* against a
+`Vec<String>`, so each one answers the shadow question separately. Output equality only finds
+such a pass where a collected file happens to carry the shape *and* the file diverges on nothing
+else — and the live instance this gate found,
+`sparrow-app/…/TeamSidePanel.svelte`, is a listed entry on all three output ratchets for two
+unrelated divergences, so no output gate could have reported it.
+
+**[D] and positive control.** Ablating the five shadow guards in
+`{state_member_mutate,state_set_reactive,reactive_update,prop_member_mutate}_ast.rs` and
+recompiling this row's two repros reports all six wrong writes; restoring them (and `touch`ing the
+files, or cargo serves a stale binary) reports none. That control is not decoration — **the first
+formulation of this property passed the ablation while reporting nothing**, because it skipped
+every function parameter as unknown provenance and the defect's own container is a parameter.
+
+| tree | violations |
+|---|---|
+| guards ablated, 2 repro files | 6 |
+| `try_transform_assignment`'s bail ablated, 67,612 corpus units | 2 (1 unit, exit 1) |
+| this tree, 67,612 corpus units | 0 (exit 0) |
+
+The middle row is the harness's own positive control: restoring the guard and `touch`ing the file
+(cargo will otherwise serve a stale binary and the green reads as a pass) returns the run to 0 with
+the source byte-identical.
+
+**What it cannot see `[S]`.**
+
+- **The read side.** A read has no sink. In the same handler as the fixed write,
+  `items.selected = data` emitted `items(items().selected = data(), true)` where official emits
+  `data`, because the RHS is transformed eagerly with an empty `LocalScope`. That instance is
+  fixed; the class is still structurally outside this gate, and it was found by reading the write
+  fix rather than by running the gate.
+- **Server output.** The check runs at the two `client/mod.rs` codegen return sites only, so the
+  server's own ports of the same passes are ungated by it. That is a discriminating case, not an
+  argument: `server/ast/read_wrap.rs` never collected a `catch` clause or a loop head into its
+  shadow frame, so `catch (v) { v.n = 2 }` emitted `v().n = 2` and `for (let v = 0; v < 2; v++)`
+  emitted `for (let v = 0; v() < 2; $.update_derived(v))` — a runtime helper called on a loop
+  counter — while this gate was green on the identical sources, whose client output was correct.
+- **A `const`, and a non-literal initialiser.** Both are excluded because upstream's own output
+  contains them (`const st = 1` beside `$.set(st, …)` in a generated accessor; `let i = $$index_4`
+  receiving a signal through a parameter). A defect that lands on either shape is invisible here.
+- **A parameter of a function passed directly to a runtime helper**, for the same reason: an
+  each-block item and index really are signals.
+- **Everything a name-keyed pass gets wrong that is not a signal write.** The property is about
+  two kinds of call, not about the 32 passes; a pass that mis-claims an identifier in a read, a
+  declaration or a hoist produces no violation.
+
+**What is unmeasured `[U]`.** Whether the two rules above are the only exclusions upstream's
+output forces. They were derived from the 9 violations the first corpus run produced, which is a
+sample of one tree's output, not an enumeration of the shapes upstream emits.
+
 ## Adding a gate, or a row here
 
 When you add a gate, add its row **before** the ratchet is first baselined, and answer the

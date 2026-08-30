@@ -94,6 +94,7 @@ whose oracle is the other implementation is only as good as its independent expe
 | [18](#18-does-a-mutation-of-a-legacy_indirect_bindings-root-get-the-invalidate-wrap-at-all--d-closed) | Does a mutation of a `legacy_indirect_bindings` root get the invalidate wrap at all? | 4 | **[D]** | closed |
 | [19](#19-where-does-a-keywords-source-map-anchor-go--d-defended-at-degree-2) | Where does a keyword's source-map anchor go? | 2 | **[D]** | defended at degree 2 |
 | [20](#20-what-does-a--reactive-statement-assign--d-closed) | What does a `$:` reactive statement assign? | 2 | **[D]** | closed |
+| [21](#21-does-this-write-target-resolve-to-the-components-binding-or-to-a-shadow--d) | Does this write target resolve to the component's binding, or to a shadow? | 44 rewrite passes, 8 scope-aware | **[D]** | 4 ports closed at degree 1 |
 
 ---
 
@@ -781,6 +782,352 @@ root rule through a `update_target_root_name` helper that returns `None` for a c
 call, mirroring `object()`. The two collectors still exist — the server walks oxc and the
 analyzer walks `JsNode`, so there is no single function to route both through — and nothing
 compares them to each other. The file above is the pin.
+### 21. Does this write target resolve to the component's binding, or to a shadow? — [D]
+
+**Upstream:** every write lowering reaches its binding through **one** `context.state.scope.get(name)`
+— `build_assignment` (`3-transform/client/visitors/AssignmentExpression.js:120`) and
+`validate_mutation` (`.../shared/utils.js:402`) both do, and a name that resolves to a nested
+declaration returns a binding whose `kind` is `normal`, so nothing is rewritten.
+
+**Ports.** rsvelte answers it once per rewrite pass. Of the 44 `*_ast.rs` passes under
+`3_transform/client/`, **8** consulted `oxc_semantic` and 36 compared the identifier's **text**
+against a `Vec<String>` of binding names. Four of the text ones were binding-keyed write
+lowerings (the count is 12 / 32 after fixing them):
+
+- `prop_member_mutate_ast.rs` — `prop.x = v` → `prop(prop().x = v, true)`
+- `state_member_mutate_ast.rs` — `state.x = v` → `$.mutate(state, $.get(state).x = v)`, the
+  reactive-body twin of `legacy_state_member_mutate_ast.rs`, which has resolved through
+  `find_state_var_symbols` since it was written and carries
+  `skips_parameter_shadow_but_rewrites_captured_state` as a test
+- `state_set_reactive_ast.rs` — `state = v` → `$.set(state, v)`
+- `reactive_update_ast.rs` — `x++` → `$.update(x)` / `$.update_prop(x)`
+
+**Demonstrated.** `huly`'s `FilterTypePopup.svelte` writes `filter.group` inside
+`for (const filter of filters)` where `filter` is also a prop, and `musicat`'s `AnalyticsView.svelte`
+writes `stats.totalPlays` inside `songs.reduce((stats, song) => …)` where `stats` is also legacy
+reactive state. Official emits the plain write in both; rsvelte emitted the setter call. The
+second is the one that names the *pair* rather than one port: the identical source inside a
+plain instance function was already correct, because that path runs the scope-aware twin.
+
+**What made the reactive ports get it wrong** is worth keeping: a `$:` body is handed to its
+transforms **without** the component-level declarations, so the state variable is an *unresolved*
+name there. `is_locally_shadowed` — "resolves to a declaration below the root scope" — is the
+predicate that is right for both input shapes: unresolved (fragment) and root-scope (whole
+script) both mean "the component's binding", and only a shadow is below the root.
+
+**These four now route the decision through one primitive** (`scope_analysis::is_locally_shadowed`,
+with `shadowed_reference_starts` for the in-place rewriters, which cannot hold a `Semantic`). That
+is degree 1 for the *shadow* question and not for the row: the instance twin
+`legacy_state_member_mutate_ast` still answers through `find_state_var_symbols` /
+`is_state_var_reference_or_unresolved`, a second primitive with a second rule, and nothing compares
+the two.
+
+**Four of the remaining text-keyed passes were probed and are clean**: a `$`-prefixed parameter
+shadowing a store (`function bump($count) { $count = 1; $count++; $count.x = 1 }`, reaching
+`store_assign_ast` / `store_update_ast` / `store_member_mutate_ast`) and a parameter shadowing a
+rest-props binding (`function read(rest) { return rest.foo }`, `rest_prop_member_access_ast`)
+both compile byte-identical to official. `state_eager_ast` and `state_raw_frozen_ast` are keyed
+on the rune **call**, not on a binding name, so they are not instances of this row at all — an
+earlier draft of this row listed them and was wrong.
+
+**The same probe found a live one, which is why the row stays open.** A function-local
+`let n = $state(5)` that IS reassigned, shadowing a top-level `let n = $state(0)` that is NOT,
+compiles to
+
+```js
+let n = 0;
+function make() { let n = 5; $.set(n, 6); return n; }   // official: $.state(5) / $.get(n)
+```
+
+— `$.set` on a plain number, so the output is broken at run time rather than merely different.
+**Its reachability is 0 on the collected corpus**: 5,521 of 34,709 sources declare a `$state`, 16
+declare one name twice, 13 of those are `.svelte.(js|ts)` modules (which run the module pipeline,
+where the escape hatch below already exists) and the 3 real components all compile byte-identical
+on all four targets. Correctness and reachability are separate questions; this row records both.
+The classification is a `Vec<String>` of non-reactive **names** (`client/mod.rs:7094`), so the
+top-level binding's "never reassigned" answer reaches the inner declaration and its reads, while
+the write goes through a pass that resolves correctly. The module pipeline already has the escape
+hatch for exactly this — `ambiguous_state_names` (`client/mod.rs:5429`) re-asks
+`binding.reassigned` per symbol whenever one name carries two `$state` bindings that disagree, and
+`state_call_ast::is_non_reactive` consumes it — while the component pipeline neither computes it
+nor reaches that lowering, which makes the `$state(…)` lowering itself a second pair.
+
+**A battery of ten shadow probes then measured what the gate cannot.** One input per binding kind
+— a store, a store subscription, a rest prop, `$state.raw`, `$state.snapshot`, an arrow parameter
+over a `$state`, a `$derived`, an each item, a prop called as a function, a `$`-prefixed local —
+each shadowing the component's binding inside a nested scope, compared to official on all four
+targets. **Nine of ten were already correct; the tenth was live.** Upstream's `EachBlock`
+`assign` / `mutate` transforms set `uses_index` on the owning block, forcing the `$$index`
+callback parameter even where nothing reads it, and they reach the item through `scope.get`;
+rsvelte looked the root up in `each_item_name_flags` by NAME, at two sites (the typed and the JSON
+assignment paths), so a handler declaring `let row = …` over the item emitted a `$$index`
+parameter official does not. That divergence is **client-only** — the server emits no such
+parameter — so a probe run on one target would have scored it clean.
+
+Two things the battery is worth for beyond the one defect. **The nine passes are now a measured
+`[D]`, not an assumption**: `store_assign_ast`, `store_update_ast`, `store_member_mutate_ast` and
+`store_unsub_wrap_ast` carry 37 `&[String]` parameters between them and answer correctly anyway,
+because a `$`-prefixed name cannot be redeclared in Svelte and the plain store name is not what
+they key on. And the flag site is **not** an `*_ast.rs` pass — it is in the expression converter —
+so the "44 passes" denominator this row keeps quoting is not the population. Grep for the
+question, not for the file naming convention.
+
+**Crossing the entry point multiplied the yield.** A generated matrix — 6 binding kinds x 6 entry
+points x 5 shadow shapes, 165 inputs x 4 targets — reported **72** divergences on its first run,
+against 1 for the ten hand-written probes that varied only the binding kind. Three causes, and the
+first is closed: the expression converter's shadow set held a bare `let` and a function parameter
+and nothing else. Its registrar said so — *"destructuring patterns are ignored (they rarely shadow
+a prop name and the code is cleaner without the extra complexity)"* — and a `catch` clause and a
+`for…of` head bound nothing at all. **A comment recording a deliberate simplification is the same
+hiding place as a comment asserting fidelity.** Closing it took 72 to 48, and the reusable part is
+that all three constructs bind for their body only and must hide **both** the read transform and
+`shadowed_prop_names`: the pre-existing `for…of` code removed the transform and not the second, so
+a prop read inside the loop still became `$$props.v`.
+
+The second is closed too, and it is the one with real-world reach.
+`transform_legacy_state_declarations` finds `let <name> =` by text, and its caller hands it one
+top-level instance statement at a time — so `function go() { let v = …; }` arrives as a single
+input and the LOCAL declaration was lowered to `$.mutable_source`, allocating a signal per call.
+Upstream promotes only a top-level `let`, so the rewrite is refused unless the match sits at the
+statement's own brace depth. **Every other shadow fix in this batch moved 0 of 34,728 corpus
+entries; this one moves 3**, and takes `musicat/src/lib/views/AlbumsView.svelte` from a listed
+failure on `client` and `client-dev` to a 4-target match. Reachability is a property of the
+defect, not of the class.
+
+The third is the reason this row keeps a **server** paragraph, and it corrects a claim an earlier
+draft made here. That draft called the 44 remaining divergences "one cause, outside phase 3";
+**8 of them were phase 3**, in a port this row had not looked at. `server/ast/read_wrap.rs`
+decides whether an identifier read is a derived / store binding from a `shadowed` stack, and its
+own doc comment says the stack is populated "from function / arrow parameter patterns (the only
+shadowing the store-cluster fixtures exercise)" — the second deliberate-simplification comment in
+one row, and the second one to be load-bearing. A `catch` clause, a `for…of` / `for…in` head and a
+`for (let …;;)` head bind names and none was collected, so `catch (v) { v.n = 2 }` emitted
+`v().n = 2` and `for (let v = 0; v < 2; v++)` emitted
+`for (let v = 0; v() < 2; $.update_derived(v))` — a runtime helper called on a loop counter. The
+client had been fixed for the same five shapes one commit earlier and the server had not, which is
+the row's own subject: **fixing one port is not fixing the question**, and only a probe that
+compares all four targets separates the two. Blast radius 0 of 34,728 corpus entries on `server`
+and `server-dev`, and the four hunks are independently necessary (ablated one at a time: 6 / 2 /
+2 / 4 divergent lines).
+
+**The predicate this row introduced then over-fired, and what caught it was a unit test rather
+than any gate here.** `reference_is_plain_local` asks the `scope_root` bindings which one owns a
+reference and whether its kind is `Normal` — and phase 2 records a **second, `Normal`** entry for a
+rune declared inside a template expression's function body (the #3233 shape). So
+`let counter = $state(1); counter = 2` in an event handler answered "plain local",
+`try_transform_assignment` bailed, and the fallback emitted `$.set(counter, 2, true)` where
+official emits `$.set(counter, 2)`. **The corpus could not see it**: the client hash sweep moved 0
+of 34,728 entries across the whole series, and `template_function_rune_3233.rs` — a committed
+repro from an earlier fix — is what went red. A property gate and a corpus are both populations;
+a test written for the shape is not.
+
+The discriminator is the scope chain: a component binding is declared at instance depth and a
+local signal one function deeper, so the veto is `State` / `RawState` / `Derived` at
+`function_depth >= 2`. **Restricting it to those three kinds is load-bearing** — the first
+narrowing vetoed on any nested non-`Normal` binding, which is also true of an each item, and put
+the `$$index` parameter back on the repro two rows above. A predicate fix needs the whole set of
+repros the predicate serves re-run, not only the one that failed.
+
+**A sweep of the shadow shapes the 165-probe matrix did NOT enumerate then found the same question
+answered wrongly in THREE more places at once, and the count is the point: `const f = function v() { … }`
+binds `v` inside its own body, and every implementation that had to know said otherwise.** `server/ast/read_wrap.rs` never put the
+id in its frame; `client/ast_state_transform.rs` carries a comment saying named function
+expressions "bind only in their own scope, so they are excluded" — correct about the *enclosing*
+scope, and it then never declared the name in the function's own scope either; and the template
+walker's `LocalScope` collected parameters and block declarations and not the id. So `typeof v`
+came out `v()` on the server, `$.get(v)` in the instance script and `$$props.w` for a shadowed
+prop, with the instance script and a template event handler being two separate ports of the client
+half. Each hunk is independently necessary (2 / 4 / 2 divergent lines ablated one at a time) and
+the blast radius is 0 of 34,728 corpus entries on all four targets. **A row that says "two ports" is a lower bound
+until somebody counts**; the sweep that found this one also found `for (let v = 0; …)` above, and
+neither shape was an axis value the generated family's author wrote.
+
+Three things that sweep turned up are recorded rather than fixed. A named **class** expression is
+the same shape and **upstream emits output no JS parser accepts** for it — `const C = class $.get(v) {`
+on the client and `class v() {` on the server, both rejected by acorn — while rsvelte emits the
+correct `class v {`; that is
+[`upstream_issues/svelte-named-class-expression-shadowing-a-rune-emits-unparseable-output.md`](../upstream_issues/svelte-named-class-expression-shadowing-a-rune-emits-unparseable-output.md),
+and no pattern-corpus file can carry it while byte equality is the goal. `function $y() {}` is
+rejected by official with `dollar_prefix_invalid` and accepted here — the over-acceptance shape,
+in phase 2. The opposite direction turned up too: upstream creates no scope for a class
+`static {}` block, so `class C { static { const v = 2; … } }` beside a top-level `let v` is
+rejected with `declaration_duplicate` while a method body, a function body and a plain block all
+compile — legal JavaScript refused, which no collected corpus can hold either
+([`upstream_issues/svelte-class-static-block-shares-the-instance-scope.md`](../upstream_issues/svelte-class-static-block-shares-the-instance-scope.md)). And a `$derived` name reused as a **destructured default parameter**
+(`function go({ v } = { v: 0 })`) made the client emit
+`function go(($$value) => { v = $$value.v; return $$value; })({ v: 0 }) { … }` — text no parser
+accepts, with the component's own `$state` / `$derived` declarations left unlowered beside it.
+`destructure_transforms.rs` finds a destructuring assignment by scanning for `} =` / `] =`, and
+its one guard asks "is this inside ANOTHER pattern" — which a formal parameter list is not. What
+separates the two spellings is the enclosing paren: a parameter list's `)` is followed by `=>` or
+by the body's `{`, and a control-flow head is the one other paren that closes before a `{`. That
+is fixed.
+
+The next defect in the same scanner was `is_standalone`, and it is the sharpest statement of what
+this row is about: upstream computes it as `context.path.at(-1).type.endsWith('Statement')` — a
+**parent node type** — while rsvelte read the punctuation around the expression, which recognizes
+an expression statement and nothing else. So every other statement whose child the assignment
+actually is kept a trailing value: `if (({ v } = o))` came out `if (($.set(v, o.v, true), o))`
+against official's `if (($.set(v, o.v, true)))`, and where the right-hand side is cached the IIFE
+gained a `return $$value;` official does not emit. The population is not one shape — ten head
+slots (`if` / `while` / `do…while` / `switch`, all three `for` slots, `return`, `throw`), three
+keyword-introduced statement bodies (`else`, `case …:`, `default:`) and a redundant paren layer,
+38 divergent comparisons over 33 probes. It is fixed by asking the same question from text, and
+**three things about that translation are worth keeping**. A redundant paren layer is no node at
+all — acorn drops it — so every layer has to be asked the question *innermost first*; peeling the
+layers off before deciding strips the head's OWN parens and loses `if (({ a } = o))`, which the
+first version did. The rule is not "a `)` follows": `if (1 && ({ a } = o))` closes on the same
+`)`, so a head slot has to be delimited on **both** sides — by the head's own parentheses or by
+the `;` between two `for` slots. And a `:` is a statement boundary in `case …:` / `default:` and
+an expression's punctuation in a ternary or an object property, which is decided by scanning back
+for the keyword at depth 0 rather than by the character. The one thing a text rule still cannot do
+is name the node: `foo(({ a } = o))` and `if (({ a } = o))` differ only in the token before the
+paren, so this stays an approximation of a parent-type test, not the test.
+
+Underneath that scanner sits a plainer question the same row keeps asking — **which statements bind
+a name** — and the two client registrars each knew a different half. `ast_state_transform.rs` had a
+`visit_function` arm declaring a function declaration's id in the enclosing scope and **no class
+hook at all**; the template walker's `register_block_local_vars` matched
+`JsStatement::VariableDeclaration` and nothing else. So `class v {}` inside a function read
+`typeof $.get(v)` on both paths and `function v() {}` inside an event handler did too. Both are
+fixed. What sized the work honestly was refusing to price it off the three probes that reported
+it: a grid of declaration kind (`function` / `class` / `let` / `const` / `var`) × where the
+reference sits relative to the declaration × host (instance-script body / template handler /
+prop-named binding) is **30 divergences over 96 comparisons**, against the 6 divergent lines the
+original probes showed. The declaration-kind fix takes 12 of those; the residue is two further
+causes, recorded rather than claimed. **Hoisting**: the instance-script port declares a name when
+the walk reaches it, so `const r = typeof v; function v() {}` still reads the component binding —
+upstream resolves against a scope that already holds every declaration of the block, and the same
+is true of `let` and `var`, which is why the residue is 12 comparisons and not just the function
+one. The template port already pre-scans its block, so this half is one port, not two. And **`var`
+is function-scoped**: `{ var v = 2; } return typeof v;` binds `v` in the enclosing function, while
+every registrar here treats a block's declarations as the block's — that one is 6 comparisons and
+is the only member of this family that **also reproduces on the server**.
+
+The hoisting half is fixed too, and the interesting part is what the repro found rather than what
+the fix does. `ast_state_transform.rs` now registers a block's declarations in a pre-pass over the
+statement list, through the same method the walk uses — a second copy of "which declarations
+register no names" is exactly the shape this row exists to catch, so the `$props()` guard is
+extracted from the rewrite that owns it and both callers read it. All four declaration kinds are
+registered, not only the genuinely hoisted `function` / `var`: a read above a `let` or a `class` is
+a TDZ error, but upstream still resolves it to the local, and byte equality is the goal. Ablated,
+the variable half and the function/class half are 6 comparisons each. **And the repro's first draft
+found a live defect in a third port that none of this touches**: rsvelte wraps `console.log(a)` in
+`$.log_if_contains_state` for a handler-LOCAL `a`, where official wraps only an argument that
+references a component binding — `const a = 1; console.log(a)` reproduces it with no shadowing
+anywhere, and `console.log(v)` on the real `$derived` matches, so the divergence is
+over-instrumentation of a local rather than a scope-resolution error. It is dev-mode only, it is
+not in any probe set written for this row, and it is recorded here rather than fixed.
+
+The `var` half closes the family, and it is the largest single instance this row has produced.
+A `var` outlives its block, so `{ var v = 2; } typeof v` resolves to the local — and **all three**
+phase-3 shadow registrars scoped it to the block. The server's `read_wrap.rs` carried the tell:
+its `collect_block_decl_names` doc said collecting `let`/`const`/`var`/`function`/`class` "at every
+block boundary is conservatively correct", which is false for exactly one of those five, because
+the frame is *popped* when the block ends. **A comment asserting fidelity is where this class
+hides** — the same shape as `assign_dev_ast.rs:56` and the server rune table. The grid put every
+`var` site except a function's own top level wrong on client and server: a block, an `if`
+consequent, a `for` init, a `for…of` head, a `try` block, a `case` arm, a `while` body, a doubly
+nested block — **42 of 56 comparisons**, against the 6 the original probe showed. Ablated per port:
+18 server, 18 instance-script, 8 template. The server and the instance-script pass walk the same
+oxc AST and asked the same question, so they now share one `shared::hoisted_vars` walk instead of
+a copy each; the template port reads the phase-3 IR and keeps its own, documented as the twin.
+
+Two things it leaves. The negative control is load-bearing and is what stops the fix from being
+"collect every `var` anywhere": a `var` inside a **nested function** must not leak out, so the walk
+declines to enter a function or class body. And the residue names a **fourth** answer to this row's
+question: `for (var v = 0; v < 1; v++)` in a template handler now reads `typeof v` correctly while
+`v++` still lowers to `$.update(v)`, because that decision is made in `expression_converter.rs`
+from `reference_is_plain_local` — a predicate driven by **phase 2's** scope data rather than by any
+phase-3 registrar. Three registrars agreeing does not make the compiler agree with itself.
+
+The `console.log` over-instrumentation noted above was then sized the same way, and it is **three**
+sub-causes rather than one. Upstream wraps a dev `console.<method>` only when an argument is a
+spread or `scope.evaluate(arg).has_unknown`, and its identifier case evaluates a binding's
+initializer when `!binding.updated` — the test is whether the name is ever **written**, not whether
+it is `const`. `console_wrap.rs` collected verdicts only from a `const` declaration, and its own
+comment said so: "every other local binding (parameters, lets, duplicate const names) is UNKNOWN to
+upstream's evaluator". That is fixed, with the reassignment controls — a `let` later assigned, a
+`let` incremented, a `let` with no initializer — all still wrapping, which is what separates the
+`!updated` rule from "treat every local as known".
+
+The two that remain are recorded rather than claimed, and they are on either side of this row's own
+axis. A **template** handler's locals are invisible to `args_need_wrap`, which evaluates against the
+component scope with no local bindings at all — so `const a = 1; console.log(a)` in an event handler
+is wrapped while the byte-identical script-path source is not; that is a second port of the same
+predicate, and the script path is the one that already has the answer (`LocalConsts`). And a global
+call is `NUMBER` to upstream's `globals` table (`Math.random()`, `Number('3')`) and UNKNOWN here —
+the same gap #3539's residue records for the constant folder, reached through a different caller.
+Measured together: 5 divergences over a 116-comparison grid of argument shape x host.
+
+The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
+write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
+which shows up as a different `$.prop` flag word (24 vs 28, 19 vs 23), a `$$ownership_validator`
+upstream does not emit, and a store declared as `$.mutable_source(writable(…))`; recorded here
+rather than fixed.
+
+The remaining ~28 text-keyed passes are **未測定**. Degree 3 is available here and is the right
+shape for it: "no rewrite pass claims an identifier that resolves inside its own input" is a
+property, not a comparison, so the corpus becomes the detector at whatever size it is.
+
+**That gate now exists — `RSVELTE_ASSERT_SIGNAL_DISCIPLINE`
+(`3_transform/client/signal_discipline.rs`) — and what it cost to make it discriminate is worth
+more than the gate.** The first formulation asserted that no signal sink's first argument may
+resolve to a symbol the same program declares as a plain value. It reported 9 violations on the
+corpus, of which 4 components are byte-identical to official; narrowing it until the corpus
+reported 0 took two rules — a `const` cannot be judged, because upstream emits `const st = 1`
+beside a `$.set(st, …)` in the accessor generated for `export const st = $state(1)`, and an
+initialiser that is an identifier cannot, because `let i = $$index_4` receives a signal. **A
+property gate that reads 0 on the corpus is exactly what a property gate that sees nothing reads,
+and this one saw nothing**: ablating the five shadow guards above and recompiling this row's own
+repro produced `$.mutate(stats, …)` / `$.set(count, 1)` / `$.update(count)` with the gate armed
+and silent, because `stats` and `count` are *parameters* of a user callback and the rule skipped
+every parameter as unknown provenance. The defect's own container was inside the exclusion.
+
+Two changes make it discriminate, and each is a distinction the first version collapsed. A
+parameter is unjudgeable only when its function is **passed directly to a runtime helper** —
+`$.each(…, ($$anchor, item, $$index) => …)` really does hand over signals — and that is not
+answerable by nesting depth, because `$.set(s, xs.reduce((acc) => …))` puts a user callback inside
+a runtime call's argument. And a prop write has its own sink: the generated shape is
+`name(name().x = v, true)`, so that callee must be a `$.prop` / `$.rest_props` accessor. Ablated,
+the gate now reports all six wrong writes across the two repros; restored, it is silent on all
+three.
+
+**Its first clean run found a live defect, in a file no output gate could have reported it from.**
+`sparrow-app/…/TeamSidePanel.svelte` has `export let data` shadowed by a `let data = await …`
+inside a template event handler, and rsvelte emitted `data(data().isNewInvite = false, true)`
+where official emits `data.isNewInvite = false`. That id is already a listed entry on
+`known-failures.{client,client-dev,server}.json` for two unrelated divergences (a scoping class
+argument, a lost comment), so the output ratchet suppressed this one — the
+"a ratchet entry suppresses everything its key cannot tell apart" rule, observed from the other
+side. The fix is the same shadow question one entry point over: an event handler's body is
+lowered by the expression converter, whose scope is the *template's*, so the name lookup reaches
+the prop. It is **two** lowerings — `try_transform_assignment` and `try_transform_update` — and
+fixing only the first left `data.count++` wrapped, which the gate then reported against the
+repro written for the first half.
+
+**The predicate is the part to copy carefully.** `reference_is_shadowed_non_prop` reads like the
+right question and is not: it is true of a top-level `$state` too, because every kind but a prop
+counts as "not a prop" there. Using it as the bail changed **736** corpus outputs, 724 of them
+files that were passing, turning `$.set(layout, "…")` into `$.set(layout, "…", true)` across the
+corpus. `reference_is_plain_local` — the reference uniquely belongs to a `BindingKind::Normal`
+declaration — changes exactly **1**, the file the gate flagged, with 0 violations over 34,728
+entries × client + client-dev.
+
+What the gate cannot see is the **read** side, and that half had to be found by reading the fix
+rather than by running it: in the same handler `items.selected = data` emitted
+`items(items().selected = data(), true)` where official emits `data`, because the RHS is
+transformed eagerly — before the outer walk that would have built a scope for it — with an empty
+`LocalScope`. A read has no sink, so no signal-discipline violation exists to report.
+
+**The position for a read cannot come from where the write's came from.** `JsExpr::Spanned` is
+attached only when `enable_sourcemap` is true (`expression_converter.rs:156`), so keying a codegen
+decision on it would make the generated program depend on whether a map was asked for — the same
+option split that hides regressions from CodSpeed. An expression has many identifiers and the
+converted `JsExpr` carries none of their positions, but its **source range** is on both paths, so
+the bindings are asked which plain locals they declare inside it
+(`plain_local_names_in_range`). Reachability of the read half is **0 of 34,728 corpus entries**:
+correct, and it moves no real-world output.
 
 ## Adding a row, and closing one
 
