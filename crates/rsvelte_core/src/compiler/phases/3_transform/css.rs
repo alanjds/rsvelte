@@ -2025,8 +2025,23 @@ fn is_parent_chain_unused(ctx: &CssContext) -> bool {
                             // Other pseudo-classes like :hover, :focus don't constrain matching
                         }
                         Some("NestingSelector") => {
-                            // & - matches whatever the parent matches, can't determine unused
-                            return true;
+                            // `&` stands for whatever the enclosing rule matched, but the rest
+                            // of its compound still constrains: upstream resolves `&[data-x]`
+                            // to the parent's subject AND the attribute, so a constraint no
+                            // element satisfies kills the chain and every rule nested in it.
+                            // Only the constraint kinds that decide on their own: a
+                            // pseudo-class re-enters the complex-selector walk, which walks
+                            // back into this parent chain and never terminates.
+                            let dead = selectors.iter().any(|other| {
+                                matches!(
+                                    other.get("type").and_then(|t| t.as_str()),
+                                    Some("ClassSelector")
+                                        | Some("IdSelector")
+                                        | Some("TypeSelector")
+                                        | Some("AttributeSelector")
+                                ) && is_simple_selector_unused(other, ctx)
+                            });
+                            return !dead;
                         }
                         _ => {}
                     }
