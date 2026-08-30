@@ -7965,6 +7965,81 @@ fn preceded_by_code_word(content: &str, word: &[u8], at: usize) -> Option<usize>
         .then_some(found)
 }
 
+/// Words strict mode forbids as an identifier; mirrors `RESERVED` in
+/// `1_parse/read/strict_mode.rs`, which checks them on a parsed program.
+const STRICT_RESERVED: [&str; 9] = [
+    "let",
+    "yield",
+    "static",
+    "implements",
+    "interface",
+    "package",
+    "private",
+    "protected",
+    "public",
+];
+
+/// acorn raises the strict-mode reserved-word error the moment it reads the
+/// identifier, so a statement whose remainder is broken still reports at the
+/// word. OXC replaces the whole program with a dummy on a fatal error
+/// (`Program::dummy`), leaving `strict_mode`'s walk no node to check, so the
+/// word has to come from the source. Only a word *opening* a statement counts:
+/// elsewhere it is as often a member property or an object key — positions
+/// where acorn reads the name liberally and raises nothing — as a reference.
+fn acorn_reserved_word_at_statement_start(
+    content: &str,
+    reported: usize,
+    is_typescript: bool,
+) -> Option<(usize, String)> {
+    use crate::compiler::phases::phase3_transform::shared::js_scan::{code_bytes, is_ident_byte};
+
+    let bytes = content.as_bytes();
+    let limit = reported.min(bytes.len());
+    let mut starts = Vec::new();
+    let mut depth = 0u32;
+    let mut expecting_start = true;
+    for (at, byte) in code_bytes(bytes) {
+        if at >= limit {
+            break;
+        }
+        if expecting_start && !byte.is_ascii_whitespace() {
+            starts.push(at);
+            expecting_start = false;
+        }
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                expecting_start |= depth == 0;
+            }
+            b';' => expecting_start |= depth == 0,
+            _ => {}
+        }
+    }
+
+    starts.into_iter().find_map(|at| {
+        let word = content[at..]
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            .next()
+            .unwrap_or_default();
+        if !STRICT_RESERVED.contains(&word) {
+            return None;
+        }
+        // acorn's `isLet()`, plus acorn-typescript's `interface`: a name after
+        // the keyword makes it open a declaration rather than name one.
+        let opens_declaration = word == "let" || (is_typescript && word == "interface");
+        if opens_declaration
+            && let Some((_, byte)) = code_bytes(bytes)
+                .find(|&(i, byte)| i >= at + word.len() && !byte.is_ascii_whitespace())
+            && (is_ident_byte(byte) || (word == "let" && (byte == b'[' || byte == b'{')))
+        {
+            return None;
+        }
+        Some((at, format!("The keyword '{word}' is reserved")))
+    })
+}
+
 /// Reproduce where plain acorn stops on TypeScript syntax in a JavaScript
 /// program. OXC understands these constructs and consequently either labels
 /// their enclosing node or emits a TypeScript-aware message; upstream never
@@ -8084,7 +8159,19 @@ fn convert_parsed_program<'ast>(
                     )
                 }
             });
-        let mut reported_at = reported_at;
+        // A dummy program is what OXC leaves behind when it aborts, and the
+        // acorn-only checks below all need nodes.
+        let no_ast = program.body.is_empty() && program.directives.is_empty();
+        let mut reported_at = reported_at.map(|(at, message)| {
+            if no_ast
+                && let Some(earlier) =
+                    acorn_reserved_word_at_statement_start(content, at, is_typescript)
+            {
+                earlier
+            } else {
+                (at, message)
+            }
+        });
         let mut parse_error = reported_at.as_ref().map(|(at, message)| {
             let pos = at + offset;
             crate::error::ParseError::svelte("js_parse_error", message.clone(), (pos, pos))
