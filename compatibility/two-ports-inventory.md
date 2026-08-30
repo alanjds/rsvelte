@@ -791,13 +791,28 @@ accepts, with the component's own `$state` / `$derived` declarations left unlowe
 its one guard asks "is this inside ANOTHER pattern" — which a formal parameter list is not. What
 separates the two spellings is the enclosing paren: a parameter list's `)` is followed by `=>` or
 by the body's `{`, and a control-flow head is the one other paren that closes before a `{`. That
-is fixed. **Two more defects in the same scanner are open**, both about `is_standalone`: upstream
-computes it as `context.path.at(-1).type.endsWith('Statement')` — a *parent node type* — so an
-`if (…)`, `while (…)` or `return` head IS standalone there, while rsvelte's text rule reads it as
-an expression position and appends the right-hand side. `if (({ v } = o))` comes out
-`if (($.set(v, o.v, true), o))` against official's `if (($.set(v, o.v, true)))`, and a cached
-right-hand side gains a `return $$value;` official does not emit. A byte scanner cannot see a
-parent node type at all, which is the class this row keeps returning to.
+is fixed.
+
+The next defect in the same scanner was `is_standalone`, and it is the sharpest statement of what
+this row is about: upstream computes it as `context.path.at(-1).type.endsWith('Statement')` — a
+**parent node type** — while rsvelte read the punctuation around the expression, which recognizes
+an expression statement and nothing else. So every other statement whose child the assignment
+actually is kept a trailing value: `if (({ v } = o))` came out `if (($.set(v, o.v, true), o))`
+against official's `if (($.set(v, o.v, true)))`, and where the right-hand side is cached the IIFE
+gained a `return $$value;` official does not emit. The population is not one shape — ten head
+slots (`if` / `while` / `do…while` / `switch`, all three `for` slots, `return`, `throw`), three
+keyword-introduced statement bodies (`else`, `case …:`, `default:`) and a redundant paren layer,
+38 divergent comparisons over 33 probes. It is fixed by asking the same question from text, and
+**three things about that translation are worth keeping**. A redundant paren layer is no node at
+all — acorn drops it — so every layer has to be asked the question *innermost first*; peeling the
+layers off before deciding strips the head's OWN parens and loses `if (({ a } = o))`, which the
+first version did. The rule is not "a `)` follows": `if (1 && ({ a } = o))` closes on the same
+`)`, so a head slot has to be delimited on **both** sides — by the head's own parentheses or by
+the `;` between two `for` slots. And a `:` is a statement boundary in `case …:` / `default:` and
+an expression's punctuation in a ternary or an object property, which is decided by scanning back
+for the keyword at depth 0 rather than by the character. The one thing a text rule still cannot do
+is name the node: `foo(({ a } = o))` and `if (({ a } = o))` differ only in the token before the
+paren, so this stays an approximation of a parent-type test, not the test.
 
 The 36 that remain are one cause, **in phase 2**, and every one is `client` or `client-dev`. A
 write through a `catch` parameter or a `for…of` binding is recorded on the *component's* binding,
