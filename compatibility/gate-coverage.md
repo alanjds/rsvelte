@@ -448,6 +448,39 @@ onto real positions — and **4 from the `no-dupe-on-directives` start-tag fix**
 count with changed hashes says the identity moved, and says nothing about which field did it;
 inverting the hashes is what answers that.
 
+### Blind spot 27j — a net shrink is not "nothing was added": the key carries a content hash [D]
+
+Every key ends in `[count=…,hash=…]` (or `[official=…,rsvelte=…]`), so **the same divergence
+gets a different key whenever its content changes**. A re-baseline that improves a response
+without eliminating the divergence therefore retires one key and enrols another, and a reader
+diffing the JSON sees an addition that is indistinguishable from a regression.
+
+Measured on the `20114f183` re-baseline (`origin/main` → that head), which CI accepted with all
+17 artifacts green:
+
+| | keys | units (key with the trailing `[…]` stripped) |
+|---|---:|---:|
+| main | 32,669 | 32,669 |
+| head | 32,441 | 32,441 |
+| removed | 486 | of which **254** are units still listed |
+| added | 258 | of which **254** are units already listed |
+
+So `-228` decomposes as **232 units eliminated and 4 units genuinely new** — and the 4 are one
+defect (`textDocument/diagnostic` message, two files × two phases, one `official`/`rsvelte` hash
+pair). **98% of the churn in that re-baseline is the same unit with different content**, which is
+why the key-level diff cannot be read as a verdict.
+
+Two consequences. **A shrink-only ratchet is shrink-only in its key count and says nothing about
+its composition**: `--update-baseline` writes what it measures, so a newly-broken unit enrols
+silently as long as more units left than arrived. And **the correct instrument is a set difference
+over units, not over keys** — strip the trailing bracket, then diff. Every re-baseline of this
+ratchet should publish the four numbers above, because a net shrink with a new unit inside it is
+exactly what the gate is meant to catch and exactly what it reports as a pass.
+
+This is the general form of the last paragraph of 27i, which observed that an unchanged entry
+count with changed hashes says the identity moved. The same is true of a *changed* count: the
+count is the sum of two movements and names neither.
+
 ---
 
 ## 1. Compiler output parity — `scripts/compat-corpus/verify.mjs`
