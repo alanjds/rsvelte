@@ -5,13 +5,16 @@
 
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, Documentation, InsertTextFormat,
-    MarkupContent, MarkupKind,
+    MarkupContent, MarkupKind, TextEdit,
 };
 
-use crate::context::{EmbeddedRegions, attribute_context, attribute_prefix_context};
+use crate::context::{
+    EmbeddedRegions, StartTag, attribute_context, is_component_tag, start_tag_context,
+};
 use crate::html_data::{STANDARD_TAGS, TAGS, attributes};
 use crate::modifiers::MODIFIERS;
 use crate::tags::{SvelteTag, latest_opening_tag};
+use crate::text::LineIndex;
 
 /// The characters that put the client in a position to want completions.
 ///
@@ -53,10 +56,28 @@ pub fn completions_with_strict_mode(
         return Some(html_tag_completions(prefix));
     }
 
-    if let Some(context) = attribute_prefix_context(text, offset) {
+    if let Some((element_tag, replace)) = match start_tag_context(text, offset) {
+        // An event modifier is completed further down, off the same position.
+        StartTag::Attribute(attribute)
+            if !attribute.in_value && !attribute.can_have_event_modifier() =>
+        {
+            Some((
+                attribute.element_tag,
+                attribute.name_start..attribute.name_start + attribute.name.len(),
+            ))
+        }
+        StartTag::Bare { element_tag } => Some((element_tag, offset..offset)),
+        StartTag::Attribute(_) | StartTag::TagName { .. } | StartTag::None => None,
+    } {
+        // `HTMLPlugin.ts:188-191` answers a component's start tag with nothing:
+        // its attributes are the component's props, which TypeScript owns.
+        if is_component_tag(element_tag) {
+            return None;
+        }
         return Some(html_attribute_completions(
-            context.element_tag,
-            context.prefix,
+            text,
+            element_tag,
+            replace,
             strict_mode,
         ));
     }
@@ -118,26 +139,76 @@ fn language_completions(element: &str) -> CompletionList {
     }
 }
 
-fn html_attribute_completions(element: &str, prefix: &str, strict_mode: bool) -> CompletionList {
+/// The value snippet `htmlCompletion.js:194-203` appends to an attribute name
+/// that is not already followed by `=`.
+const ATTRIBUTE_VALUE_PLACEHOLDER: &str = "=\"$1\"";
+
+/// Every attribute the element may carry, as `htmlCompletion.js:185-236` builds
+/// them: no server-side filtering by what has been typed — the replace range is
+/// what narrows the list — and one snippet `textEdit` per item.
+fn html_attribute_completions(
+    text: &str,
+    element: &str,
+    replace: std::ops::Range<usize>,
+    strict_mode: bool,
+) -> CompletionList {
+    // `htmlCompletion.js:205-213` also skips a name the tag already carries;
+    // that dedup is not ported, so a written attribute is still offered.
+    let index = LineIndex::new(text);
+    let range = lsp_types::Range::new(
+        index.position(text, replace.start),
+        index.position(text, replace.end),
+    );
+    let assigned = text[replace.end..].trim_start().starts_with('=');
+    let (open, close) = if strict_mode {
+        ("\"{", "}\"")
+    } else {
+        ("{", "}")
+    };
     CompletionList {
         is_incomplete: false,
         items: attributes(element)
-            .filter(|attribute| attribute.name.starts_with(prefix))
             .map(|attribute| {
-                let braces = if strict_mode { "\"{$1}\"" } else { "{$1}" };
-                let insert_text = if attribute.name.starts_with("on:") {
-                    Some(format!("{}$2={braces}", attribute.name))
-                } else if attribute.name.starts_with("bind:") {
-                    Some(format!("{}={braces}", attribute.name))
+                let name = attribute.name;
+                let mut new_text = if assigned {
+                    name.to_string()
                 } else {
-                    None
+                    format!("{name}{ATTRIBUTE_VALUE_PLACEHOLDER}")
                 };
+                // `HTMLPlugin.ts:211-249` rewrites the placeholder per shape,
+                // and a name ending in `:` is a directive keyword rather than
+                // an attribute that takes a value.
+                let keyword = name.ends_with(':');
+                let mut sort_text = None;
+                if keyword {
+                    new_text = new_text.replace(ATTRIBUTE_VALUE_PLACEHOLDER, "");
+                } else if name.starts_with("on") {
+                    let modifiers = if name.starts_with("on:") { "$2" } else { "" };
+                    new_text = new_text.replace(
+                        ATTRIBUTE_VALUE_PLACEHOLDER,
+                        &format!("{modifiers}={open}$1{close}"),
+                    );
+                    if name.starts_with("on:") {
+                        sort_text = Some(format!("z{name}"));
+                    }
+                } else if name.starts_with("bind:") {
+                    new_text =
+                        new_text.replace(ATTRIBUTE_VALUE_PLACEHOLDER, &format!("={open}$1{close}"));
+                }
                 CompletionItem {
-                    label: attribute.name.to_string(),
-                    kind: Some(CompletionItemKind::PROPERTY),
+                    label: name.to_string(),
+                    kind: Some(if keyword {
+                        CompletionItemKind::KEYWORD
+                    } else {
+                        CompletionItemKind::VALUE
+                    }),
                     documentation: Some(markdown(attribute.description.to_string())),
-                    insert_text_format: insert_text.as_ref().map(|_| InsertTextFormat::SNIPPET),
-                    insert_text,
+                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    sort_text,
+                    text_edit: Some(lsp_types::CompletionTextEdit::Edit(TextEdit {
+                        range,
+                        new_text,
+                    })),
                     ..CompletionItem::default()
                 }
             })
@@ -712,5 +783,82 @@ mod tests {
     fn completion_works_after_astral_text() {
         let text = "<p>💡</p>{#";
         assert_eq!(labels_at(text, text.len()).unwrap()[0], "if");
+    }
+
+    fn item(content: &str, offset: usize, label: &str) -> CompletionItem {
+        completions(content, offset)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|item| item.label == label)
+            .unwrap()
+    }
+
+    fn new_text(item: &CompletionItem) -> &str {
+        match item.text_edit.as_ref().unwrap() {
+            lsp_types::CompletionTextEdit::Edit(edit) => &edit.new_text,
+            lsp_types::CompletionTextEdit::InsertAndReplace(_) => unreachable!(),
+        }
+    }
+
+    /// `htmlCompletion.js` narrows by the replace range, not by filtering, so a
+    /// name that shares no prefix with what is typed is still offered.
+    #[test]
+    fn an_attribute_list_is_not_filtered_by_what_is_typed() {
+        let text = "<div zz></div>";
+        let offset = text.find("zz").unwrap() + 2;
+        assert!(labels_at(text, offset).unwrap().contains(&"id".to_string()));
+        let edit = match item(text, offset, "id").text_edit.unwrap() {
+            lsp_types::CompletionTextEdit::Edit(edit) => edit,
+            lsp_types::CompletionTextEdit::InsertAndReplace(_) => unreachable!(),
+        };
+        assert_eq!(edit.range.start.character, 5);
+        assert_eq!(edit.range.end.character, 7);
+        assert_eq!(edit.new_text, "id=\"$1\"");
+    }
+
+    #[test]
+    fn a_name_already_followed_by_equals_gets_no_value_snippet() {
+        let text = "<div i=\"a\"></div>";
+        assert_eq!(
+            new_text(&item(text, text.find(" i=").unwrap() + 2, "id")),
+            "id"
+        );
+    }
+
+    #[test]
+    fn the_snippet_shape_follows_the_attribute_kind() {
+        let text = "<div  ></div>";
+        let offset = text.find('>').unwrap() - 1;
+        assert_eq!(new_text(&item(text, offset, "transition:")), "transition:");
+        assert_eq!(
+            item(text, offset, "transition:").kind,
+            Some(CompletionItemKind::KEYWORD)
+        );
+        assert_eq!(new_text(&item(text, offset, "on:click")), "on:click$2={$1}");
+        assert_eq!(
+            item(text, offset, "on:click").sort_text.as_deref(),
+            Some("zon:click")
+        );
+        assert_eq!(new_text(&item(text, offset, "bind:this")), "bind:this={$1}");
+        assert_eq!(
+            item(text, offset, "id").kind,
+            Some(CompletionItemKind::VALUE)
+        );
+    }
+
+    /// `HTMLPlugin.ts:188-191`: a component's start tag gets no HTML attributes.
+    #[test]
+    fn a_component_start_tag_gets_no_html_attributes() {
+        assert_eq!(labels_at("<Foo cl></Foo>", 7), None);
+        assert_eq!(labels_at("<Foo ></Foo>", 5), None);
+        // Svelte 5 spells a namespaced component with a dot.
+        assert_eq!(labels_at("<a.b cl></a.b>", 7), None);
+        // The positive control: the same slot on an element does answer.
+        assert!(
+            labels_at("<div cl></div>", 7)
+                .unwrap()
+                .contains(&"class".to_string())
+        );
     }
 }

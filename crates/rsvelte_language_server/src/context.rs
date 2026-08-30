@@ -187,7 +187,9 @@ impl AttributeContext<'_> {
     }
 }
 
-/// A capitalised tag name is a component, not an element.
+/// `possiblyComponent` (`lib/documents/utils.ts:317-322`): ASCII `A`-`Z` only.
+/// Deliberately not [`is_component_tag`] — upstream asks this question with two
+/// different rules and the two callers must keep answering it their own way.
 fn possibly_component(tag: &str) -> bool {
     tag.starts_with(|c: char| c.is_ascii_uppercase())
 }
@@ -210,6 +212,18 @@ pub enum StartTag<'a> {
     Bare { element_tag: &'a str },
     /// Not inside any start tag.
     None,
+}
+
+/// `getNodeIfIsInComponentStartTag` (`lib/documents/utils.ts:342-356`): a first
+/// character with no lowercase form, or — this server is always Svelte 5 — a
+/// dotted name. Wider than [`possibly_component`], which upstream spells with a
+/// separate helper.
+#[must_use]
+pub fn is_component_tag(tag: &str) -> bool {
+    tag.chars()
+        .next()
+        .is_some_and(|character| !character.is_lowercase())
+        || tag.contains('.')
 }
 
 /// The attribute at `offset`, if the offset is inside an element's start tag.
