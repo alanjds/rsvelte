@@ -2625,6 +2625,7 @@ count! += 1;
             raw_content: "",
             content_offset: 0,
             is_typescript: true,
+            leading_comments: Vec::new(),
         };
         let retained = RetainedProgram::parse(source, true);
         STRIP_TYPESCRIPT_REPARSES.with(|count| count.set(0));

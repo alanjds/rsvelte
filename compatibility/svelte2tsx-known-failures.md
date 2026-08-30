@@ -58,6 +58,33 @@ The two marker clusters are the single largest cause and are one question —
 an oracle bug: the `oracle-invalid` classification (94 entries this run) already
 carries those, and it is a pass, not a ratchet entry.
 
+**Read that table as five buckets, not as five causes, and the reason is the key.**
+`svelte2tsx-cluster.mjs:24` keys a cluster on `diffSignature` — the **first differing line**
+after blank-line normalization. A first differing line names a *symptom*, and for a whole class
+of defect it does not preserve the cause: a parser- or emitter-state leak surfaces at whichever
+later construct happens to be affected, so one cause scatters across several signatures while two
+unrelated causes with the same line shape fold into one. The row above where 42 and 8 are
+hand-annotated as "one question" is that failure mode caught after the fact, not a property of
+the key. The same key produced a wrong summary for the SCSS gate on 2026-08-30 — the divergence
+there was written up from its first differing line as a `:not()`-selector rule and is actually a
+parser-state leak that reaches every later slash list in the file — so treat this partition as a
+starting hypothesis and re-derive the cause from the mechanism before sizing any work off it.
+
+**And one number in it is a question that has not been asked.** The largest cluster is 42, and
+`svelte-lexical` contributes exactly 42 of the 123 entries. Whether those are the same 42 decides
+what the cluster means: one repository's one pattern (a single fix, and the "largest cause"
+framing is an artifact of which repositories were enrolled) or a coincidence between an
+emitter-wide defect and an unrelated concentration. The per-entry class is not stored anywhere —
+`svelte2tsx-cluster.mjs` reads `compatibility/report-s2t.json`, which is regenerated per run and
+not checked in — so answering it needs a corpus run, not a re-reading of this file. The
+distribution over sources IS derivable from the ratchet and is: `svelte-lexical` 42,
+`svelte-gantt` 10, `sveltekit` 8, `trakt-web` 7, `primo` 6, `svelte-inspect-value` 6, then 18
+sources with 1–5 each, 24 in total.
+
+Whoever picks this up should also read the Linux caveat above as a constraint on *what they can
+measure*, not only on what they can commit: a local macOS run reports a different set, so it can
+produce a classification but not a count.
+
 
 
 The former `pattern/issues/3200-asi-reactive-block.svelte` entry was removed when

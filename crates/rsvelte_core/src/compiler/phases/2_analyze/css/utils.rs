@@ -284,6 +284,10 @@ fn gather_possible_values(
             }
         }
 
+        // Upstream's `gather_possible_values` handles Literal, Conditional,
+        // Logical and (for a class) Array / Object, and treats EVERY other node
+        // as unknown — a template literal and a `+` concatenation included. An
+        // arm that evaluates one of those prunes a rule upstream emits.
         Some("TSAsExpression")
         | Some("TSSatisfiesExpression")
         | Some("TSNonNullExpression")

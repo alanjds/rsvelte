@@ -2279,6 +2279,14 @@ export const RUNE_STATEMENT_DECLARATIONS = {
 		use: 'value += 1;\n\treturn value;',
 		containers: ['switch-case-bare', 'switch-case-block', 'labeled-block'],
 	},
+	// The `$derived` half of #3420. Held to the same containers as `state-let` because a
+	// lexical declaration is a syntax error as a bare `if` / loop / labeled body, and both
+	// compilers reject it — an error-parity cell measures nothing about this axis.
+	'derived-let': {
+		declaration: 'let value = $derived(1);',
+		use: 'return value;',
+		containers: ['switch-case-bare', 'switch-case-block', 'labeled-block'],
+	},
 };
 
 /** `%d` is the declaration and `%u` is a read/write that must see its rune transform. */
