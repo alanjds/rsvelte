@@ -3324,6 +3324,9 @@ impl Server {
                         );
                         *result = resolve.lens;
                     }
+                    if method == "textDocument/foldingRange" {
+                        drop_degenerate_folding_ranges(result, self.client.line_folding_only);
+                    }
                     if let Some(fallback) = fallback_result {
                         merge_tsgo_result(&method, result, fallback);
                     }
@@ -4154,6 +4157,22 @@ fn is_project_config(uri: &Uri) -> bool {
         .any(|name| uri.as_str().rsplit('/').next() == Some(name))
 }
 
+/// `FoldingRangeProvider.ts:54-56`: a client that folds by line has no use for a
+/// range inside one line, and an inverted range is never emitted.
+fn drop_degenerate_folding_ranges(result: &mut serde_json::Value, line_folding_only: bool) {
+    let Some(ranges) = result.as_array_mut() else {
+        return;
+    };
+    ranges.retain(|range| {
+        let line = |key| range.get(key).and_then(serde_json::Value::as_u64);
+        match (line("startLine"), line("endLine")) {
+            (Some(start), Some(end)) if line_folding_only => start < end,
+            (Some(start), Some(end)) => start <= end,
+            _ => true,
+        }
+    });
+}
+
 fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: serde_json::Value) {
     if result.is_null() {
         *result = fallback;
@@ -4328,6 +4347,36 @@ fn might_be_at_start_tag_whitespace(text: &str, offset: usize) -> bool {
     let at = text.get(offset..).and_then(|text| text.chars().next());
     before.is_some_and(char::is_whitespace)
         && at.is_some_and(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+#[cfg(test)]
+mod folding_tests {
+    use super::drop_degenerate_folding_ranges;
+
+    fn kept(line_folding_only: bool) -> Vec<u64> {
+        let mut result = serde_json::json!([
+            { "startLine": 0, "endLine": 3 },
+            { "startLine": 1, "endLine": 1 },
+            { "startLine": 5, "endLine": 4 },
+            { "startLine": 6 }
+        ]);
+        drop_degenerate_folding_ranges(&mut result, line_folding_only);
+        result
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|range| range["startLine"].as_u64().unwrap())
+            .collect()
+    }
+
+    /// `FoldingRangeProvider.ts:54-56` keeps a single-line range only when the
+    /// client folds by character; an inverted range is dropped either way, and a
+    /// range with no `endLine` is not this filter's business.
+    #[test]
+    fn a_single_line_range_survives_only_a_character_folding_client() {
+        assert_eq!(kept(true), [0, 6]);
+        assert_eq!(kept(false), [0, 1, 6]);
+    }
 }
 
 #[cfg(test)]

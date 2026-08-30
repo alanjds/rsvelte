@@ -70,7 +70,10 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     let modifier = MODIFIERS.iter().find(|modifier| {
         around_offset(attribute.name_start, attribute.name, modifier.name, offset)
     })?;
-    Some(plain(modifier.documentation()))
+    // `getModifierData` (`features/getModifierData.ts:52-62`) maps every entry's
+    // documentation into a Markdown `MarkupContent`; only the TAG hover next to
+    // it hands back a bare string.
+    Some(markdown(modifier.documentation()))
 }
 
 /// The `WINDOW` characters before `offset` plus what follows them, as the
@@ -260,6 +263,24 @@ mod tests {
         let hovered = hovered_tag("<div on:click|preventDefault />", 15).unwrap();
         assert!(hovered.starts_with("`preventDefault` event modifier"));
         assert!(hovered.contains("event.preventDefault()"));
+    }
+
+    /// The two producers in `getHoverInfo.ts` disagree on the wire shape: a tag
+    /// is `{ contents: <string> }` (:56) and a modifier is a `MarkupContent`
+    /// (`getModifierData.ts:52-62`). `hovered_tag` accepts either, so the shape
+    /// needs its own assertion.
+    #[test]
+    fn a_tag_hover_is_a_string_and_a_modifier_hover_is_markup() {
+        assert!(matches!(
+            hover("{#if x}", 3).unwrap().contents,
+            HoverContents::Scalar(MarkedString::String(_))
+        ));
+        assert!(matches!(
+            hover("<div on:click|preventDefault />", 15)
+                .unwrap()
+                .contents,
+            HoverContents::Markup(_)
+        ));
     }
 
     #[test]
