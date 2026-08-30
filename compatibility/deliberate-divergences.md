@@ -469,8 +469,8 @@ memoization path.
 
 Any source the Svelte compiler rejects. The listed patterns carry 21 distinct compiler codes;
 the largest are `slot_element_invalid_name` (13), `dollar_prefix_invalid` (7),
-`state_invalid_placement` (4), `legacy_export_invalid` (4), `animation_invalid_placement` (4)
-and `parse-error` (4). One of the smallest is the whole subject of a rule:
+`parse-error` (5), `state_invalid_placement` (4), `legacy_export_invalid` (4) and
+`animation_invalid_placement` (4). One of the smallest is the whole subject of a rule:
 
 ```svelte
 <slot name={dynamic} />
@@ -478,8 +478,8 @@ and `parse-error` (4). One of the smallest is the whole subject of a rule:
 
 ### Both outputs, measured against `submodules/svelte` 5.56.10 and eslint-plugin-svelte 3.23.0
 
-- `svelte.compile` **throws** `slot_element_invalid_name` — measured for all 56 patterns by the
-  pin above, 56 of 56, with two valid patterns as the accepting control.
+- `svelte.compile` **throws** `slot_element_invalid_name` — measured for all 57 patterns by the
+  pin above, 57 of 57, with two valid patterns as the accepting control.
 - `eslint` with `flat/recommended` reports the rule's findings and **exits 0**:
   `svelte-eslint-parser` is deliberately more permissive than the compiler, so it builds a tree
   where the compiler refuses to.
@@ -507,7 +507,10 @@ Every other lint gate configures an explicit rule universe and compares **findin
 compiler diagnostic — which is not a `svelte/…` rule id — is outside the compared population.
 The exit code is not a finding, and until gate 36 nothing compared it. Four entries that *were*
 rsvelte over-rejections hid in this same bucket until then (#3127, #3128); they are fixed and no
-longer listed, which is why the count reads 56 and not 60.
+longer listed. The count has since moved the other way — `prefer-const/22-decorated-class-method`
+and `23-redeclared-let` are new entries whose sources the official compiler also rejects
+(`typescript_invalid_feature` at 5:1 and `js_parse_error` at 5:5, both targets), which is why
+the pin reads 57 and not 55.
 
 ---
 

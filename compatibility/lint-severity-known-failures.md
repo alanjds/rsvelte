@@ -132,6 +132,21 @@ resolved URL is the accepting control, and the two sibling hooks are asserted to
 run on the same file set — with the note that the sibling is a port-vs-port
 oracle and the absolute answers are pinned separately.
 
+### DoD-4 attribution
+
+Attribution of `lint-severity-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 57 | [`deliberate-divergences`](deliberate-divergences.md#a-linter-reports-the-compilers-own-errors-rsvelte-lint-exit-code) | `exit\|…\|0->1\|<code>` — `rsvelte-lint` exits 1 on a source the compiler rejects, ESLint exits 0 |
+| 1 | [`upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md) | `oracle-crash` — the rule throws on `<a href="…" rel>` |
+
+The 57 are one product decision, not 57: every one is a file the official compiler
+rejects, verified 57 of 57 by the pin the deliberate-divergences entry names, with
+accepting controls. Splitting them per compiler code would multiply one decision by
+its inputs — the rows here are causes, and the `code` histogram that belongs to this
+table is above, not in it.
+
 ## `oracle-crash`, 1 entry — `no-target-blank/02-rel-dynamic.svelte`
 
 `svelte/no-navigation-without-resolve` **throws** (`Cannot read properties of
