@@ -836,8 +836,11 @@ impl Server {
                 return;
             }
         };
+        // `rsvelte.completion.enable` has no upstream counterpart, so
+        // `PluginHost.ts:298` — which is about every plugin declining — does not
+        // govern a server the user configured not to answer at all.
         if !self.settings.completion_enable {
-            self.respond(Response::new_ok(id, empty_completion_list()));
+            self.respond_nothing(id);
             return;
         }
         if !self.settings.native_completion_enabled() {

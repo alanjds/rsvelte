@@ -1090,11 +1090,11 @@ fn serves_completions_and_hover() {
     // 23 == CompletionItemKind.Event
     assert_eq!(items[0]["kind"], json!(23));
 
-    // Hover over `#each` documents the block.
+    // Hover over `#each` documents the block. `getHoverInfo.ts:56` returns
+    // `{ contents: documentation[tag] }` — a bare string, not `MarkupContent`.
     let hover = server.hover(&uri, 5, 5);
-    let contents = hover["contents"]["value"].as_str().unwrap();
+    let contents = hover["contents"].as_str().unwrap();
     assert!(contents.starts_with("`{#each ...}`"), "{contents}");
-    assert_eq!(hover["contents"]["kind"], json!("markdown"));
 
     // Hover inside `<script>` is the TypeScript plugin's business, not ours.
     assert_eq!(server.hover(&uri, 1, 8), Value::Null);
