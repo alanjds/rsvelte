@@ -2004,7 +2004,8 @@ fn is_complex_selector_unused_impl(complex: &Value, ctx: &CssContext) -> bool {
 /// each alternative is checked independently. The parent is unused only if
 /// NONE of the alternatives match any DOM element.
 fn is_parent_chain_unused(ctx: &CssContext) -> bool {
-    let parent_preludes = ctx.parent_preludes.borrow();
+    // Copied out rather than held: the `:has` check below swaps the stack.
+    let parent_preludes: Vec<&Value> = ctx.parent_preludes.borrow().clone();
     if parent_preludes.is_empty() {
         return false;
     }
@@ -2019,6 +2020,15 @@ fn is_parent_chain_unused(ctx: &CssContext) -> bool {
         // For each complex selector in the prelude (alternatives),
         // check if ANY of them matches a DOM element
         let any_alternative_matches = complex_selectors.iter().any(|complex| {
+            // The compound scan below reads `:has(...)` as constraining nothing,
+            // so a parent whose only reason to be unused is its `:has` looked
+            // alive and every rule nested in it survived with it.
+            if let Some(rels) = complex.get("children").and_then(|c| c.as_array())
+                && without_parent_preludes(ctx, || is_has_selector_unused(rels, ctx))
+            {
+                return false;
+            }
+
             let mut classes: Vec<String> = Vec::new();
             let mut ids: Vec<String> = Vec::new();
             let mut elements: Vec<String> = Vec::new();
