@@ -70,6 +70,14 @@ fn module_return_jsdoc_cast_parenthesizes_its_arrow() {
                 !output.contains("return /** @type {TThen} */"),
                 "the cast comment must not remain unparenthesized in {generate:?}, dev={dev}:\n{output}"
             );
+            // The comment ends on a line before its operand starts, so upstream
+            // separates them with a newline rather than a space. Both asserts
+            // above pass on output that uses a space, which is the whole
+            // divergence this shape produces.
+            assert!(
+                output.contains("return (/** @type {TThen} */\n"),
+                "the cast comment must be followed by a newline, not a space, in {generate:?}, dev={dev}:\n{output}"
+            );
         }
     }
 }
