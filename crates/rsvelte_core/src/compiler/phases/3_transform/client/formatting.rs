@@ -1089,6 +1089,15 @@ fn detect_base_indent(code: &str) -> usize {
     min_indent.unwrap_or(0)
 }
 
+/// The leading whitespace of `text`'s first non-blank line — the indentation
+/// `str::trim` is about to remove, which upstream still sees when it dedents a
+/// block comment by its opener line.
+pub(crate) fn leading_indent(text: &str) -> &str {
+    text.lines()
+        .find(|line| !line.trim().is_empty())
+        .map_or("", |line| &line[..line.len() - line.trim_start().len()])
+}
+
 /// Strip `base_indent` characters from the start of a line.
 fn strip_indent(line: &str, base_indent: usize) -> &str {
     if base_indent == 0 || line.len() <= base_indent {
@@ -1165,6 +1174,11 @@ fn restore_pre_effect_thunk_parens<'a>(
 /// The output uses single quotes, tab indentation, and strips comments
 /// (matching esrap/Svelte compiler behavior).
 pub(crate) fn normalize_js_with_oxc(js: &str, indent_level: usize) -> String {
+    normalize_js_with_oxc_lead(js, indent_level, "")
+}
+
+/// `lead` is the indentation the caller trimmed off `js`'s first line.
+pub(crate) fn normalize_js_with_oxc_lead(js: &str, indent_level: usize, lead: &str) -> String {
     // Fast path: skip OXC parse+codegen for scripts without JSDoc or await.
     // JSDoc comments need OXC to fix indentation (tab+space before *).
     // await scripts go through async_body transform which needs OXC formatting.
@@ -1245,11 +1259,18 @@ pub(crate) fn normalize_js_with_oxc(js: &str, indent_level: usize) -> String {
     // esrap's preserved quote style.
     const DOUBLE_SEMI_PLACEHOLDER: &str = "void '$$DOUBLE_SEMI$$';void '$$DOUBLE_SEMI$$'";
     let has_double_semi = memmem::find(js.as_bytes(), b";;").is_some();
-    let protected = if has_double_semi {
+    let mut protected = if has_double_semi {
         js.replace(";;", DOUBLE_SEMI_PLACEHOLDER)
     } else {
         js.to_string()
     };
+    // Upstream dedents a multi-line block comment by its opener line's
+    // indentation; the script slice arrives here with the FIRST line's
+    // indentation already trimmed, so a leading `/**` would dedent by nothing
+    // and its continuation lines would keep the source indent on top of ours.
+    if protected.starts_with("/*") && !lead.is_empty() {
+        protected.insert_str(0, lead);
+    }
 
     // Use thread-local allocator to avoid repeated allocation overhead
     let code = with_normalize_allocator(|allocator| {
@@ -1290,6 +1311,13 @@ pub(crate) fn normalize_js_with_oxc(js: &str, indent_level: usize) -> String {
     // preserve its original indentation exactly as-is.
     let mut result_lines = Vec::new();
     let indent_str: String = "\t".repeat(indent_level);
+    // A block comment opening on line 0 gets no indent on its opener line, so
+    // the final print cannot dedent one back off its continuation lines; leave
+    // them bare and let that print supply the indent once.
+    let leading_comment_last_line = code
+        .starts_with("/*")
+        .then(|| code.find("*/").map(|end| code[..end].matches('\n').count()))
+        .flatten();
     // Use a persistent stack so we correctly preserve state across lines,
     // including inside nested template literals (e.g. `${`...`}`). A simple
     // `bool` cannot represent whether we are in a nested Template vs an
@@ -1303,7 +1331,7 @@ pub(crate) fn normalize_js_with_oxc(js: &str, indent_level: usize) -> String {
             result_lines.push(line.to_string());
         } else if line.is_empty() {
             result_lines.push(String::new());
-        } else if in_template_at_start {
+        } else if in_template_at_start || leading_comment_last_line.is_some_and(|last| i <= last) {
             // Inside a template literal - preserve content exactly as-is
             update_template_literal_stack(line, &mut stack);
             result_lines.push(line.to_string());
