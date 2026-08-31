@@ -30,6 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { writeGeneration } from './artifacts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +136,22 @@ function addEntry(repo, relPath, kind, source) {
 	manifest.push({ id, kind });
 }
 
+// A source repo's build artifacts are not its published source, and whether they
+// exist depends on whether the runner's dependency cache hit — so collecting them
+// makes the corpus population non-deterministic across runs.
+function ignoredPaths(dir) {
+	if (!fs.existsSync(path.join(dir, '.git'))) return new Set();
+	try {
+		const out = execFileSync('git', ['-C', dir, 'ls-files', '--others', '--ignored', '--exclude-standard'], {
+			encoding: 'utf8',
+			maxBuffer: 256 * 1024 * 1024,
+		});
+		return new Set(out.split('\n').filter(Boolean));
+	} catch {
+		return new Set();
+	}
+}
+
 // `markdown` controls whether ```svelte / ```js+file fences inside .md docs are
 // extracted. The curated svelte / svelte.dev docs are designed to compile, so
 // they are included; real-world project READMEs/doc-pages are not — they carry
@@ -143,10 +160,17 @@ function addEntry(repo, relPath, kind, source) {
 // for those projects only their SHIPPED source files are collected.
 function collectRepo(repo, dir, { markdown = true } = {}) {
 	const files = walk(dir);
+	const ignored = ignoredPaths(dir);
 	let real = 0;
 	let md = 0;
+	let skipped = 0;
 	for (const file of files) {
 		const rel = path.relative(dir, file);
+		const collectable = isSvelteModule(file) || isSvelteFile(file) || (markdown && file.endsWith('.md'));
+		if (collectable && ignored.has(rel.split(path.sep).join('/'))) {
+			skipped++;
+			continue;
+		}
 		if (isSvelteModule(file)) {
 			addEntry(repo, rel, 'module', fs.readFileSync(file, 'utf8'));
 			real++;
@@ -162,7 +186,7 @@ function collectRepo(repo, dir, { markdown = true } = {}) {
 			}
 		}
 	}
-	console.log(`[collect] ${repo}: ${real} files + ${md} markdown snippets`);
+	console.log(`[collect] ${repo}: ${real} files + ${md} markdown snippets` + (skipped ? ` (${skipped} gitignored skipped)` : ''));
 }
 
 for (const src of SOURCES) {
