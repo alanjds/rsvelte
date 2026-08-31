@@ -98,6 +98,51 @@ uniform — `estree-fields` and `comment-attachment` are 2.00x (every base is on
 without a key from it turning up under someone else's row. Measured directly from the JSON, which
 is authoritative for the partition: the ten rows above are its `Counter(values())`.
 
+### What the `unclustered` bases actually are (measured 2026-08-31)
+
+Classified by reproducing each key from a minimal source with the gate's own `diffKeys` algebra,
+so every line below is the ratchet's own key string, and the cause is read off the two ASTs rather
+than guessed from the key name. **17 of the 27 bases reproduced; 10 did not** — an unreproduced
+key means no input shape was found for it, not that it is stale.
+
+**A. TypeScript declaration children are not serialized (7 bases).** rsvelte emits the node
+envelope — `type`, `start`, `end`, `loc` — and none of its children:
+`TSEnumDeclaration.id` / `.members`, `TSModuleDeclaration.id` / `.global` (and `.declare`),
+`TSIndexSignature.parameters` (and `.typeAnnotation`), `TSParameterProperty.parameter` (and
+`.accessibility`). This is the same gap AGENTS.md already records from the lint side — a
+`TSTypeAliasDeclaration` dropped entirely, no `returnType` — and the named fix site is
+`1_parse/read/expression.rs`. The probes also turn up neighbours not in this cluster:
+`TSModuleBlock` is labelled `BlockStatement`, and a class's `typeParameters` and a
+`PropertyDefinition`'s `typeAnnotation` are absent.
+
+**B. A field with the wrong shape rather than a missing one (4 bases).**
+`ClassDeclaration.implements` is a **boolean `true`** where official has an array of
+`TSExpressionWithTypeArguments`; `ImportExpression.options` is `null` where official has the
+`ObjectExpression`; `Literal.value` is `null` for a bigint, where official carries the `BigInt`
+itself; `ExportNamedDeclaration.attributes` is an extra `[]` that official omits.
+
+**C. `Root.options.customElement.props` is raw AST, not a value (2 bases).** rsvelte emits the
+`ObjectExpression` node; official emits the evaluated bag, `{ p: { reflect: true } }`. The `#extra`
+and `#missing` keys are the two halves of that one substitution.
+
+**D. `Let.modifiers` is one omitted empty array (1 base, legacy only).** Official emits
+`modifiers: []` on a `let:` attribute; rsvelte omits the field. Reproduced on both
+`<svelte:fragment let:x>` and a component `let:`.
+
+**E. `ExpressionStatement.directive` — the statement is dropped (1 base).** A `'use strict';`
+directive in an instance script does not appear in `Program.body` at all, so official's body has
+one more element and the first statements have different types. AGENTS.md records the same loss
+for a `FunctionBody`'s `directives`.
+
+**F. Not reproduced (10 bases)**, listed so the next attempt starts from a smaller set:
+`TSTypeParameterDeclaration.extra`, `Decorator.expression` (the parent's whole `decorators` array
+is dropped, so any input reaching this key must be one where the array survives),
+`Literal.regex.flags`, `Line.value`, `CSSComment.position` / `.value`, `Text.raw`,
+`Attribute.name` / `.name_loc`, `Identifier.name`, `Comment.ignores[]`. Plain sources for each
+(entities, CRLF, unicode escapes, `svelte-ignore` with two codes, CSS comments inside and outside
+a rule, a shorthand and a spread attribute) all produce **no keys**, so the corpus reaches these
+through a shape none of those covers.
+
 ## The acceptance rows are the interesting ones
 
 **No collected document is left in this row.** The only key that remains is the loose
