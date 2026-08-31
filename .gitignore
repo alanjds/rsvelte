@@ -56,6 +56,10 @@ target
 /apps/npm/lint-*/rsvelte-lint.exe
 /apps/npm/lint-*/rsvelte_lint.node
 
+# The language server writes a tsgo shim cache into every workspace folder root
+# it is opened against, which for the LSP gates is a tracked directory.
+.rsvelte-language-server/
+
 # rsvelte-language-server platform binaries (staged into per-platform npm
 # packages by the release workflow; never committed)
 /apps/npm/language-server-*/rsvelte-language-server

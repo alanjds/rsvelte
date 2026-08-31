@@ -83,6 +83,17 @@ None of the three can produce a finding-level divergence in the other gates:
 rule only one side has is never enabled during a comparison. That is precisely
 why they need a key here — they are, by construction, invisible everywhere else.
 
+## DoD-4 attribution — **D**
+
+All 5 are recorded in
+[`deliberate-divergences.md`](deliberate-divergences.md#the-default-lint-preset-carries-three-rules-upstream-does-not-and-drops-two)
+and pinned by the tests that cover the behaviour each entry claims is covered elsewhere:
+`crates/rsvelte_lint/tests/comment_directive.rs` (9) for `svelte/system`,
+`no_undef.rs` (6) / `no_unused_vars.rs` (23) / `no_companion_module.rs` (5) for the three
+rsvelte-only rules, and `pnpm run test:type-aware-lint` (9) for the type-aware wrapper's
+counterpart. **The pin is not the list** — it is the claim each entry makes about where the
+behaviour lives, which is the part that would rot if a rule were quietly dropped.
+
 ## What this gate still cannot see
 
 It reads `--list-rules`, which prints `RuleMeta::default_severity` — not what a
@@ -91,3 +102,9 @@ lint run actually enables, which is that filtered by `enabled_script_rules`
 config file, so `extends` layering, `files`/`ignores` globs and per-rule options
 are all off this path. Both limits are recorded as `compatibility/gate-coverage.md`
 blind spots 33b and 33c.
+
+Attribution of `lint-preset-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 5 | [`deliberate-divergences`](deliberate-divergences.md#the-default-lint-preset-carries-three-rules-upstream-does-not-and-drops-two) | `rsvelte-lint` is one binary with no ESLint underneath it: it must carry the core checks or leave them unavailable, and it implements comment directives as a mechanism rather than as a rule id |

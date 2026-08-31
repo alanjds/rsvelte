@@ -4967,6 +4967,13 @@ pub(crate) fn transform_class_fields_server(script: &str) -> String {
     let mut block_comment_lines: Vec<String> = Vec::new();
 
     let all_lines: Vec<&str> = class_body.lines().collect();
+    // The client's member split asks this same predicate; a line that does not
+    // start outside a string/template/regex/comment is source text, not a member.
+    let in_code =
+        crate::compiler::phases::phase3_transform::shared::js_scan::line_starts_outside_opaque(
+            class_body.as_bytes(),
+        );
+    let starts_code = |i: usize| in_code.get(i).copied().unwrap_or(true);
 
     // A comment is not a token. The conditional-initializer lookahead below
     // reads the next two non-empty lines, so a comment line between `=` and the
@@ -5015,6 +5022,22 @@ pub(crate) fn transform_class_fields_server(script: &str) -> String {
         let line = all_lines[line_idx];
         let initial_trimmed = line.trim();
         line_idx += 1;
+
+        // A continuation line belongs to the member that opened the literal, so
+        // it is appended verbatim: trimming it and emitting it as a member of
+        // its own re-indents it, which changes the string's value.
+        if !starts_code(line_idx - 1)
+            && !in_derived_field
+            && !in_state_field
+            && !in_plain_field
+            && !in_block
+            && !in_block_comment
+            && let Some(ClassMember::Field(prev)) = members.last_mut()
+        {
+            prev.push('\n');
+            prev.push_str(line);
+            continue;
+        }
 
         // A field initializer may begin on the next physical line. Look ahead
         // only while the text after its assignment is still entirely whitespace

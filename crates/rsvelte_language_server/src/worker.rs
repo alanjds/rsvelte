@@ -70,6 +70,7 @@ pub enum Job {
         text: Arc<String>,
         offset: usize,
         strict_mode: bool,
+        markdown_documentation: bool,
     },
     Hover {
         id: RequestId,
@@ -352,10 +353,16 @@ fn run(jobs: &Receiver<Job>, outcomes: &Sender<Outcome>, stopping: &AtomicBool) 
                 text,
                 offset,
                 strict_mode,
+                markdown_documentation,
             } => Outcome::Completed {
                 id,
                 list: guard("completion", &path, || {
-                    crate::completions::completions_with_strict_mode(&text, offset, strict_mode)
+                    crate::completions::completions_with_strict_mode(
+                        &text,
+                        offset,
+                        strict_mode,
+                        markdown_documentation,
+                    )
                 })
                 .flatten(),
             },

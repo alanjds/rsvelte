@@ -1377,6 +1377,7 @@ pub(super) fn lower_nested_runes_in_expr<'a>(
     let mut v = NestedRuneLower {
         b,
         derived: vec![rustc_hash::FxHashMap::default()],
+        fn_frames: vec![0],
         in_nested_body: false,
         // Template-expression nested bodies (effect-drop pass) never carry a
         // top-level instance `$derived(await …)`; async-derived lowering is N/A.
@@ -1554,6 +1555,7 @@ fn lower_nested_runes<'a>(stmt: &mut Statement<'a>, state: &ServerTransformState
     let mut v = NestedRuneLower {
         b: state.b,
         derived: vec![rustc_hash::FxHashMap::default()],
+        fn_frames: vec![0],
         in_nested_body: false,
         use_async: state.eval_inputs.use_async,
         rune_store_subs: rune_names_are_store_subs(state.analysis),
@@ -1580,6 +1582,7 @@ fn lower_module_export_runes<'a>(stmt: &mut Statement<'a>, state: &ServerTransfo
     let mut v = NestedRuneLower {
         b: state.b,
         derived: vec![rustc_hash::FxHashMap::default()],
+        fn_frames: vec![0],
         in_nested_body: true,
         use_async: state.eval_inputs.use_async,
         rune_store_subs: rune_names_are_store_subs(state.analysis),
@@ -1601,6 +1604,11 @@ struct NestedRuneLower<'a> {
     /// Keeping the shadow marker is essential: removing a name only from the
     /// current frame makes lookup fall through to the outer declaration.
     derived: Vec<rustc_hash::FxHashMap<String, Option<bool>>>,
+    /// Index into `derived` of each enclosing function's own frame. A `var` is
+    /// function-scoped, so its derived binding is recorded there rather than in
+    /// the block frame it was written in — otherwise `if (flag) var d = $derived(1)`
+    /// dies with the `if` and the read after it is never rewritten.
+    fn_frames: Vec<usize>,
     /// Whether we are inside a nested function / block body (i.e. below the
     /// script top level). Lowering only fires when this is `true`, so the
     /// script-level statements already handled by `transform_script` are not
@@ -1627,6 +1635,18 @@ impl<'a> NestedRuneLower<'a> {
             }
         }
         None
+    }
+
+    /// Record a derived binding in the frame its declaration kind scopes it to.
+    fn register_derived(&mut self, name: String, is_var: bool) {
+        let idx = if is_var {
+            self.fn_frames.last().copied().unwrap_or(0)
+        } else {
+            self.derived.len().saturating_sub(1)
+        };
+        if let Some(frame) = self.derived.get_mut(idx) {
+            frame.insert(name, Some(is_var));
+        }
     }
 
     fn mask_name(&mut self, name: &str) {
@@ -1727,20 +1747,14 @@ impl<'a> NestedRuneLower<'a> {
                             b.call("$.derived", vec![b.thunk(e, false)])
                         }
                     });
-                    if register_derived
-                        && let Some(n) = bind_name
-                        && let Some(frame) = self.derived.last_mut()
-                    {
-                        frame.insert(n, Some(declaration_is_var));
+                    if register_derived && let Some(n) = bind_name {
+                        self.register_derived(n, declaration_is_var);
                     }
                 }
                 DeclRune::DerivedBy => {
                     d.init = arg.map(|e| b.call("$.derived", vec![e]));
-                    if register_derived
-                        && let Some(n) = bind_name
-                        && let Some(frame) = self.derived.last_mut()
-                    {
-                        frame.insert(n, Some(declaration_is_var));
+                    if register_derived && let Some(n) = bind_name {
+                        self.register_derived(n, declaration_is_var);
                     }
                 }
                 // `$props` / `$props.id` are not valid in a nested factory body in
@@ -1832,6 +1846,7 @@ impl<'a> VisitMut<'a> for NestedRuneLower<'a> {
     ) {
         let prev = self.in_nested_body;
         self.in_nested_body = true;
+        self.fn_frames.push(self.derived.len());
         self.derived.push(rustc_hash::FxHashMap::default());
         if let Some(id) = &it.id {
             self.mask_name(id.name.as_str());
@@ -1844,6 +1859,7 @@ impl<'a> VisitMut<'a> for NestedRuneLower<'a> {
         }
         oxc_ast_visit::walk_mut::walk_function(self, it, flags);
         self.derived.pop();
+        self.fn_frames.pop();
         self.in_nested_body = prev;
     }
 
@@ -1853,6 +1869,7 @@ impl<'a> VisitMut<'a> for NestedRuneLower<'a> {
     ) {
         let prev = self.in_nested_body;
         self.in_nested_body = true;
+        self.fn_frames.push(self.derived.len());
         self.derived.push(rustc_hash::FxHashMap::default());
         for parameter in &it.params.items {
             self.mask_binding_pattern(&parameter.pattern);
@@ -1862,6 +1879,7 @@ impl<'a> VisitMut<'a> for NestedRuneLower<'a> {
         }
         oxc_ast_visit::walk_mut::walk_arrow_function_expression(self, it);
         self.derived.pop();
+        self.fn_frames.pop();
         self.in_nested_body = prev;
     }
 }
@@ -4415,8 +4433,22 @@ impl<'a> oxc_ast_visit::Visit<'a> for ReactiveScopedCollector {
     }
 
     fn visit_update_expression(&mut self, it: &oxc_ast::ast::UpdateExpression<'a>) {
-        if let oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = &it.argument {
-            self.push_assign(id.name.as_str());
+        match &it.argument {
+            oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
+                self.push_assign(id.name.as_str());
+            }
+            // `UpdateExpression.js` takes `object(node.argument)`, so `o.x++`
+            // assigns `o` — where `o.x = …` assigns nothing, because
+            // `AssignmentExpression.js` filters `extract_identifiers` to
+            // Identifiers and a member target is not one.
+            other => {
+                if let Some(name) = other
+                    .as_member_expression()
+                    .and_then(update_target_root_name)
+                {
+                    self.push_assign(name);
+                }
+            }
         }
         oxc_ast_visit::walk::walk_update_expression(self, it);
     }
@@ -5047,6 +5079,21 @@ fn collect_legacy_reactive_decls(
 
 /// Extract identifier names from an assignment target (simple id, or destructure
 /// array/object pattern leaves).
+/// The identifier a member chain bottoms out at, or `None` when it does not —
+/// upstream's `object()`, which returns null for a chain rooted at a call.
+fn update_target_root_name<'a>(expr: &'a oxc_ast::ast::MemberExpression<'a>) -> Option<&'a str> {
+    let mut object = expr.object();
+    loop {
+        match object {
+            oxc_ast::ast::Expression::Identifier(id) => return Some(id.name.as_str()),
+            oxc_ast::ast::Expression::StaticMemberExpression(m) => object = &m.object,
+            oxc_ast::ast::Expression::ComputedMemberExpression(m) => object = &m.object,
+            oxc_ast::ast::Expression::PrivateFieldExpression(m) => object = &m.object,
+            _ => return None,
+        }
+    }
+}
+
 fn collect_assignment_target_idents(
     target: &oxc_ast::ast::AssignmentTarget,
     out: &mut Vec<String>,

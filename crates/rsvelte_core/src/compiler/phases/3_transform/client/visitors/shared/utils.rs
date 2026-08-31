@@ -292,15 +292,107 @@ fn extract_pattern_names_to_scope(pattern: &JsPattern, scope: &mut LocalScope) {
     }
 }
 
-/// Scan a block body for variable declarations and register them in the local scope.
+/// Every `var` declaration reachable from `stmt` without crossing into a nested
+/// function or class body, which open a `var` scope of their own. The oxc-AST twin
+/// of this walk is `shared::hoisted_vars`; this one reads the phase-3 IR.
+fn collect_hoisted_var_declarations<'x>(
+    stmt: &'x JsStatement,
+    arena: &'x crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
+    out: &mut Vec<&'x JsVariableDeclaration>,
+) {
+    let descend = |id, out: &mut Vec<&'x JsVariableDeclaration>| {
+        collect_hoisted_var_declarations(arena.get_stmt(id), arena, out)
+    };
+    match stmt {
+        JsStatement::VariableDeclaration(decl) if matches!(decl.kind, JsVariableKind::Var) => {
+            out.push(decl)
+        }
+        JsStatement::Block(block) => {
+            for stmt in &block.body {
+                collect_hoisted_var_declarations(stmt, arena, out);
+            }
+        }
+        JsStatement::If(stmt) => {
+            descend(stmt.consequent, out);
+            if let Some(alternate) = stmt.alternate {
+                descend(alternate, out);
+            }
+        }
+        JsStatement::For(stmt) => {
+            if let Some(JsForInit::Variable(decl)) = &stmt.init
+                && matches!(decl.kind, JsVariableKind::Var)
+            {
+                out.push(decl);
+            }
+            descend(stmt.body, out);
+        }
+        JsStatement::ForOf(stmt) => {
+            if let JsForOfLeft::Variable(decl) = &stmt.left
+                && matches!(decl.kind, JsVariableKind::Var)
+            {
+                out.push(decl);
+            }
+            descend(stmt.body, out);
+        }
+        JsStatement::While(stmt) => descend(stmt.body, out),
+        JsStatement::DoWhile(stmt) => descend(stmt.body, out),
+        JsStatement::Labeled(stmt) => descend(stmt.body, out),
+        JsStatement::Try(stmt) => {
+            for stmt in &stmt.block.body {
+                collect_hoisted_var_declarations(stmt, arena, out);
+            }
+            if let Some(handler) = &stmt.handler {
+                for stmt in &handler.body.body {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+            if let Some(finalizer) = &stmt.finalizer {
+                for stmt in &finalizer.body {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+        }
+        JsStatement::Switch(stmt) => {
+            for case in &stmt.cases {
+                for stmt in &case.consequent {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block body for the names it declares and register them in the local scope.
 /// This tracks local `const`/`let`/`var` declarations so that should_proxy() can
-/// check their init expression types when they're referenced in assignments.
+/// check their init expression types when they're referenced in assignments, and a
+/// `function` / `class` declaration, which binds a name in the block exactly as
+/// `let` does.
 fn register_block_local_vars(
     block: &[JsStatement],
     arena: &crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
     scope: &mut LocalScope,
 ) {
+    // A `var` is function-scoped, so one declared in a nested block, loop head or
+    // `case` arm binds here too; the loop below only sees this list's own statements.
+    let mut hoisted = Vec::new();
     for stmt in block {
+        collect_hoisted_var_declarations(stmt, arena, &mut hoisted);
+    }
+    for decl in hoisted {
+        for d in &decl.declarations {
+            extract_pattern_names_to_scope(&d.id, scope);
+        }
+    }
+    for stmt in block {
+        match stmt {
+            JsStatement::FunctionDeclaration(JsFunctionDeclaration { id: Some(id), .. })
+            | JsStatement::ClassDeclaration {
+                class: JsClassExpression { id: Some(id), .. },
+                ..
+            } => scope.add_shadowed(id.to_string()),
+            _ => {}
+        }
         if let JsStatement::VariableDeclaration(var_decl) = stmt {
             for decl in &var_decl.declarations {
                 if let JsPattern::Identifier(name) = &decl.id {
@@ -1016,6 +1108,10 @@ pub fn apply_transforms_to_expression_with_shadowed(
         JsExpr::Function(func) => {
             // Extract parameter names - these shadow any outer transforms
             let mut new_scope = local_scope.clone();
+            // A named function expression binds its own name inside its body.
+            if let Some(id) = &func.id {
+                new_scope.add_shadowed(id.to_string());
+            }
             for param in &func.params {
                 extract_pattern_names_to_scope(param, &mut new_scope);
             }
@@ -1909,7 +2005,7 @@ fn has_call_in_base_chain(
 ///
 /// This allows `mutate_value_legacy` to then replace `list` with `$.get(list)`,
 /// resulting in the correct: `$.get(list)[$.get(key)] = $$value`
-fn transform_computed_indices_only(
+pub(crate) fn transform_computed_indices_only(
     expr: &JsExpr,
     context: &ComponentContext,
     local_scope: &LocalScope,
@@ -3559,7 +3655,7 @@ fn push_folded_tag_comments(tag_start: u32, tag_end: u32, context: &mut Componen
     }
 }
 
-/// Drop the opaque chunks [`push_folded_tag_comments`] emitted for the tag in
+/// Drop the opaque chunks `push_folded_tag_comments` emitted for the tag in
 /// `[tag_start, tag_end)`. A generated node anchored on the same source region
 /// carries those comments itself, and keeping both prints each one twice.
 pub fn drop_folded_tag_comments(
@@ -3619,7 +3715,9 @@ pub fn build_template_chunk(
             }
             TextOrExpr::Expr(expr_tag) => {
                 // Check if it's a literal or can be evaluated at compile time
-                if let Some(lit_value) = get_literal_value(&expr_tag.expression, context) {
+                if let Some(lit_value) =
+                    get_literal_value(&expr_tag.expression, &expr_tag.metadata.expression, context)
+                {
                     if let Some(val) = lit_value {
                         let last_quasi = quasis.last_mut().unwrap();
                         last_quasi.raw.push_str(&val);
@@ -3939,9 +4037,38 @@ pub(crate) fn cook_string_literal(s: &str) -> String {
 /// - `None` - expression cannot be evaluated at compile time
 pub(crate) fn get_literal_value(
     expr: &crate::ast::js::Expression,
+    metadata: &crate::ast::template::ExpressionMetadata,
     context: &ComponentContext,
 ) -> Option<Option<String>> {
+    if legacy_build_expression_wraps(expr, metadata, context) {
+        return None;
+    }
     eval_value_text(&get_literal_value_json(expr.as_json(), context)?)
+}
+
+/// Whether `build_expression` will wrap this chunk in legacy reactivity.
+///
+/// Upstream's `build_template_chunk` evaluates the value it BUILT, and in legacy
+/// mode that value is a `SequenceExpression` whenever the expression has a call,
+/// a member or an assignment. `scope.evaluate` has no `SequenceExpression` case,
+/// so such a chunk is never known however constant the source reads.
+fn legacy_build_expression_wraps(
+    expr: &crate::ast::js::Expression,
+    metadata: &crate::ast::template::ExpressionMetadata,
+    context: &ComponentContext,
+) -> bool {
+    if context.state.analysis.runes || context.state.analysis.maybe_runes {
+        return false;
+    }
+    if metadata.has_call() || metadata.has_member_expression() || metadata.has_assignment() {
+        return true;
+    }
+    // Some directive paths drop the structural flags in phase 2, and the sites
+    // that build this chunk repair them before `build_expression` reads them —
+    // so the fold has to see the repaired answer or the two disagree about one
+    // tree.
+    let props = analyze_expression_properties(expr, context);
+    props.has_member || props.has_assignment || has_call_json(expr.as_json(), context)
 }
 
 /// A folded value as the inlining callers consume it: `None` for a nullish

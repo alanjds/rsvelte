@@ -48,9 +48,10 @@ use crate::tsgo_code_actions::{
     TsgoCodeActionContext, document_has_parser_error, rewrite_code_action_response,
 };
 use crate::tsgo_completion::{
-    CompletionAction, CompletionRewriteContext, CompletionSite, completion_action,
+    CompletionAction, CompletionRewriteContext, CompletionSite, adopt_upstream_completion_data,
+    adopt_upstream_item_data, completion_action, restore_tsgo_completion_data,
     rewrite_completion_item_for_context, rewrite_completion_response_for_context,
-    rewrite_visible_tsgo_response,
+    rewrite_visible_tsgo_response, upstream_completion_data_site,
 };
 use crate::tsgo_component_info::{
     ComponentCompletionSite, ComponentInfoAction, ComponentInfoQuery, ComponentInfoRequestId,
@@ -66,7 +67,10 @@ use crate::tsgo_rename::{
     PrepareRenamePlan, RenameDocument, merge_workspace_edits, prepare_rename_plan,
     rewrite_prepare_response, rewrite_workspace_edit,
 };
-use crate::tsgo_response::{RequestDocumentContext, TsgoResponseMapper};
+use crate::tsgo_response::{
+    RequestDocumentContext, TsgoResponseMapper, empty_completion_list, normalize_definition_result,
+    normalize_hover_result, tsgo_unmapped_result, widen_hover_range_over_string_quotes,
+};
 use crate::uri::{path_to_uri, uri_to_path};
 use crate::worker::{FileReferenceSource, Job, Outcome, PreprocessedAnalysis, Worker};
 
@@ -323,6 +327,8 @@ struct PendingTsgoRequest {
     component_references: Option<Uri>,
     file_rename: Option<PendingFileRename>,
     code_lens_resolve: Option<PendingCodeLensResolve>,
+    /// The source document and position an adopted completion `data` names.
+    completion_site_data: Option<(String, serde_json::Value)>,
 }
 
 struct PendingComponentQuery {
@@ -526,6 +532,11 @@ struct Server {
     linted: HashMap<String, u64>,
     pending: HashMap<RequestId, Pending>,
     pending_tsgo: HashMap<RequestId, PendingTsgoRequest>,
+    /// tsgo's own completion `data`, by entry name, for the sites whose items
+    /// currently carry upstream's `{name, uri, position}` payload instead.
+    completion_data: HashMap<String, HashMap<String, serde_json::Value>>,
+    /// Insertion order of `completion_data`, oldest first.
+    completion_order: Vec<String>,
     rename_aggregates: HashMap<RequestId, RenameAggregate>,
     component_queries: HashMap<RequestId, PendingComponentQuery>,
     component_query_requests: HashMap<RequestId, (RequestId, ComponentInfoRequestId)>,
@@ -581,6 +592,8 @@ impl Server {
             linted: HashMap::new(),
             pending: HashMap::new(),
             pending_tsgo: HashMap::new(),
+            completion_data: HashMap::new(),
+            completion_order: Vec::new(),
             rename_aggregates: HashMap::new(),
             component_queries: HashMap::new(),
             component_query_requests: HashMap::new(),
@@ -819,10 +832,13 @@ impl Server {
             Ok(params) => params.text_document_position,
             Err(err) => {
                 log::warn(format_args!("textDocument/completion: {err}"));
-                self.respond_nothing(id);
+                self.respond(Response::new_ok(id, empty_completion_list()));
                 return;
             }
         };
+        // `rsvelte.completion.enable` has no upstream counterpart, so
+        // `PluginHost.ts:298` — which is about every plugin declining — does not
+        // govern a server the user configured not to answer at all.
         if !self.settings.completion_enable {
             self.respond_nothing(id);
             return;
@@ -841,6 +857,7 @@ impl Server {
                     text,
                     offset,
                     strict_mode: self.settings.format_config.strict_mode.unwrap_or(false),
+                    markdown_documentation: self.client.markdown_documentation,
                 });
             }
             None => self.forward_tsgo_request(tsgo_fallback),
@@ -988,6 +1005,7 @@ impl Server {
             component_references: None,
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         let child = Request::new(id.clone(), method.to_string(), params);
         if let Err(error) = runtime.client.forward(child.into()) {
@@ -1096,6 +1114,7 @@ impl Server {
             component_references: Some(source_uri),
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         if runtime.client.forward(child.into()).is_ok() {
             self.pending_tsgo.insert(request.id, pending);
@@ -1186,6 +1205,7 @@ impl Server {
                 new_shadow,
             }),
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         if runtime.client.forward(child.into()).is_ok() {
             self.pending_tsgo.insert(request.id, pending);
@@ -1481,6 +1501,7 @@ impl Server {
                 kind,
                 source_uri,
             }),
+            completion_site_data: None,
         };
         if runtime.client.forward(child.into()).is_ok() {
             self.pending_tsgo.insert(id, pending);
@@ -1921,10 +1942,16 @@ impl Server {
         if !self.settings.tsgo_method_enabled(&request.method) {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         }
+        let Ok(completion_site_data) = self.completion_data_site(&mut request) else {
+            // Without tsgo's payload the child rejects the request outright; the
+            // unresolved item is still a valid response to the editor.
+            self.respond(Response::new_ok(request.id, request.params));
+            return;
+        };
         let completion_site = self.completion_site(&request);
         if completion_site == Some(CompletionSite::BlockMarker)
             && fallback_result.is_none()
@@ -1933,7 +1960,7 @@ impl Server {
             // An unfinished unknown `{#...` now makes the compiler reject the
             // projection. Preserve the pre-diagnostic completion response when
             // the native provider also has nothing to offer.
-            self.respond_nothing(request.id);
+            self.respond(Response::new_ok(request.id, empty_completion_list()));
             return;
         }
         let component_site = self.component_completion_site(&request);
@@ -1941,7 +1968,7 @@ impl Server {
         let Some(runtime) = &self.tsgo else {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         };
@@ -1957,7 +1984,7 @@ impl Server {
         if !mapper.map_request(&request.method, &mut request.params) {
             self.respond(Response::new_ok(
                 request.id,
-                fallback_result.unwrap_or(serde_json::Value::Null),
+                fallback_result.unwrap_or_else(|| tsgo_unmapped_result(&request.method)),
             ));
             return;
         }
@@ -1973,13 +2000,16 @@ impl Server {
             component_references: None,
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data,
         };
         let id = request.id.clone();
         if let Err(error) = runtime.client.forward(request.into()) {
             log::warn(format_args!("could not forward request to tsgo: {error}"));
             self.respond(Response::new_ok(
                 id,
-                pending.fallback_result.unwrap_or(serde_json::Value::Null),
+                pending
+                    .fallback_result
+                    .unwrap_or_else(|| tsgo_unmapped_result(&pending.method)),
             ));
             return;
         }
@@ -2027,12 +2057,59 @@ impl Server {
             component_references: None,
             file_rename: None,
             code_lens_resolve: None,
+            completion_site_data: None,
         };
         if runtime.client.forward(request.into()).is_ok() {
             self.pending_tsgo.insert(id, pending);
         } else {
             self.publish(uri, version, native_fallback);
         }
+    }
+
+    /// The source site a completion request is for. On a resolve, the item the
+    /// editor sends back carries upstream's payload, so tsgo's own `data` has
+    /// to go back on it first — everything downstream reads `data.fileName`.
+    /// `Err` means the payload is unrecoverable and the child must not be asked.
+    fn completion_data_site(
+        &mut self,
+        request: &mut Request,
+    ) -> Result<Option<(String, serde_json::Value)>, ()> {
+        match request.method.as_str() {
+            "textDocument/completion" => Ok(request
+                .params
+                .pointer("/textDocument/uri")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .zip(request.params.get("position").cloned())),
+            "completionItem/resolve" => {
+                let Some(site) = upstream_completion_data_site(&request.params) else {
+                    return Ok(None);
+                };
+                let key = completion_data_key(&site.0, &site.1);
+                if self
+                    .completion_data
+                    .get(&key)
+                    .is_some_and(|stash| restore_tsgo_completion_data(&mut request.params, stash))
+                {
+                    Ok(Some(site))
+                } else {
+                    Err(())
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn remember_completion_data(&mut self, key: String, stash: HashMap<String, serde_json::Value>) {
+        // Keep the most recent sites rather than dropping the current one: a
+        // resolve arrives right after the completion it belongs to.
+        while self.completion_order.len() >= 8 {
+            let oldest = self.completion_order.remove(0);
+            self.completion_data.remove(&oldest);
+        }
+        self.completion_order.retain(|entry| entry != &key);
+        self.completion_order.push(key.clone());
+        self.completion_data.insert(key, stash);
     }
 
     fn completion_site(&self, request: &Request) -> Option<CompletionSite> {
@@ -2059,17 +2136,39 @@ impl Server {
                 CompletionSite::Script
             });
         }
-        if let Some(prefix) = crate::context::attribute_prefix_context(text, offset) {
-            let component = prefix
-                .element_tag
-                .starts_with(|character: char| character.is_ascii_uppercase());
-            return Some(if component {
-                CompletionSite::ComponentStartTag {
-                    at_whitespace: prefix.prefix.is_empty(),
-                }
-            } else {
-                CompletionSite::ElementStartTag
-            });
+        // A `<script>` / `<style>` start tag is not an `Element` in the Svelte
+        // AST — the block is hoisted to `instance` / `module` / `css` — so
+        // upstream's `svelteNode?.type === 'Element'` guard never fires there.
+        let start_tag = crate::context::start_tag_context(text, offset);
+        if let crate::context::StartTag::Attribute(attribute) = &start_tag
+            // An attribute value's `Text` has an `Attribute` parent, which is
+            // not in upstream's raw-text bail list, and `svelteNodeAt` answers
+            // `Text` rather than the element, so neither guard fires.
+            && attribute.in_value
+        {
+            return Some(CompletionSite::Unguarded);
+        }
+        if let Some((element_tag, in_tag_name)) = match &start_tag {
+            crate::context::StartTag::Attribute(attribute) => Some((attribute.element_tag, false)),
+            crate::context::StartTag::Bare { element_tag } => Some((*element_tag, false)),
+            crate::context::StartTag::TagName { element_tag } => Some((*element_tag, true)),
+            crate::context::StartTag::None => None,
+        } {
+            if is_embedded_tag(element_tag) {
+                return Some(CompletionSite::Unguarded);
+            }
+            return Some(
+                if element_tag.starts_with(|character: char| character.is_ascii_uppercase()) {
+                    CompletionSite::ComponentStartTag {
+                        // Upstream answers nothing at a component's own name;
+                        // narrowing is the shape that reproduces it.
+                        at_whitespace: in_tag_name
+                            || might_be_at_start_tag_whitespace(text, offset),
+                    }
+                } else {
+                    CompletionSite::ElementStartTag
+                },
+            );
         }
         let before = text.get(..offset)?;
         let brace = before.rfind('{');
@@ -3055,6 +3154,7 @@ impl Server {
                     component_references,
                     file_rename,
                     code_lens_resolve,
+                    completion_site_data,
                 } = pending;
                 let source_path = document
                     .as_ref()
@@ -3064,7 +3164,15 @@ impl Server {
                     .map(|document| document.source_uri().clone());
                 let completion_context =
                     CompletionRewriteContext::new(source_path.as_deref(), true);
+                let mut adopted_completion_data = None;
                 if let Ok(result) = &mut response.response_result {
+                    // Upstream never carries tsgo's enclosing-declaration span:
+                    // `LocationLink.create(uri, defLocation.range, defLocation.range, …)`.
+                    // Collapsing it before the mapping also keeps a link whose
+                    // enclosing statement merely touches an `Ωignore` region.
+                    if method == "textDocument/definition" {
+                        normalize_definition_result(result);
+                    }
                     if let Some(runtime) = &self.tsgo {
                         let mut mapper = TsgoResponseMapper::for_overlays_with_default_document(
                             &runtime.overlays,
@@ -3082,18 +3190,27 @@ impl Server {
                     match method.as_str() {
                         "textDocument/completion" => {
                             rewrite_completion_response_for_context(result, completion_context);
+                            if let Some((uri, position)) = &completion_site_data {
+                                adopted_completion_data = Some((
+                                    completion_data_key(uri, position),
+                                    adopt_upstream_completion_data(result, uri, position),
+                                ));
+                            }
                             if let Some(site) = completion_site {
                                 let (count, first_is_member) = completion_result_shape(result);
                                 if !matches!(
                                     completion_action(site, count, first_is_member),
                                     CompletionAction::Forward
                                 ) {
-                                    *result = serde_json::Value::Null;
+                                    *result = empty_completion_list();
                                 }
                             }
                         }
                         "completionItem/resolve" => {
                             rewrite_completion_item_for_context(result, completion_context);
+                            if let Some((uri, position)) = &completion_site_data {
+                                adopt_upstream_item_data(result, uri, position);
+                            }
                         }
                         "textDocument/codeAction" => {
                             if let Some(uri) = source_uri.as_ref()
@@ -3127,6 +3244,14 @@ impl Server {
                                 {
                                     lenses.push(component_reference_code_lens(uri));
                                 }
+                            }
+                        }
+                        "textDocument/hover" => {
+                            normalize_hover_result(result);
+                            if let Some(document) =
+                                source_uri.as_ref().and_then(|uri| self.documents.get(uri))
+                            {
+                                widen_hover_range_over_string_quotes(result, document.text());
                             }
                         }
                         _ => {}
@@ -3203,11 +3328,26 @@ impl Server {
                         );
                         *result = resolve.lens;
                     }
+                    if method == "textDocument/foldingRange" {
+                        drop_degenerate_folding_ranges(result, self.client.line_folding_only);
+                    }
                     if let Some(fallback) = fallback_result {
                         merge_tsgo_result(&method, result, fallback);
                     }
                 } else if let Some(fallback) = fallback_result {
                     response.response_result = Ok(fallback);
+                }
+                // tsgo answers `null` where it has nothing; upstream's plugins do
+                // too, but `PluginHost.getCompletions` still returns the
+                // `CompletionList.create([], false)` its signature promises.
+                if method == "textDocument/completion"
+                    && let Ok(result) = &mut response.response_result
+                    && result.is_null()
+                {
+                    *result = empty_completion_list();
+                }
+                if let Some((key, stash)) = adopted_completion_data {
+                    self.remember_completion_data(key, stash);
                 }
                 if let Some((uri, version)) = push_diagnostics {
                     let diagnostics = response
@@ -3510,6 +3650,7 @@ impl Server {
                         component_references: None,
                         file_rename: None,
                         code_lens_resolve: None,
+                        completion_site_data: None,
                     };
                     requests.push((child_id, request, child_pending));
                 }
@@ -4020,6 +4161,22 @@ fn is_project_config(uri: &Uri) -> bool {
         .any(|name| uri.as_str().rsplit('/').next() == Some(name))
 }
 
+/// `FoldingRangeProvider.ts:54-56`: a client that folds by line has no use for a
+/// range inside one line, and an inverted range is never emitted.
+fn drop_degenerate_folding_ranges(result: &mut serde_json::Value, line_folding_only: bool) {
+    let Some(ranges) = result.as_array_mut() else {
+        return;
+    };
+    ranges.retain(|range| {
+        let line = |key| range.get(key).and_then(serde_json::Value::as_u64);
+        match (line("startLine"), line("endLine")) {
+            (Some(start), Some(end)) if line_folding_only => start < end,
+            (Some(start), Some(end)) => start <= end,
+            _ => true,
+        }
+    });
+}
+
 fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: serde_json::Value) {
     if result.is_null() {
         *result = fallback;
@@ -4028,6 +4185,14 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
     match method {
         "textDocument/completion" => {
             let mut fallback = fallback;
+            // `PluginHost.ts:278-281` ORs the flag over every contributing
+            // plugin; hardcoding it says the list is exhaustive when tsgo has
+            // just said it is not.
+            let incomplete = [&*result, &fallback].into_iter().any(|list| {
+                list.get("isIncomplete")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            });
             let fallback_items = fallback
                 .get_mut("items")
                 .and_then(serde_json::Value::as_array_mut);
@@ -4037,7 +4202,10 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
             if let (Some(fallback_items), Some(result_items)) = (fallback_items, result_items) {
                 fallback_items.append(result_items);
                 if let Some(object) = fallback.as_object_mut() {
-                    object.insert("isIncomplete".to_string(), serde_json::Value::Bool(false));
+                    object.insert(
+                        "isIncomplete".to_string(),
+                        serde_json::Value::Bool(incomplete),
+                    );
                 }
                 *result = fallback;
             }
@@ -4068,6 +4236,11 @@ fn merge_tsgo_result(method: &str, result: &mut serde_json::Value, fallback: ser
         }
         _ => {}
     }
+}
+
+/// The cache key for one completion site.
+fn completion_data_key(uri: &str, position: &serde_json::Value) -> String {
+    format!("{uri}|{position}")
 }
 
 fn completion_result_shape(result: &serde_json::Value) -> (usize, bool) {
@@ -4174,4 +4347,96 @@ const fn project_config_names() -> &'static [&'static str] {
         "vite.config.ts",
         "vite.config.mts",
     ]
+}
+
+/// Whether a start tag opens a block the Svelte parser hoists out of the
+/// template rather than keeping as an element.
+fn is_embedded_tag(tag: &str) -> bool {
+    tag.eq_ignore_ascii_case("script") || tag.eq_ignore_ascii_case("style")
+}
+
+/// `CompletionProvider.ts:497-501`, which tests `/\s[\s>/]/` against the two
+/// characters straddling the cursor — narrower than "nothing typed yet".
+fn might_be_at_start_tag_whitespace(text: &str, offset: usize) -> bool {
+    let before = text.get(..offset).and_then(|text| text.chars().next_back());
+    let at = text.get(offset..).and_then(|text| text.chars().next());
+    before.is_some_and(char::is_whitespace)
+        && at.is_some_and(|character| character.is_whitespace() || matches!(character, '>' | '/'))
+}
+
+#[cfg(test)]
+mod folding_tests {
+    use super::drop_degenerate_folding_ranges;
+
+    fn kept(line_folding_only: bool) -> Vec<u64> {
+        let mut result = serde_json::json!([
+            { "startLine": 0, "endLine": 3 },
+            { "startLine": 1, "endLine": 1 },
+            { "startLine": 5, "endLine": 4 },
+            { "startLine": 6 }
+        ]);
+        drop_degenerate_folding_ranges(&mut result, line_folding_only);
+        result
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|range| range["startLine"].as_u64().unwrap())
+            .collect()
+    }
+
+    /// `FoldingRangeProvider.ts:54-56` keeps a single-line range only when the
+    /// client folds by character; an inverted range is dropped either way, and a
+    /// range with no `endLine` is not this filter's business.
+    #[test]
+    fn a_single_line_range_survives_only_a_character_folding_client() {
+        assert_eq!(kept(true), [0, 6]);
+        assert_eq!(kept(false), [0, 1, 6]);
+    }
+}
+
+#[cfg(test)]
+mod start_tag_tests {
+    use super::might_be_at_start_tag_whitespace;
+
+    fn at(text: &str, needle: &str) -> bool {
+        might_be_at_start_tag_whitespace(text, text.find(needle).unwrap() + needle.len())
+    }
+
+    #[test]
+    fn only_whitespace_before_an_empty_slot_counts() {
+        assert!(at("<Comp >", "<Comp "));
+        assert!(at("<Comp />", "<Comp "));
+        assert!(at("<Comp  a>", "<Comp "));
+        // A name is being typed, so the slot is not empty.
+        assert!(!at("<Comp a>", "<Comp "));
+        // Nothing before the cursor is whitespace.
+        assert!(!at("<Comp a >", "<Comp a"));
+    }
+}
+
+#[cfg(test)]
+mod merge_tsgo_result_tests {
+    use super::merge_tsgo_result;
+    use serde_json::json;
+
+    fn merged_is_incomplete(tsgo: bool, ours: bool) -> bool {
+        let mut result = json!({ "isIncomplete": tsgo, "items": [{ "label": "a" }] });
+        merge_tsgo_result(
+            "textDocument/completion",
+            &mut result,
+            json!({ "isIncomplete": ours, "items": [{ "label": "b" }] }),
+        );
+        assert_eq!(result["items"].as_array().unwrap().len(), 2);
+        result["isIncomplete"].as_bool().unwrap()
+    }
+
+    // `PluginHost.ts:278-281` ORs the flag over the contributing plugins, so a
+    // constant — in either direction — is wrong on one of these four rows.
+    #[test]
+    fn is_incomplete_is_ored_over_both_contributors() {
+        assert!(!merged_is_incomplete(false, false));
+        assert!(merged_is_incomplete(true, false));
+        assert!(merged_is_incomplete(false, true));
+        assert!(merged_is_incomplete(true, true));
+    }
 }

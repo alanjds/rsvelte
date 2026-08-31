@@ -297,7 +297,7 @@ fn build_title_content(
                 // so every known folds to a STRING — `0` and `true` included — and a
                 // known-nullish one folds to the empty string rather than keeping a
                 // `?? ''` around a name that is gone by then.
-                match get_literal_value(&expr.expression, context) {
+                match get_literal_value(&expr.expression, &expr.metadata.expression, context) {
                     Some(Some(v)) => return (b::string(v), false, memo_entries),
                     Some(None) => return (b::string(""), false, memo_entries),
                     None => {}
@@ -366,7 +366,7 @@ fn build_title_content(
             match node {
                 TemplateNode::Text(text) => folded.push_str(&text.data),
                 TemplateNode::ExpressionTag(expr) => {
-                    match get_literal_value(&expr.expression, context) {
+                    match get_literal_value(&expr.expression, &expr.metadata.expression, context) {
                         Some(Some(v)) => folded.push_str(&v),
                         Some(None) => {}
                         None => {
@@ -401,7 +401,7 @@ fn build_title_content(
                 // Upstream inlines a chunk whose evaluation is known into the
                 // quasi text (`Zoo — ${name}`, not `${site} — ${name}`); a
                 // known-nullish chunk contributes nothing (its `?? ''`).
-                match get_literal_value(&expr.expression, context) {
+                match get_literal_value(&expr.expression, &expr.metadata.expression, context) {
                     Some(Some(v)) => {
                         current_text.push_str(&v);
                         continue;

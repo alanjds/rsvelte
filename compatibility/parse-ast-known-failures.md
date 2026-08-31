@@ -1,7 +1,7 @@
 # Public `parse()` AST parity ratchet
 
 Gate: `scripts/compat-corpus/parse-ast-verify.mjs`.
-Ratchet: `parse-ast-known-failures.json`, currently **459 entries**.
+Ratchet: `parse-ast-known-failures.json`, currently **321 entries**.
 
 ## The question it asks
 
@@ -30,6 +30,18 @@ first and both were worse — per entry id gives a five-figure file that churns 
 bump, and per *set* of divergent paths multiplies independent defects into 472 classes over
 4,468 files. The script's header carries the numbers.
 
+A third was found by reading the ratchet rather than by designing it, and it fails in the
+opposite direction: the path descended into objects whose keys are **user data**. The
+`<svelte:options customElement={{ props: { … } }} />` bag is keyed by the prop names the
+component author chose, so one defect — official evaluates `customElement.props` into a
+descriptor map, rsvelte returns the raw `ObjectExpression` — was filed under one key per name
+(`props.count`, `props.foo`, `props.camelCase`, `props.anArray`, …). That makes the ratchet
+**grow when a new corpus file carries a new prop name**, for a defect already listed. Measured
+on `--filter custom-element`: **15 keys before, 2 after**. Such paths are listed in
+`DATA_KEYED_PATHS` and collapse to `{}` exactly as array indices collapse to `[]` — no
+divergence stops being reported, it is reported once instead of once per name. A key too
+coarse suppresses a second defect; a key too fine invents entries for the first one.
+
 Acceptance divergences are the one exception: "official rejects this document and rsvelte does
 not" is a fact about the document, so those keys carry the entry id. A single shared key could not
 tell two such entries from one, which is the whole shrink the ratchet exists to observe.
@@ -56,30 +68,30 @@ parsed all 11 without complaint. The verdict named the loudest thing it could se
 one line of the harness. Serialization now sits outside the parse `try`, and a bigint goes through
 a replacer so its value stays comparable instead of being dropped.
 
-Partition of `parse-ast-known-failures.json` by cluster: `92 + 90 + 74 + 68 + 64 + 24 + 22 + 13 + 10 + 2`
+Partition of `parse-ast-known-failures.json` by cluster: `78 + 62 + 50 + 45 + 44 + 16 + 14 + 9 + 2 + 1`
 
 | cluster | keys | what it is |
 |---|---|---|
-| `span` | 92 | `start` / `end` / `loc` disagree on a node type. Merged into one key per node type on purpose: they are derived from the same offsets, and split by field they were 672 keys for the same defects. |
-| `node-type` | 90 | rsvelte labels a node with a different `type` than acorn/acorn-typescript does. Almost all are TypeScript nodes; the walk stops at a `type` mismatch, so each is one key rather than a spray of derived field keys. |
-| `estree-fields` | 74 | ESTree fields rsvelte's serializer omits or adds: `importKind`, `exportKind`, `attributes` on an import/export, `accessor`, `typeAnnotation`, `returnType`, `optional`, `readonly`, `declare`. The lint gates already found three of these from the other side. |
-| `unclustered` | 68 | keys nobody has classified. The cluster exists so an unclassified key reads as unclassified instead of joining someone else's row. |
-| `comment-attachment` | 64 | #3387 — comments disagree on statements and programs; one key represents each affected node type and attachment field. #3702 fixed the walk order for five template-literal shapes in both AST modes. |
-| `accepts-what-official-rejects` | 13 | 6 corpus entries × 2 axes, plus one loose source. See below. |
-| `css-shape` | 24 | the legacy CSS selector conversion (`Selector` vs `ComplexSelector`, `combinator` / `selectors` / `name`). |
-| `child-count` | 22 | an array of children with a different length. |
-| `loc-presence` | 10 | a node that has a `loc` on one side and none on the other — kept apart from `span` because "no position at all" is a different defect from "wrong position". |
+| `span` | 78 | `start` / `end` / `loc` disagree on a node type. Merged into one key per node type on purpose: they are derived from the same offsets, and split by field they were 672 keys for the same defects. |
+| `node-type` | 62 | rsvelte labels a node with a different `type` than acorn/acorn-typescript does. Almost all are TypeScript nodes; the walk stops at a `type` mismatch, so each is one key rather than a spray of derived field keys. |
+| `estree-fields` | 44 | ESTree fields rsvelte's serializer omits or adds: `importKind`, `exportKind`, `attributes` on an import/export, `accessor`, `typeAnnotation`, `returnType`, `optional`, `readonly`, `declare`. The lint gates already found three of these from the other side. |
+| `unclustered` | 45 | keys nobody has classified. The cluster exists so an unclassified key reads as unclassified instead of joining someone else's row. |
+| `comment-attachment` | 50 | #3387 — comments disagree on statements and programs; one key represents each affected node type and attachment field. #3702 fixed the walk order for five template-literal shapes in both AST modes. |
+| `accepts-what-official-rejects` | 1 | the loose `unclosed-attribute-quote` source, and nothing else. See below. |
+| `css-shape` | 14 | the legacy CSS selector conversion (`Selector` vs `ComplexSelector`, `combinator` / `selectors` / `name`). |
+| `child-count` | 16 | an array of children with a different length. |
+| `loc-presence` | 9 | a node that has a `loc` on one side and none on the other — kept apart from `span` because "no position at all" is a different defect from "wrong position". |
 | `ast-mode` | 2 | #3385 — the remaining legacy-root shape differences. |
 
 ## The acceptance rows are the interesting ones
 
-**rsvelte's `parse()` accepts 6 collected documents official's `parse()` rejects** (6 ids ×
-2 axes), plus the loose `unclosed-attribute-quote` source. Nine TypeScript documents left this
-set when the early-error layer taught OXC's split type/value namespaces about
-acorn-typescript's `import type`/value-declaration collision. The original two are one cause:
-`css-invalid-combinator-selector-4` (`css_selector_invalid`) and
-`invalid-empty-css-declaration` (`css_empty_declaration`) are raised by upstream from `1-parse`
-and by rsvelte from `2-analyze`. That is the class AGENTS.md already records for
+**No collected document is left in this row.** The only key that remains is the loose
+`unclosed-attribute-quote` source. Nine TypeScript documents left this set when the early-error
+layer taught OXC's split type/value namespaces about acorn-typescript's `import type`/
+value-declaration collision, and the six that were still listed — including the original two,
+`css-invalid-combinator-selector-4` (`css_selector_invalid`) and `invalid-empty-css-declaration`
+(`css_empty_declaration`), raised by upstream from `1-parse` and by rsvelte from `2-analyze` —
+now agree on both axes. That is the class AGENTS.md already records for
 `svelte_meta_invalid_placement` — anything that parses without analyzing sees a valid tree where
 the official toolchain sees a fatal error. It is deliberately **in scope**: a drop-in `parse()`
 that accepts more than official does is a divergence, and listing it here is what makes it

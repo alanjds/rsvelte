@@ -1,5 +1,10 @@
 //! Native completion and hover data for Svelte's HTML surface.
 
+pub mod documentation;
+pub mod provider;
+pub mod svelte_html;
+pub mod web;
+
 /// A native HTML/Svelte element description.
 pub struct TagData {
     pub name: &'static str,

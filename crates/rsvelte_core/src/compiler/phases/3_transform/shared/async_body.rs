@@ -495,7 +495,21 @@ pub fn restore_async_derived_ignore_comments(source: &str, mut transformed: Stri
             // It belongs on the declaration hoisted by the async-body transform.
             transformed = transformed.replace(comment, "");
             let suffix = if comment.starts_with("//") {
-                format!("{comment}\n")
+                // A `//` ends at its newline, so the name moves to the next line
+                // and has to keep the indent of the `var` it belongs to. Every
+                // hoist reachable from a probe sits at one tab, so a literal
+                // would pass too; the line's own indent is read because it is
+                // right by construction rather than by that coincidence.
+                let line_start = transformed
+                    .get(..pos)
+                    .and_then(|before| before.rfind('\n'))
+                    .map_or(0, |newline| newline + 1);
+                let indent = transformed.get(line_start..pos).unwrap_or("");
+                if indent.bytes().all(|byte| byte == b'\t' || byte == b' ') {
+                    format!("{comment}\n{indent}")
+                } else {
+                    format!("{comment}\n")
+                }
             } else {
                 format!("{comment} ")
             };
