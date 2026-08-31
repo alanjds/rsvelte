@@ -30,8 +30,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { writeGeneration } from './artifacts.mjs';
+import { ignoredPaths } from './gitignored.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -134,22 +134,6 @@ function addEntry(repo, relPath, kind, source) {
 	fs.mkdirSync(path.dirname(dest), { recursive: true });
 	fs.writeFileSync(dest, source);
 	manifest.push({ id, kind });
-}
-
-// A source repo's build artifacts are not its published source, and whether they
-// exist depends on whether the runner's dependency cache hit — so collecting them
-// makes the corpus population non-deterministic across runs.
-function ignoredPaths(dir) {
-	if (!fs.existsSync(path.join(dir, '.git'))) return new Set();
-	try {
-		const out = execFileSync('git', ['-C', dir, 'ls-files', '--others', '--ignored', '--exclude-standard'], {
-			encoding: 'utf8',
-			maxBuffer: 256 * 1024 * 1024,
-		});
-		return new Set(out.split('\n').filter(Boolean));
-	} catch {
-		return new Set();
-	}
 }
 
 // `markdown` controls whether ```svelte / ```js+file fences inside .md docs are
