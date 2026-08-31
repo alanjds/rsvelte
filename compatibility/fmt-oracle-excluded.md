@@ -29,16 +29,59 @@ Attribution of `fmt-oracle-excluded.json`:
 | 1 | [`upstream_issues/oxfmt-svelte-css-eats-a-css-escape-terminator-space.md`](../upstream_issues/oxfmt-svelte-css-eats-a-css-escape-terminator-space.md) | `oracle-bug` — a CSS escape's terminator space is eaten, and a live rule becomes dead |
 | 3 | [`upstream_issues/oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md`](../upstream_issues/oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md) | `oracle-bug` — source tabs survive on a comment-bearing selector under `useTabs: false` |
 
-**One entry carries no target: `shadcn-svelte/.../theme-customizer-code.svelte`.** It is the only
-one of the 27 where the two formatted texts compile to *different* output, and the reason it is
-not attributed is that neither side is the source's own rendering. Compiling all three with
-`submodules/svelte/.../compiler/index.js`: the oracle's text and rsvelte's text each differ from
-the **unformatted source**, in different places — both formatters move whitespace inside a
-whitespace-sensitive `<span>` when the line overflows at that nesting depth, and they pick
-different break points. So this is not a divergence with a correct side to record; it is a defect
-`rsvelte-fmt` shares with the oracle, and the DoD-4 answer for it is a fix rather than a
-citation. The recorded cross-platform claim (macOS collapses, Linux attribute-wraps) is
-**unmeasured** here — only the macOS oracle was run.
+**One entry carries no target: `shadcn-svelte/.../theme-customizer-code.svelte`, and its
+recorded `reason` was falsified on 2026-08-31.** The JSON calls it an `oracle-bug` — "on macOS it
+collapses the overflowing self-closing `<ColorIndicator color={value} />` inside `<pre>` to one
+line, on Linux it attribute-wraps it … rsvelte deterministically matches the macOS form". Measured
+on macOS with oxfmt 0.64.0, three runs each, both formatters byte-stable: **the oracle
+attribute-wraps and rsvelte collapses** — the opposite assignment. So whatever the cross-platform
+behaviour is, the sentence "rsvelte matches the macOS form" is wrong, and the entry is not
+justified by the reason it carries.
+
+What the divergence actually is, reduced to a 19-line repro that reproduces it:
+
+```svelte
+<pre class="…overflowing class list…">
+  <code>
+    {#each Object.entries(o?.light || {}) as [key, value] (key)}
+      <span data-line class="line text-code-foreground"
+        >&nbsp;&nbsp;&nbsp;--{key}: <ColorIndicator color={value} /> {value};</span
+      >
+    {/each}
+  </code>
+</pre>
+```
+
+The `<span>` line overflows `printWidth: 80` at that depth, so both formatters must break it:
+
+| | break point | rendered text between `/>` and `{value}` |
+|---|---|---|
+| oracle | inside the `<ColorIndicator>` tag (`<ColorIndicator⏎ color={value}⏎/> {value};`) | the source's single space |
+| rsvelte | at the text whitespace (`<ColorIndicator color={value} />⏎ {value};`) | a newline + 14 spaces |
+
+Inside `<pre>` that whitespace is content, so rsvelte's choice changes what the page renders.
+**The control that makes this rsvelte's defect rather than a shared one: replace the `<pre>` with a
+`<div>` and the two outputs are byte-identical** — both then take rsvelte's break, which is safe
+where whitespace collapses. prettier-plugin-svelte suppresses a text-position break under
+`isPreTagContent`; `rsvelte_formatter` does not.
+
+Compiled three ways with `submodules/svelte/…/compiler/index.js` (`css: 'external'`), the full
+file separates into **two divergences, only one of which is shared**:
+
+- **Shared, and not a parity failure:** source-vs-oracle differs on **28 server** and **8 client**
+  lines, and **every one of them differs only in leading horizontal whitespace** — the
+  `useTabs: false` reindentation of `<pre>` content, which both formatters perform and which does
+  change the rendering. `css.code` is byte-identical on all three texts and both targets.
+- **rsvelte-only, and the reason the entry exists:** the break above. It is why oracle-vs-rsvelte
+  differ (server 552 → 570 lines, client 932 → 969), and the oracle side is the one that preserves
+  the source's rendering.
+
+**The DoD-4 answer is therefore "eliminate", not a citation.** There is a correct side, so this is
+neither an `upstream_issues/` item nor a deliberate divergence — a pin would pin the wrong
+behaviour. It also cannot be eliminated while it stays here: an excluded id is removed from the
+comparison set entirely, so fixing the formatter can never show up as a match. The entry belongs
+in the `fmt-known-failures.json` burndown that already owns 788 of these. `fmt-*` is Agent-C's
+ratchet, so the JSON edit is theirs to make; this section records the measurement.
 
 ## Re-measured twice: **six reasons did not reproduce on 2026-08-30, and the 2026-08-31 pass closed nine of the ten**
 
