@@ -95,6 +95,9 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte-inspect-with-in-a-declarator.md` | sveltejs/svelte | #3614, #3627 | unrecorded |
 | `svelte-snippet-name-colliding-with-an-import.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
+| `tsgo-lsp-completion-item-omits-the-typescript-kind.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 
-The six unnumbered reports came out of the lint-parity campaign rather than from a single rsvelte
-issue, and none of them names one internally — `—` records that, rather than inventing a number.
+Seven reports are unnumbered because they came out of a campaign rather than from a single rsvelte
+issue, and none of them names one internally — `—` records that, rather than inventing a number. Six
+are from the lint-parity campaign; `tsgo-lsp-completion-item-omits-the-typescript-kind.md` is from
+the LSP differential campaign.
