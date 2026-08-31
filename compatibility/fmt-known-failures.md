@@ -1636,3 +1636,25 @@ interpolation in the same value has broken, a later one's real column is much sm
 says and `broken_width` is far too tight. That is the next decision point, and it is the mirror of
 the one just fixed: the same variable, wrong in the other direction, on the population the model
 was already running on.
+
+### 2026-08-31 — the mirror defect, pinned and reduced but NOT a one-liner
+
+The cluster named above is pinned at **44 ids** (`agent-c/multi-interp-ids.json`) and reduces to
+five lines of input at four indentation depths, all four diverging:
+
+```svelte
+<div class="step-badge {index <= currentStep ? 'bg-primary text-primary-content' : 'bg-base-200'} {step.requires_id && !location.id ? 'opacity-50 cursor-not-allowed' : ''} {index === 0 && isEditMode ? 'ring-2' : ''}"></div>
+```
+
+The oracle keeps `: 'bg-base-200'} {step.requires_id && !location.id` at 60 columns; rsvelte breaks
+it at 47. The second interpolation's real column is about 27, because the first interpolation
+above it has already broken — but `col` is the running **flat** column, so `broken_width` is
+computed as if all of the first interpolation's text still sat on this line.
+
+**The obvious fix does not work, and that is why this is recorded rather than attempted.** Resetting
+`col` after a breakable part assumes that part breaks; the printer decides that per group, at print
+time, and both outcomes occur. A shape built under the broken assumption is right exactly when the
+earlier group breaks and too wide when it stays flat — the two cases need two different shapes from
+one build-time computation. Doing this properly means the `broken` form becoming a function the
+printer evaluates at the column it actually has, which is a change to `Doc::RawExpr`'s contract
+rather than to an arithmetic expression. The 44 are pinned so that whoever takes it can count.
