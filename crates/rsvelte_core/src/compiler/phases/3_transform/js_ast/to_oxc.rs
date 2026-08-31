@@ -812,6 +812,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         comments: &[(u32, u32, bool)],
         at: u32,
         at_end: u32,
+        claim_only: bool,
     ) -> Option<Span> {
         if at < region_start || at_end < at {
             return None;
@@ -833,7 +834,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             synth.source.push_str(region);
             synth.source.push('\n');
             for &(source_start, source_end, line) in comments {
-                if !synth.source_comments.insert((source_start, source_end)) {
+                if !synth.source_comments.insert((source_start, source_end)) || claim_only {
                     continue;
                 }
                 let start = base + (source_start - region_start);
@@ -865,6 +866,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             &anchor.comments,
             anchor.at,
             anchor.at_end,
+            anchor.claim_only,
         )
     }
 
@@ -1499,6 +1501,8 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     &anchor.comments,
                     anchor.at,
                     anchor.at_end,
+                    // A pattern anchor stands in for no builder-made wrapper.
+                    false,
                 ) {
                     *pattern.span_mut() = span;
                 }

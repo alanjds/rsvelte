@@ -16,11 +16,20 @@ use rsvelte_core::{CompileOptions, GenerateMode, compile};
 const HEAD: &str = "<script>\n\tlet v = 1;\n\tfunction z(){}\n\tfunction act(){}\n</script>\n";
 
 fn client(source: &str) -> String {
+    compile_with(source, false)
+}
+
+fn client_dev(source: &str) -> String {
+    compile_with(source, true)
+}
+
+fn compile_with(source: &str, dev: bool) -> String {
     let output = compile(
         source,
         CompileOptions {
             generate: GenerateMode::Client,
             filename: Some("C.svelte".into()),
+            dev,
             ..Default::default()
         },
     )
@@ -108,5 +117,43 @@ fn control_same_line_comment_in_a_use_directive_body_is_not_duplicated() {
     assert!(
         count <= 1,
         "dedupe must not add a copy, got {count}:\n{output}"
+    );
+}
+
+/// In dev the handler becomes a named function expression, and the anchor
+/// standing in for that builder-made wrapper was placing the body's comments a
+/// second time — inside the parameter list.
+#[test]
+fn block_comment_in_a_dev_named_handler_is_emitted_once() {
+    let output = client_dev(&format!(
+        "{HEAD}<button onclick={{(e) => {{\n\t/* C */\n\tz();\n}}}}>x</button>\n"
+    ));
+    assert_attached_once(&output, "/* C */", "\t\t");
+}
+
+#[test]
+fn line_comment_in_a_dev_named_handler_is_emitted_once() {
+    let output = client_dev(&format!(
+        "{HEAD}<button onclick={{(e) => {{\n\t// C\n\tz();\n}}}}>x</button>\n"
+    ));
+    assert_attached_once(&output, "// C", "\t\t");
+}
+
+/// Control (#4046): an expression-bodied arrow has no statement list, so no
+/// chunk carries its comment and the wrapper's anchor is the only thing that
+/// can place it. Official emits it before the wrapper.
+#[test]
+fn control_comment_in_a_dev_expression_bodied_handler_is_kept() {
+    let output = client_dev(
+        "<script>\n\tlet v = $state(1);\n</script>\n<button onclick={() => /* C */ v++}>x</button>\n",
+    );
+    assert_eq!(
+        output.matches("/* C */").count(),
+        1,
+        "the wrapper's anchor must still place it:\n{output}"
+    );
+    assert!(
+        output.contains("/* C */ function click()"),
+        "official puts it before the wrapper:\n{output}"
     );
 }
