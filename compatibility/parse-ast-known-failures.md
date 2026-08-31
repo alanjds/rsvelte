@@ -30,6 +30,18 @@ first and both were worse — per entry id gives a five-figure file that churns 
 bump, and per *set* of divergent paths multiplies independent defects into 472 classes over
 4,468 files. The script's header carries the numbers.
 
+A third was found by reading the ratchet rather than by designing it, and it fails in the
+opposite direction: the path descended into objects whose keys are **user data**. The
+`<svelte:options customElement={{ props: { … } }} />` bag is keyed by the prop names the
+component author chose, so one defect — official evaluates `customElement.props` into a
+descriptor map, rsvelte returns the raw `ObjectExpression` — was filed under one key per name
+(`props.count`, `props.foo`, `props.camelCase`, `props.anArray`, …). That makes the ratchet
+**grow when a new corpus file carries a new prop name**, for a defect already listed. Measured
+on `--filter custom-element`: **15 keys before, 2 after**. Such paths are listed in
+`DATA_KEYED_PATHS` and collapse to `{}` exactly as array indices collapse to `[]` — no
+divergence stops being reported, it is reported once instead of once per name. A key too
+coarse suppresses a second defect; a key too fine invents entries for the first one.
+
 Acceptance divergences are the one exception: "official rejects this document and rsvelte does
 not" is a fact about the document, so those keys carry the entry id. A single shared key could not
 tell two such entries from one, which is the whole shrink the ratchet exists to observe.

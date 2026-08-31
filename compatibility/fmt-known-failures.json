@@ -472,6 +472,7 @@
 	"primo/src/lib/components/BlockPickerPanel.svelte",
 	"primo/src/lib/components/CreateSite.svelte",
 	"primo/src/lib/components/app-sidebar.svelte",
+	"shadcn-svelte/docs/src/lib/components/theme-customizer-code.svelte",
 	"skeleton/sites/plus.skeleton.dev/src/routes/(app)/content/blocks/+page.svelte",
 	"skeleton/sites/skeleton.dev/src/components/ui/header/theme.svelte",
 	"skeleton/sites/skeleton.dev/src/components/ui/preview.svelte",

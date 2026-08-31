@@ -806,6 +806,8 @@ jobs:
           cd submodules/language-tools
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm --filter svelte-language-server... build
+          cd "$GITHUB_WORKSPACE"
+          node scripts/compat-lsp/pin-official-svelte.mjs
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -884,6 +886,8 @@ jobs:
           cd submodules/language-tools
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm --filter svelte-language-server... build
+          cd "$GITHUB_WORKSPACE"
+          node scripts/compat-lsp/pin-official-svelte.mjs
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

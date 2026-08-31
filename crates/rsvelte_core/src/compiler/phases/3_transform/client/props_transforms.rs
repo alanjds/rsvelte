@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use crate::compiler::phases::phase2_analyze::ComponentAnalysis;
 use crate::compiler::phases::phase2_analyze::scope::BindingKind;
 use crate::compiler::phases::phase3_transform::shared::js_scan::{
-    after_keywords, code_bytes, skip_opaque,
+    after_keywords, code_bytes, ends_inside_line_comment, find_code, skip_opaque,
 };
 use crate::compiler::phases::phase3_transform::shared::offsets::{
     ByteOffset, CharOffset, CharToByte,
@@ -1235,13 +1235,33 @@ pub(super) fn transform_export_let(line: &str, analysis: &ComponentAnalysis) -> 
 
             // Remove trailing semicolon from value (after comment removal)
             let value = value.trim_end_matches(';').trim();
-            let initializer_comment = raw_declarators
+            let raw_initializer = raw_declarators
                 .get(declarator_index)
-                .and_then(|raw_decl| raw_decl.find('=').map(|at| &raw_decl[at + 1..]))
-                .and_then(leading_initializer_comments);
-            let rendered_value = initializer_comment
-                .map(|comment| format!("{}{}", comment, value))
-                .unwrap_or_else(|| value.to_string());
+                .and_then(|raw_decl| raw_decl.find('=').map(|at| &raw_decl[at + 1..]));
+            let initializer_comment = raw_initializer.and_then(leading_initializer_comments);
+            // A comment INSIDE the initializer is in neither restored run: the
+            // comment-free copy is what every semantic decision reads. Carry the
+            // source text instead, guarded on the two spellings agreeing once
+            // comments are removed.
+            let interior_comments = raw_initializer
+                .filter(|_| initializer_comment.is_none())
+                .map(|raw| raw.trim_end().strip_suffix(';').unwrap_or(raw).trim())
+                .filter(|raw| raw.contains("//") || raw.contains("/*"))
+                // A `;` still in the text means the initializer did not end
+                // where that suffix was stripped (`null; // c`), and text ending
+                // inside a line comment would swallow the closing paren.
+                .filter(|raw| {
+                    find_code(raw.as_bytes(), b";").is_none() && !ends_inside_line_comment(raw)
+                })
+                .filter(|raw| strip_js_comments(raw).trim() == value);
+            let rendered_value = interior_comments.map_or_else(
+                || {
+                    initializer_comment
+                        .map(|comment| format!("{}{}", comment, value))
+                        .unwrap_or_else(|| value.to_string())
+                },
+                std::string::ToString::to_string,
+            );
 
             // Check if the value is a store accessor (e.g., $foo)
             // Store accessors like $foo become $foo() calls after transformation.
@@ -1344,7 +1364,7 @@ pub(super) fn transform_export_let(line: &str, analysis: &ComponentAnalysis) -> 
                     // When value starts with '{', wrap in parens to prevent
                     // OXC from parsing `() => {...}` as arrow with block body
                     // instead of arrow returning object literal
-                    let lazy_arg = make_lazy_prop_arg(value);
+                    let lazy_arg = make_lazy_prop_arg(interior_comments.unwrap_or(value));
                     let lazy_arg = initializer_comment
                         .map(|comment| restore_lazy_initializer_comment(&lazy_arg, comment))
                         .unwrap_or(lazy_arg);

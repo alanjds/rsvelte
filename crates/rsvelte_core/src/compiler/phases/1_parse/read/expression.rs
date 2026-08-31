@@ -33,7 +33,7 @@ use super::super::utils::TrimWs;
 use crate::ast::arena::{IdRange, ParseArena};
 use crate::ast::js::Expression;
 use crate::ast::typed_expr::{
-    JsNode, LiteralValue, Loc, RegexValue, SourcePosition, TemplateElementValue,
+    JsNode, LiteralValue, Loc, RegexValue, SourcePosition, TemplateElementValue, TsMemberModifiers,
     alloc_deser_children, alloc_deser_node, child_node_from_value,
 };
 use crate::compiler::phases::phase1_parse::utils::find_matching_bracket;
@@ -5546,6 +5546,15 @@ fn convert_class_element_for_expr(
             );
             obj.set_field("value", value.as_json().clone());
 
+            push_member_modifiers(
+                &mut obj,
+                method.accessibility,
+                &[
+                    ("override", method.r#override),
+                    ("optional", method.optional),
+                ],
+            );
+
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -5568,6 +5577,18 @@ fn convert_class_element_for_expr(
             } else {
                 obj.set_field("value", Value::Null);
             }
+
+            push_member_modifiers(
+                &mut obj,
+                prop.accessibility,
+                &[
+                    ("declare", prop.declare),
+                    ("definite", prop.definite),
+                    ("optional", prop.optional),
+                    ("override", prop.r#override),
+                    ("readonly", prop.readonly),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
@@ -8120,6 +8141,35 @@ fn first_non_ecmascript_whitespace(content: &str, irregular: &[oxc_span::Span]) 
         .min()
 }
 
+/// acorn-typescript stamps `importKind`/`exportKind` on every import and export
+/// and acorn stamps none, so the field's presence is a fact about the parser
+/// rather than about the statement.
+fn estree_module_kind(
+    arena: &ParseArena,
+    kind: oxc_ast::ast::ImportOrExportKind,
+) -> Option<CompactString> {
+    if kind == oxc_ast::ast::ImportOrExportKind::Type {
+        Some(CompactString::from("type"))
+    } else if arena.is_ts_program() {
+        Some(CompactString::from("value"))
+    } else {
+        None
+    }
+}
+
+/// Restores the arena's TypeScript flag when a program conversion returns, so a
+/// nested conversion cannot leave the outer one reading the wrong parser.
+struct TsProgramGuard<'a> {
+    arena: &'a ParseArena,
+    previous: bool,
+}
+
+impl Drop for TsProgramGuard<'_> {
+    fn drop(&mut self) {
+        self.arena.set_ts_program(self.previous);
+    }
+}
+
 fn convert_parsed_program<'ast>(
     arena: &ParseArena,
     program: &OxcProgram<'_>,
@@ -8137,6 +8187,10 @@ fn convert_parsed_program<'ast>(
         script_tag_start,
         script_tag_end,
     } = params;
+    let _ts_guard = TsProgramGuard {
+        arena,
+        previous: arena.set_ts_program(is_typescript),
+    };
     {
         // Mirror upstream acorn's throw-on-error behaviour: capture the first
         // parse error (acorn reports `err.pos` where it stopped consuming
@@ -8973,11 +9027,7 @@ fn convert_statement_for_program(
                 line_offsets,
             ));
 
-            let import_kind = if import_decl.import_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let import_kind = estree_module_kind(arena, import_decl.import_kind);
 
             Some(JsNode::ImportDeclaration {
                 start: start as u32,
@@ -10221,11 +10271,7 @@ fn convert_import_specifier(
                 line_offsets,
             ));
 
-            let import_kind = if import_spec.import_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let import_kind = estree_module_kind(arena, import_spec.import_kind);
 
             JsNode::ImportSpecifier {
                 start: start as u32,
@@ -11533,12 +11579,11 @@ fn convert_class_element_for_program_as_node(
 ) -> TypedClassElem {
     match element {
         oxc_ast::ast::ClassElement::MethodDefinition(method) => {
-            // Abstract methods are dropped by the Value path (`return None`).
-            if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
-                return TypedClassElem::Skip;
-            }
-            // TS modifiers / decorators have no typed representation here.
+            // TS modifiers / decorators have no typed representation here, and
+            // an abstract method's `value` is a `TSDeclareMethod` the typed
+            // function variant cannot spell.
             if !method.decorators.is_empty()
+                || method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
                 || method.r#override
                 || method.optional
                 || method.accessibility.is_some()
@@ -11573,6 +11618,9 @@ fn convert_class_element_for_program_as_node(
                 kind: CompactString::from(kind),
                 r#static: method.r#static,
                 computed: method.computed,
+                // Any written modifier bails to the Value blob above, so a
+                // typed member never carries one.
+                modifiers: TsMemberModifiers::default(),
             })
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -11612,9 +11660,9 @@ fn convert_class_element_for_program_as_node(
                 value,
                 r#static: prop.r#static,
                 computed: prop.computed,
-                // AccessorProperty bails above, so a typed PropertyDefinition is
-                // never an `accessor` field.
-                accessor: false,
+                // AccessorProperty and every written modifier bail to the Value
+                // blob above, so a typed PropertyDefinition never carries one.
+                modifiers: TsMemberModifiers::default(),
             })
         }
         // AccessorProperty: the Value path emits a `PropertyDefinition` with an
@@ -11628,6 +11676,29 @@ fn convert_class_element_for_program_as_node(
 }
 
 /// Convert a class element to JSON value (for program context).
+/// acorn-typescript emits a class-member modifier **only where the source wrote
+/// it**, so absence and `false` are different facts and a modifier must be
+/// skipped rather than emitted as `false`.
+fn push_member_modifiers(
+    obj: &mut Map<String, Value>,
+    accessibility: Option<oxc_ast::ast::TSAccessibility>,
+    flags: &[(&str, bool)],
+) {
+    for (name, present) in flags {
+        if *present {
+            obj.set_field(name, Value::Bool(true));
+        }
+    }
+    if let Some(accessibility) = accessibility {
+        let spelling = match accessibility {
+            oxc_ast::ast::TSAccessibility::Private => "private",
+            oxc_ast::ast::TSAccessibility::Protected => "protected",
+            oxc_ast::ast::TSAccessibility::Public => "public",
+        };
+        obj.set_field("accessibility", Value::String(spelling.to_string()));
+    }
+}
+
 fn convert_class_element_for_program(
     arena: &ParseArena,
     element: &oxc_ast::ast::ClassElement,
@@ -11636,10 +11707,8 @@ fn convert_class_element_for_program(
 ) -> Option<Value> {
     match element {
         oxc_ast::ast::ClassElement::MethodDefinition(method) => {
-            // Filter out abstract methods (TSAbstractMethodDefinition)
-            if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
-                return None;
-            }
+            let is_abstract =
+                method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition;
             let start = offset + method.span.start as usize;
             let end = offset + method.span.end as usize;
             let mut obj = Map::new();
@@ -11661,15 +11730,41 @@ fn convert_class_element_for_program(
             let key = convert_property_key(arena, &method.key, offset, line_offsets);
             obj.set_field("key", key.to_value());
 
-            // value (function expression)
-            let value =
+            // value (function expression). acorn-typescript gives a bodyless
+            // abstract method a `TSDeclareMethod`: same fields minus `body`,
+            // plus the `expression` flag and the return type it always writes.
+            let mut value =
                 convert_function_expression_for_program(arena, &method.value, offset, line_offsets);
+            if is_abstract && let Value::Object(func) = &mut value {
+                func.set_field("type", Value::String("TSDeclareMethod".to_string()));
+                func.remove("body");
+                func.set_field("expression", Value::Bool(false));
+                if let Some(return_type) = &method.value.return_type {
+                    func.set_field(
+                        "returnType",
+                        convert_type_annotation_adjusted(arena, return_type, offset, line_offsets),
+                    );
+                }
+            }
             obj.set_field("value", value);
+
+            push_member_modifiers(
+                &mut obj,
+                method.accessibility,
+                &[
+                    ("abstract", is_abstract),
+                    ("override", method.r#override),
+                    ("optional", method.optional),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
-            // Filter out abstract property definitions (TSAbstractPropertyDefinition)
+            // An abstract property is still dropped: official keeps it in the
+            // AST *and* prints `abstract p;` into the compiled output, which no
+            // JS parser accepts, so emitting it here would need that decision
+            // taken first.
             if prop.r#type == oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition {
                 return None;
             }
@@ -11693,10 +11788,17 @@ fn convert_class_element_for_program(
                 obj.set_field("value", Value::Null);
             }
 
-            // TypeScript: declare field (for `declare bar: string;` in class)
-            if prop.declare {
-                obj.set_field("declare", Value::Bool(true));
-            }
+            push_member_modifiers(
+                &mut obj,
+                prop.accessibility,
+                &[
+                    ("declare", prop.declare),
+                    ("definite", prop.definite),
+                    ("optional", prop.optional),
+                    ("override", prop.r#override),
+                    ("readonly", prop.readonly),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
@@ -13932,11 +14034,7 @@ fn convert_export_named_as_node(
                 line_offsets,
             ));
 
-            let export_kind = if spec.export_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let export_kind = estree_module_kind(arena, spec.export_kind);
 
             JsNode::ExportSpecifier {
                 start: spec_start as u32,
@@ -13949,11 +14047,7 @@ fn convert_export_named_as_node(
         })
         .collect();
 
-    let export_kind = if kind == oxc_ast::ast::ImportOrExportKind::Type {
-        Some(CompactString::from("type"))
-    } else {
-        None
-    };
+    let export_kind = estree_module_kind(arena, kind);
 
     let source = src.map(|source| {
         let source_start = offset + source.span.start as usize;
