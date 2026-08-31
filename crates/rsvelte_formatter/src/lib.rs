@@ -303,7 +303,7 @@ fn format_attempt(
     // offset is its original offset plus the net length change of every applied
     // edit ending at or before it. Only remap when reordering could change
     // something (more than one top-level unit); otherwise the pass is skipped.
-    let reorder_spans: Vec<(u8, usize, usize)> =
+    let reorder_spans: Vec<(u8, usize, usize, bool)> =
         if sections.len() > 1 || (sections.len() == 1 && has_markup) {
             let remap = |pos: u32| -> usize {
                 let delta: i128 = applied
@@ -317,9 +317,21 @@ fn format_attempt(
                 usize::try_from(i128::from(pos) + delta)
                     .expect("remapped section offset is outside usize range")
             };
+            // Whether the SOURCE held a blank line right after the section. The
+            // formatted output cannot answer it — an earlier pass normalises
+            // that gap to a blank line either way — and it is what decides how
+            // two markup runs rejoin once the section between them is hoisted.
+            let blank_after = |pos: u32| -> bool {
+                source[pos as usize..]
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .filter(|c| *c == '\n')
+                    .count()
+                    >= 2
+            };
             sections
                 .iter()
-                .map(|&(p, s, e)| (p, remap(s), remap(e)))
+                .map(|&(p, s, e)| (p, remap(s), remap(e), blank_after(e)))
                 .collect()
         } else {
             Vec::new()
