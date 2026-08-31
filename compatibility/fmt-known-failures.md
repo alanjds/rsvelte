@@ -1334,3 +1334,31 @@ explanation.
 arm flat and breaks the *second* one's open tag — so a pass that can break this
 shape exists and reaches one arm and not the other. Whatever gates it is a
 position test, not a missing capability.
+
+### 2026-08-31 — the 54 is one parameter: a block's closing tag is not in the width
+
+Holding the body fixed and growing it one column at a time, the two formatters'
+break thresholds can be read off directly. The oracle breaks at total 81 in every
+form, which calibrates the instrument; rsvelte's threshold is late by **exactly the
+length of the closing block tag**:
+
+| form | closer | oracle breaks at | rsvelte breaks at | late by |
+|---|---|---|---|---|
+| `{#if a}…{/if}` | 5 | 81 | 86 | **5** |
+| `{#key a}…{/key}` | 6 | 81 | 87 | **6** |
+| `{#each a as b}…{/each}` | 7 | 81 | 88 | **7** |
+| `<span>…</span>` | 7 | 81 | 81 | 0 |
+| `<Wrap>…</Wrap>` | 7 | 81 | 81 | 0 |
+| the element alone | — | 81 | 81 | 0 |
+| the element + 7 characters of trailing text | — | 81 | 81 | 0 |
+| the element + a trailing sibling element | — | 81 | 81 | 0 |
+
+So it is not "trailing content on the line is ignored" — trailing text and a
+trailing sibling are both counted. It is the block's `{/…}` specifically, and the
+element parents are the controls that make that a claim rather than an
+observation. An element's own close tag is inside its span; a block's is not.
+
+50 of the 54 entries are a block header directly followed by an element (33 a
+component, 17 an HTML element), and the remaining 4 are a text or nested-block
+body, which the same rule predicts. Whether all 54 share this one parameter is
+what the fix will measure — the id list is in `agent-c/overwidth260.json`.
