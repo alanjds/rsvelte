@@ -4425,6 +4425,28 @@ other 11 are all libraries imported by an invoked gate (`normalize.mjs`, `target
 (`one.mjs`, `fmt-one.mjs`, `fmt-cluster.mjs`, `svelte2tsx-cluster.mjs`, `clean.mjs`).
 **There is no orphaned gate script.** The orphan risk in this repo is C1 and C2, not C4.
 
+### C4a. A failing step skips the comparisons after it, and a skipped step reads as a passing one — **[D]**
+
+Run `33356085475`: `Mutation fuzz parity` failed and the next step,
+`Verify CSS-prune sweep (no new divergences)`, was reported `skipped` — so the css-prune
+ratchet was not measured on that run at all, while the job view shows it as green-adjacent.
+That is the [cancelled-run](#a-named-blind-spot-class-the-vacuous-green) hazard one level down:
+`skipped` and `success` are both "not a failure".
+
+Guards were added where they cannot misattribute — the `corpus` job's four unguarded
+verification steps, `lint-parity`'s ten sequential ratchets, `shape-matrix`'s two, and the
+three `ci.yml` jobs whose steps are pure `node scripts/…` checks. **Three `ci.yml` jobs are
+deliberately left masked** and are the standing hole this row records: `language-server`
+(12 checks interleaved with `Build rsvelte-check` and the extension bundle),
+`test-fmt-corpus` (7, interleaved with the oracle corpus generation) and `vps-shim` (4,
+after a native build). Guarding those trades a hidden failure for a misattributed one — a test
+whose build was skipped fails for the wrong reason — so each needs the producer steps guarded
+too, or a `steps.<id>.conclusion` predicate, which none of them has today.
+
+**The control is stated rather than assumed**: on the next Corpus Compat run, if the mutation
+fuzz fails again, `Verify CSS-prune sweep` must report something other than `skipped`. Until
+that run, this row's fix is asserted, not measured.
+
 ### C5. `compatibility/pattern-corpus` records history; it cannot surface a live bug
 
 102 tracked files: ~32 hand-written `issues/<n>-<slug>.svelte` repros plus feature matrices. It
