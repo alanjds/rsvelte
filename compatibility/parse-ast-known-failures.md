@@ -46,11 +46,14 @@ Acceptance divergences are the one exception: "official rejects this document an
 not" is a fact about the document, so those keys carry the entry id. A single shared key could not
 tell two such entries from one, which is the whole shrink the ratchet exists to observe.
 
-## Why the baseline is 482 and not 0
+## Why the baseline is not 0
 
-Because the API was never compared. The current full run measured **66,591 compared pairs** over
-33,721 corpus components — 9,446 modern-axis and 9,622 legacy-axis entries are byte-identical,
-and the remainder produce these 482 field-level keys.
+Because the API was never compared. The run that established these figures measured **66,591
+compared pairs** over 33,721 corpus components — 9,446 modern-axis and 9,622 legacy-axis entries
+byte-identical, with the remainder producing **482** field-level keys. **The ratchet has since
+been re-baselined to 321**; the pair and byte-identical counts above belong to the 482 run and are
+left as measured rather than rescaled, because no run has been made at 321 to replace them. The
+partition below is counted from the current JSON.
 
 The modern-axis identical count was **1,075** when this ratchet was first baselined. #3386
 (`Root.end`) accounted for the other 4,177 on its own: it diverged on 12,324 of 14,102 entries, so
@@ -70,18 +73,30 @@ a replacer so its value stays comparable instead of being dropped.
 
 Partition of `parse-ast-known-failures.json` by cluster: `78 + 62 + 50 + 45 + 44 + 16 + 14 + 9 + 2 + 1`
 
-| cluster | keys | what it is |
-|---|---|---|
-| `span` | 78 | `start` / `end` / `loc` disagree on a node type. Merged into one key per node type on purpose: they are derived from the same offsets, and split by field they were 672 keys for the same defects. |
-| `node-type` | 62 | rsvelte labels a node with a different `type` than acorn/acorn-typescript does. Almost all are TypeScript nodes; the walk stops at a `type` mismatch, so each is one key rather than a spray of derived field keys. |
-| `estree-fields` | 44 | ESTree fields rsvelte's serializer omits or adds: `importKind`, `exportKind`, `attributes` on an import/export, `accessor`, `typeAnnotation`, `returnType`, `optional`, `readonly`, `declare`. The lint gates already found three of these from the other side. |
-| `unclustered` | 45 | keys nobody has classified. The cluster exists so an unclassified key reads as unclassified instead of joining someone else's row. |
-| `comment-attachment` | 50 | #3387 — comments disagree on statements and programs; one key represents each affected node type and attachment field. #3702 fixed the walk order for five template-literal shapes in both AST modes. |
-| `accepts-what-official-rejects` | 1 | the loose `unclosed-attribute-quote` source, and nothing else. See below. |
-| `css-shape` | 14 | the legacy CSS selector conversion (`Selector` vs `ComplexSelector`, `combinator` / `selectors` / `name`). |
-| `child-count` | 16 | an array of children with a different length. |
-| `loc-presence` | 9 | a node that has a `loc` on one side and none on the other — kept apart from `span` because "no position at all" is a different defect from "wrong position". |
-| `ast-mode` | 2 | #3385 — the remaining legacy-root shape differences. |
+| cluster | keys | bases | what it is |
+|---|---|---|---|
+| `span` | 78 | 41 | `start` / `end` / `loc` disagree on a node type. Merged into one key per node type on purpose: they are derived from the same offsets, and split by field they were 672 keys for the same defects. |
+| `node-type` | 62 | 32 | rsvelte labels a node with a different `type` than acorn/acorn-typescript does. Almost all are TypeScript nodes; the walk stops at a `type` mismatch, so each is one key rather than a spray of derived field keys. |
+| `estree-fields` | 44 | 22 | ESTree fields rsvelte's serializer omits or adds: `importKind`, `exportKind`, `attributes` on an import/export, `accessor`, `typeAnnotation`, `returnType`, `optional`, `readonly`, `declare`. The lint gates already found three of these from the other side. |
+| `unclustered` | 45 | 27 | keys nobody has classified. The cluster exists so an unclassified key reads as unclassified instead of joining someone else's row. |
+| `comment-attachment` | 50 | 25 | #3387 — comments disagree on statements and programs; one key represents each affected node type and attachment field. #3702 fixed the walk order for five template-literal shapes in both AST modes. |
+| `accepts-what-official-rejects` | 1 | 1 | the loose `unclosed-attribute-quote` source, and nothing else. See below. |
+| `css-shape` | 14 | 9 | the legacy CSS selector conversion (`Selector` vs `ComplexSelector`, `combinator` / `selectors` / `name`). |
+| `child-count` | 16 | 10 | an array of children with a different length. |
+| `loc-presence` | 9 | 5 | a node that has a `loc` on one side and none on the other — kept apart from `span` because "no position at all" is a different defect from "wrong position". |
+| `ast-mode` | 2 | 2 | #3385 — the remaining legacy-root shape differences. |
+
+**Read the `keys` column as `bases x axis`, not as work.** A key is
+`<axis>::<NodeType>.<field>#<kind>` and most node types diverge identically under `modern` and
+`legacy`, so 321 keys are **174 distinct bases**: 147 appear on both axes and 27 on one
+(147x2 + 27 = 321, a 1.84x collapse). The defect ceiling is 174. The per-cluster collapse is not
+uniform — `estree-fields` and `comment-attachment` are 2.00x (every base is on both axes),
+`css-shape` 1.56x and `child-count` 1.60x (legacy-only shapes), `ast-mode` and
+`accepts-what-official-rejects` 1.00x by construction.
+
+**No base's two axes sit in different clusters** (0 of 147), so a cluster can be worked end to end
+without a key from it turning up under someone else's row. Measured directly from the JSON, which
+is authoritative for the partition: the ten rows above are its `Counter(values())`.
 
 ## The acceptance rows are the interesting ones
 

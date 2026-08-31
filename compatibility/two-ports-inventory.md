@@ -1396,6 +1396,29 @@ input is missing. Closing this row means populating `initial_node_type` for decl
 first, and the port-vs-port test has to spell its expectations independently (degree 2 below),
 because port 2 as an oracle for port 1 passes on exactly the cases that are wrong.
 
+**A third path emits it in neither direction, and this is a deliberate non-start.** Every template
+expression other than a `bind:` goes through the lightweight walker
+`shared/utils::walk_js_expression_node`, which never emits this warning at all. A template
+expression can only warrant it for a binding declared *inside that expression* — an instance
+binding is at a different `function_depth` — and every such slot was measured: an event handler
+with an arrow block body, with `$derived`, with `$state.raw`, with a function expression; an
+attribute-expression IIFE; a text-expression IIFE; a `use:` action argument; and the same inside a
+snippet body and an each body. **Nine slots, one cause**, with the instance-script control
+warning correctly on the identical source shape.
+
+The blocker is named in the code: `shared/utils.rs:1517` states the walker "keeps no `js_path`",
+which is also why rune-call validation there is narrowed to `function_depth == 0`. Upstream's
+condition needs the parent node (to exclude an `AssignmentExpression` target and an
+`UpdateExpression`) and walks `context.path` to choose the `closure` / `derived` message, so the
+warning cannot be emitted from that walker as it stands. Closing it means either giving the walker
+a `js_path` and extracting the decision into ONE function both callers use — degree 1, and the
+only shape that does not add a third port — or routing template expressions through the Identifier
+visitor. Either touches a hot path.
+
+**Not started on purpose.** It is an *under*-warning: the generated code is correct, it occurs 0
+times in the 4,201 `submodules/svelte` units, and no ratchet entry moves. Recorded here so the
+next person inherits the boundary rather than re-deriving it.
+
 **What is still unmeasured:** the depth equality. Port 2 has none, so every kind-eligible read in
 a declaration-tag initializer warns regardless of where the binding lives; upstream realigns
 `function_depth` to `state.scope.function_depth` for that visit specifically, which makes the
