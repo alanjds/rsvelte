@@ -376,6 +376,21 @@ pub enum JsNode {
         end: u32,
         loc: Option<Box<Loc>>,
         source: JsNodeId,
+        /// The second argument, empty when the source wrote none. Held as a
+        /// range because acorn-typescript spells it as an `arguments` list.
+        options: IdRange,
+        /// Which parser upstream ran: acorn always writes `options` (null when
+        /// absent), acorn-typescript writes `arguments` and omits it when empty.
+        ts: bool,
+    },
+    /// One entry of an `import`/`export`'s `with { … }` clause. The span runs
+    /// from the key to the end of the value, not to the clause's brace.
+    ImportAttribute {
+        start: u32,
+        end: u32,
+        loc: Option<Box<Loc>>,
+        key: JsNodeId,
+        value: JsNodeId,
     },
     AwaitExpression {
         start: u32,
@@ -684,6 +699,9 @@ pub enum JsNode {
         end: u32,
         loc: Option<Box<Loc>>,
         declaration: JsNodeId,
+        /// `Some("value")` under acorn-typescript, which stamps a kind on every
+        /// export; acorn stamps none, so this is a fact about the parser.
+        export_kind: Option<CompactString>,
     },
     ExportSpecifier {
         start: u32,
@@ -1434,11 +1452,30 @@ impl Serialize for JsNode {
                 ser_comments!(map, "Super", *start, *end);
                 map.end()
             }
+            Self::ImportAttribute {
+                start,
+                end,
+                loc,
+                key,
+                value,
+            } => {
+                let mut map = serializer.serialize_map(Some(5))?;
+                map.serialize_entry("type", "ImportAttribute")?;
+                map.serialize_entry("start", start)?;
+                map.serialize_entry("end", end)?;
+                ser_loc!(map, loc);
+                ser_node!(map, "key", key);
+                ser_node!(map, "value", value);
+                ser_comments!(map, "ImportAttribute", *start, *end);
+                map.end()
+            }
             Self::ImportExpression {
                 start,
                 end,
                 loc,
                 source,
+                options,
+                ts,
             } => {
                 let mut map = serializer.serialize_map(Some(5))?;
                 map.serialize_entry("type", "ImportExpression")?;
@@ -1446,7 +1483,17 @@ impl Serialize for JsNode {
                 map.serialize_entry("end", end)?;
                 ser_loc!(map, loc);
                 ser_node!(map, "source", source);
-                map.serialize_entry("options", &None::<()>)?;
+                if *ts {
+                    if !options.is_empty() {
+                        ser_children!(map, "arguments", options);
+                    }
+                } else if options.is_empty() {
+                    map.serialize_entry("options", &None::<()>)?;
+                } else {
+                    crate::ast::arena::with_current_serialize_arena(|arena| {
+                        map.serialize_entry("options", &arena.get_js_children(*options)[0])
+                    })?;
+                }
                 ser_comments!(map, "ImportExpression", *start, *end);
                 map.end()
             }
@@ -2081,11 +2128,12 @@ impl Serialize for JsNode {
                 if let Some(ik) = import_kind {
                     map.serialize_entry("importKind", ik.as_str())?;
                 }
-                // acorn-typescript emits `attributes` only where the source
-                // wrote an `assert`/`with` clause, but rsvelte never populates
-                // the list, so suppressing it here would turn one listed
-                // divergence into another instead of removing it.
-                ser_children!(map, "attributes", attributes);
+                // acorn always emits `attributes`; acorn-typescript emits it
+                // only where the source wrote an `assert`/`with` clause, and
+                // `importKind` is set for TypeScript programs alone.
+                if import_kind.is_none() || !attributes.is_empty() {
+                    ser_children!(map, "attributes", attributes);
+                }
                 ser_comments!(map, "ImportDeclaration", *start, *end);
                 map.end()
             }
@@ -2161,7 +2209,11 @@ impl Serialize for JsNode {
                 if let Some(ek) = export_kind {
                     map.serialize_entry("exportKind", ek.as_str())?;
                 }
-                ser_children!(map, "attributes", attributes);
+                // See `ImportDeclaration`: the field's presence is a fact about
+                // which parser upstream ran, and `exportKind` is the same fact.
+                if export_kind.is_none() || !attributes.is_empty() {
+                    ser_children!(map, "attributes", attributes);
+                }
                 ser_comments!(map, "ExportNamedDeclaration", *start, *end);
                 map.end()
             }
@@ -2170,12 +2222,16 @@ impl Serialize for JsNode {
                 end,
                 loc,
                 declaration,
+                export_kind,
             } => {
                 let mut map = serializer.serialize_map(Some(4))?;
                 map.serialize_entry("type", "ExportDefaultDeclaration")?;
                 map.serialize_entry("start", start)?;
                 map.serialize_entry("end", end)?;
                 ser_loc!(map, loc);
+                if let Some(ek) = export_kind {
+                    map.serialize_entry("exportKind", ek.as_str())?;
+                }
                 ser_node!(map, "declaration", declaration);
                 ser_comments!(map, "ExportDefaultDeclaration", *start, *end);
                 map.end()
@@ -2862,12 +2918,37 @@ impl JsNode {
                     }
                     "ThisExpression" => Self::ThisExpression { start, end, loc },
                     "Super" => Self::Super { start, end, loc },
-                    "ImportExpression" => Self::ImportExpression {
+                    "ImportAttribute" => Self::ImportAttribute {
                         start,
                         end,
                         loc,
-                        source: convert_child(obj, "source"),
+                        key: convert_child(obj, "key"),
+                        value: convert_child(obj, "value"),
                     },
+                    "ImportExpression" => {
+                        // acorn-typescript spells the second argument as an
+                        // `arguments` list and omits the key when there is
+                        // none; acorn always writes `options`, null when absent.
+                        let ts = !obj.contains_key("options");
+                        let options = if obj.contains_key("arguments") {
+                            convert_array(obj, "arguments")
+                        } else {
+                            match obj.remove("options") {
+                                Some(v @ Value::Object(_)) => {
+                                    deser_alloc_children(vec![JsNode::from_value(v)])
+                                }
+                                _ => IdRange::empty(),
+                            }
+                        };
+                        Self::ImportExpression {
+                            start,
+                            end,
+                            loc,
+                            source: convert_child(obj, "source"),
+                            options,
+                            ts,
+                        }
+                    }
                     "AwaitExpression" => Self::AwaitExpression {
                         start,
                         end,
@@ -3171,6 +3252,10 @@ impl JsNode {
                         end,
                         loc,
                         declaration: convert_child(obj, "declaration"),
+                        export_kind: obj
+                            .get("exportKind")
+                            .and_then(|v| v.as_str())
+                            .map(std::convert::Into::into),
                     },
                     "ExportSpecifier" => Self::ExportSpecifier {
                         start,
@@ -3321,6 +3406,7 @@ impl JsNode {
             Self::TemplateElement { .. } => Some("TemplateElement"),
             Self::ThisExpression { .. } => Some("ThisExpression"),
             Self::Super { .. } => Some("Super"),
+            Self::ImportAttribute { .. } => Some("ImportAttribute"),
             Self::ImportExpression { .. } => Some("ImportExpression"),
             Self::AwaitExpression { .. } => Some("AwaitExpression"),
             Self::YieldExpression { .. } => Some("YieldExpression"),
@@ -4045,6 +4131,7 @@ impl JsNode {
             | Self::TemplateElement { start, .. }
             | Self::ThisExpression { start, .. }
             | Self::Super { start, .. }
+            | Self::ImportAttribute { start, .. }
             | Self::ImportExpression { start, .. }
             | Self::AwaitExpression { start, .. }
             | Self::YieldExpression { start, .. }
@@ -4134,6 +4221,7 @@ impl JsNode {
             | Self::TemplateElement { end, .. }
             | Self::ThisExpression { end, .. }
             | Self::Super { end, .. }
+            | Self::ImportAttribute { end, .. }
             | Self::ImportExpression { end, .. }
             | Self::AwaitExpression { end, .. }
             | Self::YieldExpression { end, .. }
@@ -4226,6 +4314,7 @@ impl JsNode {
             Self::TemplateElement { .. } => "TemplateElement",
             Self::ThisExpression { .. } => "ThisExpression",
             Self::Super { .. } => "Super",
+            Self::ImportAttribute { .. } => "ImportAttribute",
             Self::ImportExpression { .. } => "ImportExpression",
             Self::AwaitExpression { .. } => "AwaitExpression",
             Self::YieldExpression { .. } => "YieldExpression",

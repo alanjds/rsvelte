@@ -4026,7 +4026,16 @@ pub(crate) fn for_each_js_child(node: &JsNode, arena: &ParseArena, f: &mut impl 
             walk_id!(*quasi);
         }
 
-        JsNode::ImportExpression { source, .. } => walk_id!(*source),
+        JsNode::ImportExpression {
+            source, options, ..
+        } => {
+            walk_id!(*source);
+            walk_range!(*options);
+        }
+        JsNode::ImportAttribute { key, value, .. } => {
+            walk_id!(*key);
+            walk_id!(*value);
+        }
 
         JsNode::YieldExpression { argument, .. } => walk_opt_id!(argument),
 
@@ -6005,7 +6014,23 @@ fn collect_identifier_names_in_node(
             end: _,
             loc: _,
             source,
-        } => walk(*source, out),
+            options,
+            ts: _,
+        } => {
+            walk(*source, out);
+            walk_range(*options, out);
+        }
+
+        JsNode::ImportAttribute {
+            start: _,
+            end: _,
+            loc: _,
+            key,
+            value,
+        } => {
+            walk(*key, out);
+            walk(*value, out);
+        }
 
         JsNode::AwaitExpression {
             start: _,
@@ -6380,6 +6405,7 @@ fn collect_identifier_names_in_node(
             end: _,
             loc: _,
             declaration,
+            export_kind: _,
         } => walk(*declaration, out),
 
         // `exported` is the name in the importing module, not a local reference.
