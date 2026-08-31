@@ -1262,3 +1262,31 @@ contribution to the *parent's* budget. This is the same shape as the
 `RegularElement` / `Component` and lets the `svelte:*` variants fall to `_` — and
 `build_open_attr_doc` (`collapse/doc_build.rs:685`) is one confirmed instance of the
 pattern, not yet shown to be *the* cause. Unfixed; its corpus reach is unmeasured.
+
+### 2026-08-31 — the over-width direction is 260 to 12, and the `svelte:*` sliver is 1
+
+The `svelte:*` grid above says nothing about how much of the ratchet it reaches, so
+that was measured separately. Per listed entry, count the output lines wider than
+`printWidth` on each side and compare the two counts *within the file* (which
+controls for a genuinely unbreakable long line, since it appears on both sides):
+
+| | entries |
+|---|---|
+| rsvelte has MORE over-width lines than the oracle | **260** |
+| the oracle has more than rsvelte | 12 |
+| equal and non-zero | 323 |
+| neither side over width | 53 |
+
+788 listed, 648 of which still diverge on this tree. The direction is one-sided
+21:1, which is the signature of a missing width check rather than of layout noise.
+**33 of the 34 "rsvelte keeps a `} {` run flat" ids sit inside the 260**, so that
+cluster is a subset of this one.
+
+Two cautions on the number. It counts a *symptom* (an over-width line), not a
+decision point — the section above is about exactly that mistake, and 260 is an
+upper bound on however many mechanisms are inside it. And the `<svelte:` variant
+that motivated the measurement reaches **1** entry, against 11 for `<div`, 36 for
+`<span` and 126 for any tag: the first proxy tried — "the first differing line
+mentions `svelte:`" — returned 13, and inspecting them showed the string was in the
+surrounding *context* line in 12 of the 13. A substring hit near a divergence is not
+a reach measurement.
