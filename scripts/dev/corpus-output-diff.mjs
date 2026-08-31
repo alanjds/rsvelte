@@ -83,14 +83,38 @@ function corpusFiles() {
 }
 
 // --- child mode: one build per process -------------------------------------
+// Every use of a binding runs here, INCLUDING the grade against official: two
+// napi cdylibs in one process segfault with no output, and grading two builds in
+// the parent is exactly that. This file's header says so and an earlier version
+// did it anyway — the grade path is only reached when `--before` is given, so
+// the self-test never covered it.
 if (process.env.CORPUS_DIFF_CHILD) {
 	const rs = require(path.resolve(process.env.CORPUS_DIFF_CHILD));
 	const options = { ...TARGETS[targetName], css: 'external' };
+	const grade = process.env.CORPUS_DIFF_GRADE === '1';
+	const svelte = grade
+		? await (async () => {
+				const { OFFICIAL_COMPILER_REL } = await import(
+					path.join(ROOT, 'scripts/compat-corpus/oracle.mjs')
+				);
+				return import(path.join(ROOT, OFFICIAL_COMPILER_REL));
+			})()
+		: null;
 	const lines = [];
 	for (const file of JSON.parse(fs.readFileSync(process.env.CORPUS_DIFF_LIST, 'utf8'))) {
+		const source = fs.readFileSync(file, 'utf8');
+		const o = { ...options, filename: path.basename(file) };
+		if (grade) {
+			try {
+				lines.push(svelte.compile(source, o).js.code === rs.compile(source, o).js.code ? '1' : '0');
+			} catch {
+				lines.push('e');
+			}
+			continue;
+		}
 		let code;
 		try {
-			code = rs.compile(fs.readFileSync(file, 'utf8'), { ...options, filename: path.basename(file) }).js.code;
+			code = rs.compile(source, o).js.code;
 		} catch {
 			lines.push('ERR');
 			continue;
@@ -105,8 +129,8 @@ if (process.env.CORPUS_DIFF_CHILD) {
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rsvelte-corpus-diff-'));
 process.on('exit', () => fs.rmSync(work, { recursive: true, force: true }));
 
-function hashes(binding, files) {
-	const list = path.join(work, 'files.json');
+function runChild(binding, files, grade) {
+	const list = path.join(work, `l-${crypto.randomUUID()}.json`);
 	fs.writeFileSync(list, JSON.stringify(files));
 	const out = path.join(work, `h-${crypto.randomUUID()}.txt`);
 	execFileSync(process.execPath, [SELF, '--target', targetName], {
@@ -114,29 +138,20 @@ function hashes(binding, files) {
 			...process.env,
 			CORPUS_DIFF_CHILD: binding,
 			CORPUS_DIFF_LIST: list,
-			CORPUS_DIFF_OUT: out
+			CORPUS_DIFF_OUT: out,
+			...(grade ? { CORPUS_DIFF_GRADE: '1' } : {})
 		},
 		stdio: 'inherit'
 	});
 	return fs.readFileSync(out, 'utf8').split('\n');
 }
 
-async function gradeAgainstOfficial(binding, files) {
-	const { OFFICIAL_COMPILER_REL } = await import(path.join(ROOT, 'scripts/compat-corpus/oracle.mjs'));
-	const svelte = await import(path.join(ROOT, OFFICIAL_COMPILER_REL));
-	const rs = require(path.resolve(binding));
-	const options = { ...TARGETS[targetName], css: 'external' };
-	const verdicts = new Map();
-	for (const file of files) {
-		const source = fs.readFileSync(file, 'utf8');
-		const o = { ...options, filename: path.basename(file) };
-		try {
-			verdicts.set(file, svelte.compile(source, o).js.code === rs.compile(source, o).js.code);
-		} catch {
-			verdicts.set(file, null);
-		}
-	}
-	return verdicts;
+const hashes = (binding, files) => runChild(binding, files, false);
+
+// `true` byte-identical to official, `false` differs, `null` a compiler threw.
+function gradeAgainstOfficial(binding, files) {
+	const verdicts = runChild(path.resolve(binding), files, true);
+	return new Map(files.map((f, i) => [f, verdicts[i] === 'e' ? null : verdicts[i] === '1']));
 }
 
 if (has('self-test')) {
@@ -176,7 +191,7 @@ if (files.length === 0) {
 }
 
 if (!beforeBinding) {
-	const verdicts = await gradeAgainstOfficial(afterBinding, files);
+	const verdicts = gradeAgainstOfficial(afterBinding, files);
 	let eq = 0,
 		ne = 0,
 		err = 0;
@@ -193,8 +208,8 @@ const moved = files.filter((_, i) => before[i] !== after[i]);
 console.log(`output changed ${moved.length} / ${files.length}`);
 if (moved.length === 0) process.exit(0);
 
-const beforeVerdicts = await gradeAgainstOfficial(beforeBinding, moved);
-const afterVerdicts = await gradeAgainstOfficial(afterBinding, moved);
+const beforeVerdicts = gradeAgainstOfficial(beforeBinding, moved);
+const afterVerdicts = gradeAgainstOfficial(afterBinding, moved);
 let gained = 0,
 	lost = 0;
 const lostFiles = [];
