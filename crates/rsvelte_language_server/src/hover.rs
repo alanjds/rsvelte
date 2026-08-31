@@ -6,7 +6,8 @@
 use lsp_types::{Hover, HoverContents, MarkedString, MarkupContent, MarkupKind};
 
 use crate::context::{EmbeddedRegions, attribute_context};
-use crate::html_data::attribute as html_attribute;
+use crate::html_data::documentation::{Entry, documentation};
+use crate::html_data::provider;
 use crate::modifiers::MODIFIERS;
 use crate::tags::{SvelteTag, latest_opening_tag};
 
@@ -33,7 +34,11 @@ const ELSE: &str = ":else";
 #[must_use]
 pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     let embedded = EmbeddedRegions::new(text);
-    if embedded.in_style(offset) {
+    if let Some(style) = embedded.style_at(offset) {
+        // `shouldExcludeHover` (`CSSPlugin.ts:606-616`).
+        if matches!(style.language.as_deref(), Some("sass" | "stylus" | "styl")) {
+            return None;
+        }
         return crate::css::hover(text, offset).map(markdown);
     }
     // A script body belongs to tsgo; answering it here spells an import path as
@@ -56,9 +61,20 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     // attributes get no HTML description.
     if !attribute.in_value
         && !attribute.on_a_component()
-        && let Some(data) = html_attribute(attribute.element_tag, attribute.name)
+        && let Some(provided) = provider::attributes(attribute.element_tag)
+            .into_iter()
+            .find(|provided| provided.name == attribute.name)
+        && let Some(value) = documentation(
+            &Entry {
+                description: provided.data.description,
+                status: provided.data.status.as_ref(),
+                browsers: provided.data.browsers,
+                references: provided.data.references,
+            },
+            true,
+        )
     {
-        return Some(markdown(data.description.to_string()));
+        return Some(markdown(value));
     }
     if !attribute.can_have_event_modifier() {
         return None;
@@ -66,7 +82,10 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     let modifier = MODIFIERS.iter().find(|modifier| {
         around_offset(attribute.name_start, attribute.name, modifier.name, offset)
     })?;
-    Some(plain(modifier.documentation()))
+    // `getModifierData` (`features/getModifierData.ts:52-62`) maps every entry's
+    // documentation into a Markdown `MarkupContent`; only the TAG hover next to
+    // it hands back a bare string.
+    Some(markdown(modifier.documentation()))
 }
 
 /// The `WINDOW` characters before `offset` plus what follows them, as the
@@ -258,17 +277,36 @@ mod tests {
         assert!(hovered.contains("event.preventDefault()"));
     }
 
+    /// The two producers in `getHoverInfo.ts` disagree on the wire shape: a tag
+    /// is `{ contents: <string> }` (:56) and a modifier is a `MarkupContent`
+    /// (`getModifierData.ts:52-62`). `hovered_tag` accepts either, so the shape
+    /// needs its own assertion.
+    #[test]
+    fn a_tag_hover_is_a_string_and_a_modifier_hover_is_markup() {
+        assert!(matches!(
+            hover("{#if x}", 3).unwrap().contents,
+            HoverContents::Scalar(MarkedString::String(_))
+        ));
+        assert!(matches!(
+            hover("<div on:click|preventDefault />", 15)
+                .unwrap()
+                .contents,
+            HoverContents::Markup(_)
+        ));
+    }
+
     #[test]
     fn a_second_modifier_hovers_too() {
         let hovered = hovered_tag("<div on:click|preventDefault|once />", 31).unwrap();
         assert!(hovered.starts_with("`once` event modifier"));
     }
 
+    /// The prose is the vendored data's, not this crate's.
     #[test]
     fn a_plain_event_directive_has_no_modifier_hover() {
         assert_eq!(
             hovered_tag("<div on:click />", 12).as_deref(),
-            Some("Listens for the `click` event.")
+            Some("A pointing device button has been pressed and released on an element.")
         );
     }
 
@@ -276,11 +314,13 @@ mod tests {
     fn native_directives_and_bindings_hover() {
         assert_eq!(
             hovered_tag("<div transition: />", 8).as_deref(),
-            Some("Runs a transition when the element enters or leaves.")
+            Some(
+                "A transition is triggered by an element entering or leaving the DOM as a result of a state change.\n\n[Svelte.dev Reference](https://svelte.dev/docs/svelte/transition)"
+            )
         );
         assert_eq!(
             hovered_tag("<input bind:checked />", 13).as_deref(),
-            Some("Binds a checkbox's checked state.")
+            Some("Available for type=\"checkbox\"")
         );
     }
 
@@ -294,6 +334,19 @@ mod tests {
     fn a_css_property_name_in_a_script_is_not_a_css_hover() {
         let text = "<script>\n  import type { A } from \"../types.js\";\n</script>";
         expect_none(text, text.find("types.js").unwrap() + 1);
+    }
+
+    /// `shouldExcludeHover` (`CSSPlugin.ts:606-616`) excludes `sass` too, which
+    /// `shouldExcludeCompletion` does not.
+    #[test]
+    fn a_sass_or_stylus_block_gets_no_css_hover() {
+        for lang in ["sass", "stylus", "styl"] {
+            let text = format!("<style lang=\"{lang}\">\n  h1 {{ color: red }}\n</style>");
+            expect_none(&text, text.find("color").unwrap() + 1);
+        }
+        // The positive control: `less` is not on upstream's list.
+        let text = "<style lang=\"less\">\n  h1 { color: red }\n</style>";
+        assert!(hovered_tag(text, text.find("color").unwrap() + 1).is_some());
     }
 
     #[test]

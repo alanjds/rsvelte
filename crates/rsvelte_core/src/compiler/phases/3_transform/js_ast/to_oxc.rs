@@ -1858,6 +1858,11 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     } else {
                         *e.span_mut() = span;
                     }
+                    // esrap brackets a body's comments by the body's own `loc`,
+                    // and `consumed` leaves that `SPAN` for a body that appended
+                    // nothing to the comment buffer — which is every body whose
+                    // only content is a comment.
+                    anchor_empty_body(&mut e, span);
                 }
                 Some(e)
             }
@@ -2945,6 +2950,32 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             out.push(argument);
         }
         Some(out)
+    }
+}
+
+/// Give a function body claiming no comment-buffer range the anchored span, so
+/// the printer's end-of-body comment flush is reachable.
+fn anchor_empty_body(e: &mut Expression<'_>, span: Span) {
+    match e {
+        Expression::ArrowFunctionExpression(arrow) => {
+            if let ArrowFunctionBody::FunctionBody(body) = &mut arrow.body
+                && body.span == SPAN
+                && body.statements.is_empty()
+                && body.directives.is_empty()
+            {
+                body.span = span;
+            }
+        }
+        Expression::FunctionExpression(func) => {
+            if let Some(body) = &mut func.body
+                && body.span == SPAN
+                && body.statements.is_empty()
+                && body.directives.is_empty()
+            {
+                body.span = span;
+            }
+        }
+        _ => {}
     }
 }
 

@@ -230,7 +230,18 @@ pub(super) fn transform_reactive_statement(
             // joining one onto the line above swallows it when that line ends in
             // a `//` comment.
             let chain_continuation = t.starts_with('.') && !t.starts_with("..");
-            if chain_continuation && !collapsed.is_empty() && !in_string_like {
+            // The same swallow happens when the line above IS a `//` comment,
+            // whatever follows it: the joined continuation lands inside the
+            // comment and every line of a multi-line callback is orphaned.
+            let joins_into_a_comment = chain_continuation
+                && crate::compiler::phases::phase3_transform::shared::js_scan::ends_inside_line_comment(
+                    &collapsed,
+                );
+            if chain_continuation
+                && !collapsed.is_empty()
+                && !in_string_like
+                && !joins_into_a_comment
+            {
                 // Append chain continuation without newline
                 collapsed.push_str(t);
             } else {

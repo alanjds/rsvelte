@@ -107,6 +107,33 @@ the same tree, not by extending the original grid.
 
 ---
 
+## A named blind-spot class: the ported rule whose input never arrives
+
+**A rule transcribed from upstream — comment and all — where the comment's premise is about
+input the porting side does not produce.** The port compiles, its unit test passes, and the
+rule fires zero times on every real input, so nothing anywhere goes red. It is not a coarse key
+and not an empty population: the population is full and the *predicate* is unreachable.
+
+The worked example is upstream's `.svelte` component hover. `TypeScriptPlugin` truncates a
+declaration at `lastIndexOf('import')`, because the declaration it is handed comes from **tsc's
+`displayParts`**, which spell an `__sveltets_2_IsomorphicComponent` alias with the word
+`import` in it. rsvelte's declaration comes from **tsgo's rendering**, which contains no such
+word — so `lastIndexOf` is always `None` and the ported rule is inert. The unit test written
+alongside it passed because it fed the function a tsc-shaped string tsgo cannot produce: the
+test proved the rule, and proved nothing about the product.
+
+The defence is one question asked before writing the port: **what produces the input this
+comment is describing, and is it the same thing on my side?** Then a second, which is what
+turns the answer into a test: **construct the test input from the real producer**, not from the
+upstream source's example. A test whose input the product cannot generate is a non-discriminating
+test with a plausible shape, and it ships green.
+
+A cheaper detector, when the port is already written: run it on the corpus and count how often
+the branch is taken. A ported rule that fires **zero** times is either unreachable or untested —
+both worth knowing before it is merged, and neither visible in a diff.
+
+---
+
 ## Reading the corpus in one sentence
 
 The collected corpus samples the *marginal* distribution of published Svelte code. That is
@@ -146,7 +173,7 @@ samples) — see `AGENTS.md` § "Generated shape matrix" and issue #2281.
 | 24 | `await_waterfall` runtime parity | the `await_waterfall` warnings a **mounted** rsvelte-compiled component logs vs. official's, 3 cases | one warning code, one component shape; nothing else about the running component is observed | [D] |
 | 25 | Differential output-preservation corpus hash | per `.svelte` source × client/server/client-dev/server-dev hash from base-core vs merge-ref-core | changes outside `crates/rsvelte_core`; every PR without the maintainer-applied `output-preserving` label | [S] |
 | 26 | esrap generated-output corpus | parsed JS output × official/rsvelte tree × 4 targets; AST equivalence, comment kind/body sequence, code/map equality, map bounds/order | production synthetic AST spans and whether a mapping points at the corresponding source token | [S] |
-| 27 | LSP differential parity | normalized JSON response field per request against the pinned official server and selected upstream snapshots | **every server notification**; incremental edit and resolve sequences; **inside a corpus `(file, method)`, everything but the divergent-request count**; the oracle-calibration floor is skipped on the corpus job, which enrols 66.7% of the entries | [S] [D] |
+| 27 | LSP differential parity | normalized JSON response field per request against the pinned official server and selected upstream snapshots | **every server notification**; incremental edit and resolve sequences; **inside a corpus `(file, method)`, everything but the divergent-request count**; the oracle-calibration floor is skipped on the corpus job, which enrols 66.7% of the entries, and that job never installs the repositories it measures | [S] [D] |
 | 39 | svelte2tsx option axis | full TSX text per (option variant x source) against the official tool, options carried in the fixture | option values outside its grid (`rewriteExternalImports`, `runes`, most `namespace` x `mode` products); `emitDts`; the map, `exportedNames` and `events` | [S] [D] |
 | 38 | NAPI `cssHash` | the scope class the callback produces, and the callback's own argument list, against **official** | one component shape and one option set; only `css.code` / the class in `js.code`; nothing about the wasm or facade ports of the same option | [S] |
 | 39 | Print fixture suite (`tests/print.rs`) | per-sample printed Svelte text vs upstream's `output.svelte` | it compares the text, not **which code produced it** — a source-text shortcut around the whole AST printer was invisible for 43 of 43 samples | [D] |
@@ -376,6 +403,82 @@ one. The unmeasured question is whether a stable projection of a completion resp
 would restore per-field sensitivity; nobody has looked, and n=2 sweeps bound the churn only from
 below.
 
+**The corollary for anyone shrinking this ratchet: a field that always co-occurs moves the key by
+zero.** `isIncomplete` is the measured case. Over 40 completion requests on one corpus file
+upstream answers `true` and rsvelte `false` — 40 of 40 — which reads as a one-line fix worth 40
+entries. It is worth none: the number of requests whose *only* difference is `isIncomplete` is
+**0**, because every one of those 40 also differs in the item set. A second sweep over 50 files
+reproduces the shape at scale — `/isIncomplete:value-mismatch` is the fourth-largest of 22 cause
+signatures at 404 occurrences, and never appears alone. Under a key that counts *requests*, only
+the last divergence in a request is worth anything; a field's own frequency says nothing about
+what fixing it buys.
+
+The same 50-file sweep bounds the other direction of this row, and it is the more useful number:
+the divergent requests behind the corpus keys fall into **22** distinct
+`method | normalized-field-path : kind` signatures, saturating at 16 by the thirteenth file. The
+aggregate key is coarse, but what it aggregates is not a long tail — 3,000 sampled requests, 1,447
+divergent, 22 causes, of which the top five are all `textDocument/completion` and cover 72%.
+Method matters more than file: completion diverges on **98.5%** of its sampled requests against
+28.0% for hover and 18.2% for definition. Scope, because the count is a sample: `bits-ui` only,
+50 of 617 files, 20 positions per file, and the claim is about the size of the signature *set*,
+not about per-file counts.
+
+**And a signature count is not a work estimate until it is turned into a coverage curve**, because
+a request is fixed only when *every* signature it carries is. Recording the per-request signature
+set over 25 files (1,500 requests, 723 divergent, 21 signatures) and closing them greedily:
+
+| signatures closed | requests fully fixed | share |
+|---:|---:|---:|
+| 1 (`completion \| / : value-mismatch`) | 231 | 32% |
+| 4 | 417 | 58% |
+| 6 | 458 | 63% |
+| 12 | 707 | 98% |
+| 21 | 723 | 100% |
+
+Five of the 21 clear **zero** requests on their own — they only ever co-occur — which is the
+`isIncomplete` shape generalised. Read the curve, not the frequency table: the largest single
+signature by occurrence (`completion | /items : missing-rsvelte`, 436) clears 8 requests when
+closed in greedy order, while the largest by *coverage* clears 231.
+
+**Both sweeps are measured on a population 27m shows is majority-degraded — and re-running one on
+a clean population moved almost nothing, which is the part worth recording.** Their file selection
+is an evenly-spaced sample of bits-ui's 617 components, so it inherits the repository's
+composition: **34 of the 50** signature-sweep files and **14 of the 25** coverage-curve files are
+ones upstream cannot project at all. That looked like a reason to distrust the shares. Repeating
+the 50-file sweep over only the 217 projectable components says otherwise:
+
+| | mixed (68% degraded) | projectable only |
+|---|---:|---:|
+| signatures | 22 | **21** |
+| divergent / compared | 1447 / 3000 | **1455 / 2994** |
+| completion | 985 / 1000 | 951 / 998 |
+| hover | 280 / 1000 | 305 / 998 |
+| definition | 182 / 1000 | 199 / 998 |
+
+**"The population is degraded" and "the degradation moves this measurement" are two claims, and
+only the first was measured when this paragraph was first written.** The second is now measured
+and is small. What the degradation does move is the *direction* of a divergence, which the
+signature key does record: `official == []` is 1 of 34 definition divergences on two projectable
+files against **46 of 61** on four degraded ones.
+
+The clean sweep's greedy curve is the one to plan against, because it concentrates where the mixed
+one did not — **three signatures cover 71%**, all of them whole-result rather than per-field:
+
+| signatures closed | requests fully fixed | share |
+|---:|---:|---:|
+| 1 (`completion \| / : value-mismatch`) | 624 | 43% |
+| 2 (+ `hover \| / : value-mismatch`) | 863 | 59% |
+| 3 (+ `definition \| / : missing-rsvelte`) | 1033 | 71% |
+| 6 (+ `/items` both directions, `/items/@item/tags`) | 1267 | 87% |
+| 21 | 1455 | 100% |
+
+Two sub-causes of the third are already excluded by instrumenting the server over 90 requests on
+one clean file: the `map_request` early return that answers `[]` without asking tsgo
+(`server.rs:1980`) fired **0** times, and of 30 definition responses **21 were empty as tsgo sent
+them** with **0** dropped by rsvelte's response mapping. Whether the remaining split is a shadow
+position that points at the wrong token or a genuine tsgo/TypeScript disagreement is
+**unmeasured**.
+
 ### Blind spot 27h — the oracle is calibrated against upstream's snapshots, and the floor is loose [D]
 
 Every positive control this gate had was satisfied by an official server that answers *something*:
@@ -454,6 +557,140 @@ job's runtime on every one of the 16 shards — rather than reading anything fro
 **Unmeasured:** whether the corpus shards' official servers are in fact degraded. Nothing here
 measures that; the claim is only that no instrument in the corpus job would report it.
 
+**Closed.** `calibrationPreflight` drives the 125 snapshots against the official command whenever
+`upstream-features` is not among the selected suites, so `--suites corpus` is now calibrated too;
+the early return survives only as the guard that stops the suite being measured twice. The estimate
+above — that it "costs the fixture job's runtime on every one of the 16 shards" — was wrong by an
+order of magnitude: it is 502 requests against a shard's 8,760, and the shards run for an hour.
+
+Two things it cost to make the number mean anything, both measured rather than reasoned. Sending
+only the snapshot's own method reproduces **75/92** where the suite reproduces 88/92, because
+upstream answers a pull diagnostic before its program has the document; the preflight sends the
+case's whole request set. And running it in the measured run's own server *also* reproduces 75/92,
+because the snapshots' `checkJs` and `tsconfig` settings come from workspace folders a fixtures- or
+corpus-scoped run does not declare (`verify.mjs` adds them only when `upstream-features` is
+selected) — and declaring them in the measured run would move the population this gate exists to
+compare. The preflight therefore uses a second official process with the workspace an
+`upstream-features` run would give it. Measured both ways on the same oracle: **115/125, and the
+same ten misses** — the sets are equal, not only the counts. The `typescript-diagnostics` bucket
+moves by ±1 between runs, so read the floor as a floor, not as a fingerprint.
+
+**A second precondition covers what the snapshots cannot.** The 125 snapshots say the oracle
+behaves like its own test suite; they say nothing about whether it can project the documents *this
+run* is about to compare. `projection-preflight.mjs` runs the predicate 27m uses — `svelte2tsx`
+with the `parse` and `version` the official server itself resolves — over the run's own case list,
+prints `projects N/M`, and aborts above a **5%** ceiling before any request is sent. Measured on
+bits-ui: **400/617 fail under 4.2.20 and 0/617 under 5.56.10**; on a 9-component shard the ablated
+version check leaves 6/9 (66.7%) and the ceiling fires with the failing ids named. The ceiling is
+asserted on the corpus only: the fixture and upstream suites are chosen inputs and include
+documents written to be unparseable (45 of 154), so a ceiling there would measure the suite's
+intent rather than the oracle's health.
+
+### Blind spot 27l — the corpus repositories are never installed, so two thirds of the ratchet is measured on unresolved imports [D]
+
+`verify.mjs:303-308` names the hazard in a comment — "a server started against the wrong
+workspace root or an unresolved `node_modules` answers differently instead of failing, and those
+answers would then be enrolled as legitimate ratchet entries defending the degradation" — and adds
+the calibration floor as its defence. 27j records that the floor does not run on `--suites corpus`.
+This row records that for that suite the named condition is not a risk but a **guarantee**.
+
+`corpus-compat.yml:859` checks the four corpus repositories out with
+`git submodule update --init --depth 1` and nothing installs them; the job installs the root
+workspace and `submodules/language-tools` only (lines 869-875). `lsp-benchmark.yml:52-54` does run
+`pnpm --dir submodules/bits-ui install`, so the contrast is inside this repository: the job that
+measures *speed* on bits-ui installs it and the job that measures *parity* does not.
+
+Measured on `navigation-menu.svelte` with the same servers and `initialize` parameters the gate
+sends, `textDocument/diagnostic` returns:
+
+```
+official: 1  — ts/-1 46:2 Unexpected character '@'
+rsvelte:  5  — ts/2307 1:37  Cannot find module 'svelte-toolbelt' …
+                ts/2307 4:26  Cannot find module '$lib/internal/create-id.js' …
+                ts/2307 5:22  Cannot find module '$lib/internal/noop.js' …
+                ts/7006 27:4  Parameter 'v' implicitly has an 'any' type.
+                ts/7006 38:4  Parameter 'v' implicitly has an 'any' type.
+```
+
+`svelte` itself resolves — TypeScript walks up to the checkout's own root `node_modules` — so the
+population is not uniformly typeless; it is a mixture in which every bare specifier the corpus repo
+declares for itself, and every `$lib/*` alias its own `tsconfig` would supply, is missing. What the
+corpus units therefore compare is largely **how the two servers behave on symbols neither can
+resolve**, which is a real comparison but not the one the gate's name implies. On six shard-0 files
+the largest remaining hover class is 42 requests where upstream answers TypeScript's
+unresolved-alias quick info — ` ```typescript\nimport boxWith\n``` ` — and tsgo answers nothing.
+
+**Unmeasured:** how the composition moves once the repositories are installed. Nothing here says
+the divergence count falls; it says the population changes, and a class that is 42 of 184 on this
+tree is not evidence about a tree with `node_modules`. Installing them also changes the ratchet
+keys, which is why this is a row rather than a patch.
+
+### Blind spot 27m — the uninstalled corpus makes upstream parse Svelte 5 with Svelte 4, so on 40.6% of the ratchet the oracle never sees a template [D]
+
+27l records that the corpus repositories are not installed and reads the consequence as
+*unresolved imports*. The larger consequence is one step earlier, and 27l's own diagnostic dump
+already contained the witness it did not name: `ts/-1 46:2 Unexpected character '@'`. Code `-1` is
+`DocumentSnapshot.ts:284`, the `parserError` upstream sets when **`svelte2tsx` throws**, and
+`Unexpected character '@'` is Svelte 4's parser refusing `{@render}`.
+
+The chain is four citations. `service.ts:379` resolves the Svelte compiler with
+`importSvelte(tsconfigPath || workspacePath)`; `importPackage.ts:60` falls back to the language
+server's own dependency when the linted path has no `node_modules/svelte`; that dependency is
+`svelte: ^4.2.19` in `language-tools/pnpm-lock.yaml`, resolved to **4.2.20**, and CI installs it
+`--frozen-lockfile`; the resolved `parse`/`version` reach `svelte2tsx` through `service.ts:429` and
+`DocumentSnapshot.ts:241`. When it throws, `DocumentSnapshot.ts:291` replaces the projection with
+`text = scriptInfo.content` — **the instance script alone, no template** — and every completion for
+that document is then built with `isIncomplete: true` (`CompletionProvider.ts:451`), or is
+`CompletionList.create([], true)` where TypeScript has no entries (`:303`).
+
+Measured over the whole aggregate population, classifying each key's file by the same predicate
+`DocumentSnapshot` uses:
+
+| repo | keys on a file upstream cannot project | / keys | divergent requests behind them | / requests |
+|---|---:|---:|---:|---:|
+| shadcn-svelte | 3,870 | 10,080 (38.4%) | 459,382 | 958,698 (47.9%) |
+| flowbite-svelte | 2,436 | 7,758 (31.4%) | 370,690 | 761,648 (48.7%) |
+| bits-ui | 2,400 | 3,696 (64.9%) | 267,346 | 416,918 (64.1%) |
+| melt-ui | 150 | 258 (58.1%) | 25,810 | 46,812 (55.1%) |
+| **total** | **8,856** | **21,792 (40.6%)** | **1,123,228** | **2,184,076 (51.4%)** |
+
+No key had an unresolvable file. The positive control is the same `svelte2tsx` call with `parse`
+from Svelte 5.56.10: **1,476 of the 3,637 corpus components throw under 4.2.20 and 0 throw under
+5** — the files are fine, the oracle is not. On `label-demo.svelte` all 40 completion requests
+reduce to this one cause: 22 where upstream returns a list and rsvelte returns `null`, 18 where
+only `isIncomplete` differs.
+
+This is not an upstream defect. svelte-language-server supports Svelte 3/4/5 and falls back
+deliberately, expecting the user's project to carry its own compiler. It is a **gate setup**
+defect: the oracle is configured the way no real project is.
+
+**Unmeasured, and deliberately unsigned:** whether installing the repositories lowers the
+divergence count. It replaces the population — the ratchet keys turn over completely and rsvelte's
+real defects on those 1,476 files become visible for the first time. The remaining 12,936 keys, on
+files upstream does project, are the part of the residue this row says nothing about.
+
+**Closed by pinning the oracle's own Svelte, not by installing the corpus.** Installing the
+repositories cannot fix this at all under the configuration the gate uses: `importPackage.ts:29-31`
+pushes the linted project's directory onto the resolution paths only `if (isTrusted)`, and the
+harness initializes with `isTrusted: false`, so a `node_modules/svelte` inside a corpus repository
+is never consulted. `scripts/compat-lsp/pin-official-svelte.mjs` relinks
+`language-server/node_modules/svelte` at the Svelte this repository's own lockfile pins, and
+`verify.mjs` refuses to run against a major below 5, printing the version and the path it resolved.
+Nothing is installed and no project code runs. Measured on `bits-ui` with the same predicate this
+row uses: **400/617 files fail to project under 4.2.20 and 0/617 under 5.56.10**, and the aggregate
+divergent-request count over the four repositories falls 3,906 → 2,324 (−40.5%). Read the second
+number carefully: **no unit leaves the gate** — 40 of 54 are re-keyed to a lower
+`divergentRequestCount`, so the numerator is requests, never units.
+
+Two field-level consequences are worth keeping, because the aggregate count cannot express either.
+`diff.mjs:16` buckets a completion item by `[label, kind, sortText, filterText]`, and
+`HTMLPlugin.ts:239` sets `sortText` only when `document.isSvelte5`: under 4.2.20 the oracle omits it
+on every legacy `on:` item, so those items **never pair** and not one of their other fields is
+compared — shared labels at `<div on` go 14 → 29 when the oracle resolves 5. And Svelte 5's own
+`*.svelte` ambient declaration names its default export `Comp` (`svelte/types/index.d.ts`), which
+4.2.20's does not, so an auto-import rsvelte correctly offers reads as an extra item under the
+degraded oracle.
+
 ### Blind spot 27i — a diagnostic's severity is unobservable, and lint findings are never paired at all [D]
 
 `diff.mjs:19` keys a diagnostic on `digest([value.code, value.source, value.range?.start])`. The
@@ -509,6 +746,39 @@ exactly what the gate is meant to catch and exactly what it reports as a pass.
 This is the general form of the last paragraph of 27i, which observed that an unchanged entry
 count with changed hashes says the identity moved. The same is true of a *changed* count: the
 count is the sum of two movements and names neither.
+
+### Blind spot 27n — the edit phase never asks a question of the document it broke [D]
+
+`edits.mjs:14` inserts an **unclosed** `{#if __rsvelte_lsp_probe}` and says why: "Unclosed on
+purpose: the repair path is only exercised if the intermediate document is one neither compiler
+accepts." That intermediate document is never asked anything. `verify.mjs:744-765` sends every
+change of `editChanges(text)` first and calls `compareRequestsBounded` only after the loop, and
+the script's last change restores the source byte for byte — so both phases compare **the same
+parseable document**, and the phase-2 key differs from its phase-1 twin only by server state.
+The gate has no view of a mid-edit document's *answers*, which is the state a real editor is in
+whenever completion matters.
+
+**Evidence [D].** `ProjectionEngine::project` on five shapes, same options as the LSP overlay:
+
+| source | result |
+|---|---|
+| `<p>{b.x}</p>` | Ok |
+| `<p>{b.}</p>` | `Err(Parse { js_parse_error, span (57,57) })` |
+| `<p class={b.}></p>` | `Err(Parse { js_parse_error, span (63,63) })` |
+| `<p>{b</p>` | `Err(Parse { js_parse_error, span (58,58) })` |
+| `b.` inside `<script>` | Ok |
+
+So the failure is **template-position only** — a half-typed member expression in a `<script>`
+body still projects — and upstream recovers from all five through acorn-typescript. Every
+tsgo-backed answer in a document whose template is mid-edit is therefore dead here and live
+upstream, and **the ratchet cannot hold a single entry for it**.
+
+**Scope, because the next reader will reach for the wrong rule.** AGENTS.md's "do not loosen the
+compiler parser to match `svelte-eslint-parser`" is about the **compiler**, whose population is
+published code that compiles — 0 of 6,788 real-world sources reach that divergence. This row is
+about the **projection's error recovery**, whose population is a document being typed, where a
+half-written expression is the normal case rather than an adversarial one. The two rules point
+opposite ways on the same-looking input, and only the population separates them.
 
 ---
 
@@ -1279,6 +1549,27 @@ recorded set to shrink deliberately rather than silently. The hazard the field i
 it can also hide a real divergence; only "official's output for this target does not parse"
 justifies it, and nothing enforces that rule mechanically.
 
+**And the opt-out is written per (declaration, container) pair, so it is exactly as wide as the
+axis values its author enumerated.** `rune-statement-container` excluded
+`state-let × switch-case-bare` on the client for #3420 — a lexical rune declared bare in a `case`
+clause, which official lowers while leaving its references untransformed. The same defect applies
+to `$derived`, and **the family had no `derived-let` row at all**, so that half was neither
+excluded nor compared: it was invisible, not tolerated. **[D]** It surfaced only when a probe run
+for an unrelated fix widened the declaration axis to seven values and found official returning the
+`Derived` object itself. An exclusion is a statement about the cells that exist; the cells that do
+not exist are a separate question, and the ratchet cannot ask it.
+
+**A related discipline about the write-up rather than the gate.** An upstream defect recorded here
+is usually summarised from the first shape that reproduced it, and that summary becomes the pin.
+`grass`'s slash divergence was first written as "a nested rule whose compound selector carries
+`:not()`", which is right about the reproducer and wrong about the rule twice over — the trigger is
+the Sass `not` **keyword** followed by `(` (`:nots(`, `:xnot(`, `:is(` all agree), and the effect
+leaks to every later slash list in the file, including a top-level rule after the block. Written
+the narrow way, the pin passes on a build that fixes either half alone. **Do not write an upstream
+bug's summary until the trigger has been narrowed from BOTH sides — one input that fires it and one
+that removes each condition and does not.** A one-sided summary does not merely under-describe; as
+a pin it manufactures green.
+
 ### Blind spot 5n — `constant-fold` compares text, so it cannot see what the folded code *does*
 
 Family `constant-fold` (17 expression kinds × 15 `EXPRESSION_SLOTS`, plus 2 `const`
@@ -1814,9 +2105,30 @@ Positive control that a ceiling is the house pattern where someone thought about
 `fmt.mjs:170`. **[S]** `.svelte.js` / `.svelte.ts` files are never formatted or compared here,
 and neither are standalone `.css` / `.scss` / `.less` files.
 
-**Note on exclusions:** `fmt-oracle-excluded.json` holds 29 entries, each with a written
-justification, partitioned by the JSON's own `class` field (16 oracle-bug, 7 engine-divergence,
-4 invalid-input, 2 migrate). This is a *small, justified* set — noted
+### Blind spot 9d — the gate never asks whether rsvelte's own output is still a Svelte document
+
+The unit is byte equality against the oracle (`fmt-verify.mjs:102`), so a mismatch is one
+verdict whether the actual text differs by a two-space indent or is not parseable at all.
+**[D]** Compiling both sides' formatted output with the official compiler across all 788 listed
+entries (2026-08-31) finds **1** whose rsvelte-fmt output `compile()` rejects, against 0 for the
+oracle: `sveltepress/…/icons/SystemDefault.svelte`, where rsvelte-fmt **duplicates a leading
+HTML comment and truncates the copies**, dropping their `-->` and swallowing the rest of the
+markup (`expected_token`). It had been sitting in `fmt-known-failures.json` as one ordinary
+entry since the wave-2 enrolment. The same check over `fmt-oracle-excluded.json` finds 0. The
+reduction and the three jointly-required ingredients are in `fmt-known-failures.md`.
+
+The severity half of the same blind spot: of those 788, **674 are render-neutral** (the compiler
+emits byte-identical JS *and* CSS from either form) and **114 change what the compiler emits**.
+The gate cannot separate them, so 86% taste and 14% semantics ratchet under one key —
+the *ratchet entry suppresses everything its key cannot tell apart* rule, one level up from
+the matrix gate, which solved the same problem by splitting `output-unparseable` and
+`comment-mismatch` out of `js-mismatch` (section 5). **Closing 9d:** run
+`parseable.mjs`-style acceptance on the actual side and emit it as its own verdict. Cost:
+one compile per failing entry, i.e. per ratchet entry, not per corpus component.
+
+**Note on exclusions:** `fmt-oracle-excluded.json` holds 27 entries, each with a written
+justification, partitioned by the JSON's own `class` field (15 oracle-bug, 7 engine-divergence,
+3 invalid-input, 2 migrate). This is a *small, justified* set — noted
 here so it is not mistaken for a blind spot. Its staleness check is `console.warn` only
 (`fmt-verify.mjs:110-126`).
 
@@ -2694,6 +3006,41 @@ hash-ranked sample fills the rest, so the sample goes 1500 → 1637 (+9%) and a 
 repro mutation-tests it. **Still open for the rest of the corpus** — a submodule bump that
 introduces a new real-world file is the same lottery, and there is no cheap fix, because
 "newly added" is a diff against the merge base rather than a property of the manifest.
+
+### Blind spot 20g — `eligible` is drawn from a ratchet whose comparison ignores the one dimension this gate measures [D]
+
+`eligible` is `manifest ∖ (union of the four output ratchets)` (`:145-152`), because a seed that
+diverges *unmutated* cannot attribute a mutant. The intent is right; the source is not. Gate 1
+falls back to `ast_equiv_batch` with **comments ignored** (`verify.mjs:588`, "The empty argv is
+load-bearing"), so a component whose only divergence is a comment scores `match` there and is
+**correctly** unlisted. This gate, however, splits `comment-mismatch` out as its own class. A
+comment-divergent seed is therefore **guaranteed** to pass the eligibility filter and
+**guaranteed** to be unattributable here — systematically, for the whole `comment-mismatch`
+class, not marginally.
+
+**[D]** Measured 2026-08-31 with the gate's own comparison and no comment inserted:
+**116 match / 6 comment-mismatch over the 38 enrolled seeds**, the divergence coming from
+**2 seeds** — `layerchart/…/layers/Canvas.svelte` (all four targets) and
+`open-webui/…/NotebookView.svelte` (client, client-dev). So **6 of the 14 residual
+`comment-mismatch` pairs are not attributable to the mutation at all**; no change to comment
+handling can move them. Running gate 1's own `ast_equiv_batch` over those six pairs plus a third
+file found the same way (`svelthree/…/AmbientLight.svelte`, client) returns **`equivalent` for
+every one** — all three are comment-only, which is exactly why none is listed.
+
+Two things follow. Reducing `Canvas.svelte` gives a 12-line hand-reproducible defect — a
+template-expression function body containing only a comment loses the comment in client output,
+across all seven template slots, with a body containing one statement as the passing control —
+so the seeds are diverging for a real reason that **no output ratchet can express**. And the fix
+for this blind spot is not "the output ratchet's population has a hole": it is that a filter must
+be drawn from a comparison that sees what the gate compares. Run each seed **unmutated** once
+under *this* gate's own comparison and exclude the ones that already diverge; cost is one extra
+compile per seed.
+
+**A note on how this row was nearly written wrong.** The first version claimed the population had
+a hole, on the argument that "oxfmt does not delete comments, so the divergence cannot be a
+normalization artifact". That argument is sound and rules out the *normalizer* — and says nothing
+about the *comparator*, which is a different stage that ignores comments by design. Eliminating
+one candidate is not confirming another.
 
 ---
 

@@ -663,11 +663,11 @@ fn run_behavior_case(case: &BehaviorCase) -> Result<()> {
         "svelte-if-hover" => {
             let (source, offset) = source_at_marker(case)?;
             let response = hover::hover(&source, offset).context("no hover response")?;
-            // `getHoverInfo.ts:56` returns `{ contents: <string> }`, which is a
-            // `MarkedString` on the wire; a `MarkupContent` around the same text is a
-            // different response, so the shape is asserted and not only the text.
+            // `getHoverInfo.ts:56` answers a tag with `{ contents: documentation[tag] }`
+            // — a bare string, where only the modifier hover beside it is markup, so the
+            // shape is asserted and not only the text.
             let HoverContents::Scalar(MarkedString::String(value)) = response.contents else {
-                anyhow::bail!("a Svelte block hover is a bare string upstream, not markup");
+                anyhow::bail!("tag hover response was not a bare string");
             };
             let needle = case.expected["markdown_contains"]
                 .as_str()

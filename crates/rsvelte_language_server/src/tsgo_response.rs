@@ -376,6 +376,20 @@ impl<'a> TsgoResponseMapper<'a> {
         else {
             return false;
         };
+        if matches!(direction, Direction::ShadowToSource)
+            && let Some(context) = context
+            && context.plain_text.is_none()
+            && !self.folding_range_is_one_to_one(
+                context,
+                Range::new(
+                    Position::new(start_line, start_character),
+                    Position::new(end_line, end_character),
+                ),
+                Range::new(start, end),
+            )
+        {
+            return false;
+        }
         object.insert("startLine".to_string(), Value::from(start.line));
         object.insert("endLine".to_string(), Value::from(end.line));
         if object.contains_key("startCharacter") {
@@ -385,6 +399,48 @@ impl<'a> TsgoResponseMapper<'a> {
             object.insert("endCharacter".to_string(), Value::from(end.character));
         }
         true
+    }
+
+    /// `FoldingRangeProvider.mapToOriginalRange` (`:64-97`): a span whose mapped
+    /// start is inside a `<script>` is kept, and one in the template survives
+    /// only when the source and generated text are the same string. Without it
+    /// every JSX node the shadow builds for the template folds twice.
+    fn folding_range_is_one_to_one(
+        &self,
+        context: &RequestDocumentContext,
+        shadow: Range,
+        source: Range,
+    ) -> bool {
+        let Some(overlay) = self.overlay_for_context(context) else {
+            return true;
+        };
+        let Some(source_text) = overlay.source_text(&context.source_path) else {
+            return true;
+        };
+        let Some(shadow_text) = overlay
+            .shadow_for_source(&context.source_path)
+            .map(|document| document.text.as_str())
+        else {
+            return true;
+        };
+        let source_index = LineIndex::new(source_text);
+        let start = source_index.offset(source_text, source.start);
+        if crate::context::EmbeddedRegions::new(source_text).in_script(start) {
+            return true;
+        }
+        let end = source_index.offset(source_text, source.end);
+        let Some(original) = source_text.get(start..end) else {
+            return true;
+        };
+        if original.is_empty() {
+            return false;
+        }
+        let shadow_index = LineIndex::new(shadow_text);
+        let generated = shadow_text.get(
+            shadow_index.offset(shadow_text, shadow.start)
+                ..shadow_index.offset(shadow_text, shadow.end),
+        );
+        generated.is_some_and(|generated| original.trim() == generated.trim())
     }
 
     fn map_uri_value(&self, value: &mut Value, direction: Direction) {
@@ -752,11 +808,21 @@ pub fn widen_hover_range_over_string_quotes(result: &mut Value, text: &str) {
 /// answers `[]` for a definition request it cannot map.
 #[must_use]
 pub fn tsgo_unmapped_result(method: &str) -> Value {
-    if method == "textDocument/definition" {
-        Value::Array(Vec::new())
-    } else {
-        Value::Null
+    match method {
+        "textDocument/definition" => Value::Array(Vec::new()),
+        // `PluginHost.getCompletions` returns `Promise<CompletionList>` and ends
+        // in `CompletionList.create(flattened, isIncomplete)`, so upstream has no
+        // way to answer a completion with `null` — every plugin declining leaves
+        // an empty list whose `isIncomplete` is the `false` seed of the reduce.
+        "textDocument/completion" => empty_completion_list(),
+        _ => Value::Null,
     }
+}
+
+/// The value upstream's completion host produces when every plugin declines.
+#[must_use]
+pub fn empty_completion_list() -> Value {
+    serde_json::json!({ "isIncomplete": false, "items": [] })
 }
 
 fn is_semantic_tokens_method(method: &str) -> bool {
@@ -968,6 +1034,17 @@ fn json_u32(value: &Value) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unmapped_completion_is_an_empty_list_not_null() {
+        assert_eq!(
+            tsgo_unmapped_result("textDocument/completion"),
+            json!({ "isIncomplete": false, "items": [] })
+        );
+        // The other two shapes upstream can produce are unchanged.
+        assert_eq!(tsgo_unmapped_result("textDocument/definition"), json!([]));
+        assert_eq!(tsgo_unmapped_result("textDocument/hover"), Value::Null);
+    }
+
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1048,6 +1125,40 @@ mod tests {
         let mapper = TsgoResponseMapper::with_default_document(&overlay, Some(context));
         assert!(mapper.map_response("textDocument/hover", &mut response));
         assert_eq!(parse_range(&response["range"]), Some(range));
+    }
+
+    /// `mapToOriginalRange` (`FoldingRangeProvider.ts:64-97`) keeps a template
+    /// span only when the source and generated text are the same string, and
+    /// keeps every span whose start is inside a `<script>` unconditionally.
+    #[test]
+    fn a_template_folding_range_survives_only_where_the_two_texts_agree() {
+        let source = "<script>\nlet value = 1;\n</script>\n<div class=\"a\">\n<p>x</p>\n</div>\n";
+        let (_workspace, path, overlay) = overlay(source);
+        let source_uri = overlay.shadow_for_source(&path).unwrap().source_uri.clone();
+        let params = json!({ "textDocument": { "uri": source_uri.as_str() } });
+        let context = TsgoResponseMapper::for_request(&overlay, &params)
+            .default_document()
+            .cloned()
+            .unwrap();
+        let fold = |range: Range| {
+            let mapper = TsgoResponseMapper::with_default_document(&overlay, Some(context.clone()));
+            let mut response = json!([{
+                "startLine": range.start.line,
+                "startCharacter": range.start.character,
+                "endLine": range.end.line,
+                "endCharacter": range.end.character
+            }]);
+            mapper.map_response("textDocument/foldingRange", &mut response);
+            response.as_array().map_or(0, Vec::len)
+        };
+        let script = overlay
+            .map_source_range(&path, source_range(source, "let value = 1;"))
+            .unwrap();
+        assert_eq!(fold(script), 1, "a span inside the script is kept");
+        let element = overlay
+            .map_source_range(&path, source_range(source, "<div class=\"a\">"))
+            .unwrap();
+        assert_eq!(fold(element), 0, "the shadow rewrites the element");
     }
 
     #[test]

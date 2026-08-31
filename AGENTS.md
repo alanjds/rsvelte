@@ -436,6 +436,19 @@ the two swapped. `parser_fixtures.rs` strips `character` from every `loc` before
 is why that suite reads 100% while the class exists. **A gate's first baseline measures how long
 the surface was ungated, not how much someone let rot.**
 
+**Those three numbers are the FIRST baseline (2721 entries) and none of them is a current work
+item.** The ratchet now stands at 459 over ten clusters — `span` 92, `node-type` 90,
+`estree-fields` 74, `unclustered` 68, `comment-attachment` 64, `css-shape` 24, `child-count` 22,
+`accepts-what-official-rejects` 13, `loc-presence` 10, `ast-mode` 2 — and there is no
+`character` cluster at all. Grepping the keys for `character` returns 0 and **means nothing**,
+because `verify.mjs` folds `start`/`end`/`loc` into one key per node type, so a
+`loc.start.character` divergence sits inside `span`. Measured directly on one input, both
+compilers emit zero `character`-bearing `loc`s and `phases/1-parse` does not import
+`locate-character` at all (only `preprocess/index.js`, `state.js` and
+`utils/compile_diagnostic.js` do) — which suggests the paragraph above describes the
+*diagnostic* path rather than `parse()` output, but one input is not a population. Count the
+JSON, not this paragraph. And read `459` as `253 bases × axis`: 206 of those keys are the second
+axis of a base already counted, so the defect ceiling is 253, not 459.
 ### Generated shape matrix (`scripts/compat-corpus/matrix/`)
 
 A **generated**, not collected, differential corpus (`pnpm run corpus:matrix`, #2281 Gate 2),
@@ -828,6 +841,24 @@ Pre-commit hooks run `cargo fmt` and `cargo clippy` automatically (`.githooks/pr
 They inherit no `CARGO_TARGET_DIR`, so a plain `git commit` builds into the worktree's own
 `target/` — 1.4 GB per worktree, on a disk that has run out twice. Prefix the commit itself
 (`CARGO_TARGET_DIR=… git commit -m …`) rather than reaching for `--no-verify`.
+
+**In debug, disk runs out before time does, and chunking does not help.** The instruction above
+to scope a run with `--test` is not only about the hour a `--release` build costs: a debug build
+of `rsvelte_core`'s 589 test targets is **83 GB** of `target/debug/deps` at ~140 MB a binary —
+**170× the 499 MB the whole release profile occupies** — and it filled the dev disk to zero
+twice in one day. Splitting 589 targets into three chunks lowers peak memory and leaves
+**exactly the same 83 GB**, because each chunk's binaries stay. `target/debug/incremental` is a
+rounding error against this (measured at 445 MB when free space was 0), so `CARGO_INCREMENTAL=0`
+is worth setting and will not save you. Read `df -g /System/Volumes/Data` before invoking cargo,
+and do not start a build under ~20 GiB free: ENOSPC does not fail loudly, it leaves a partial
+artifact and the *next* run fails for an unrelated-looking reason. Reclaim with
+`find target/debug/deps -maxdepth 1 -type f -mmin +360 -delete`.
+
+**A guard that kills a build by matching its path does not work.** `cargo`'s own cmdline carries
+neither the worktree path nor `CARGO_TARGET_DIR` (both arrive through cwd and the environment),
+so `pkill -f '<path>'` leaves the parent alive and only the `rustc` children — which do carry
+`--out-dir` — are matched. Record cargo's pid at launch and `kill` that, or resolve cwd per pid
+with `lsof -a -d cwd -p <pid>`.
 
 **acorn checks JavaScript's early errors while parsing; OXC settles them after it, and rsvelte
 ran only the parser.** An early error is syntactically shaped but illegal, and none of the class

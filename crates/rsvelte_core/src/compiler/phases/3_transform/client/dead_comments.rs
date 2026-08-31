@@ -52,6 +52,10 @@ pub(crate) struct Rules<'a> {
     /// Names carrying `legacy_indirect_bindings`, whose member mutation grows an
     /// unlocated `$.invalidate_inner_signals` thunk. Legacy mode only.
     pub invalidate_inner_signals_targets: &'a [String],
+    /// Legacy mode, where every top-level `$:` becomes a `$.legacy_pre_effect`
+    /// appended after the whole instance body — so its subtree is printed in a
+    /// second pass this one cannot see.
+    pub legacy_reactive_effects: bool,
 }
 
 impl Rules<'static> {
@@ -61,6 +65,7 @@ impl Rules<'static> {
         rune_accessors: true,
         destructure_iife_targets: &[],
         invalidate_inner_signals_targets: &[],
+        legacy_reactive_effects: false,
     };
 
     /// A `<script module>`, whose `Program` is builder-made.
@@ -70,6 +75,7 @@ impl Rules<'static> {
             rune_accessors: runes,
             destructure_iife_targets: &[],
             invalidate_inner_signals_targets: &[],
+            legacy_reactive_effects: false,
         }
     }
 }
@@ -85,6 +91,7 @@ impl<'a> Rules<'a> {
             rune_accessors: runes,
             destructure_iife_targets,
             invalidate_inner_signals_targets,
+            legacy_reactive_effects: !runes,
         }
     }
 }
@@ -152,14 +159,7 @@ fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Opt
         return None;
     }
 
-    let mut collector = EventCollector {
-        events: Vec::new(),
-        rune_accessors: rules.rune_accessors,
-        destructure_iife_targets: rules.destructure_iife_targets,
-        invalidate_inner_signals_targets: rules.invalidate_inner_signals_targets,
-        src,
-    };
-    collector.visit_program(program);
+    let (reactive_spans, mut collector) = collect_events(src, program, rules);
     // Held out of the event list rather than pushed at offset 0: a `Revive` there
     // would sort ahead of it under the kill-wins tie-break below.
     let seeded = if rules.program_unlocated {
@@ -181,16 +181,52 @@ fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Opt
         .events
         .sort_by_key(|&(pos, kind)| (pos, kind == Event::Kill));
 
+    // Where the effects leave the cursor. Each starts with its own unlocated
+    // thunk, so only the last one's revives can outlive them, and a comment at
+    // or after that revive is still pending when the first located template
+    // node flushes it.
+    collector
+        .reactive_events
+        .sort_by_key(|&(index, pos, kind)| (index, pos, kind == Event::Kill));
+    // No per-effect reset for the opening thunk: every event below settles the
+    // state on its own, and an effect that contributes none is the case handled
+    // after the loop.
+    let mut effects_alive = false;
+    let mut effect_revive = 0u32;
+    let mut last_effect = usize::MAX;
+    for &(index, pos, kind) in &collector.reactive_events {
+        last_effect = index;
+        match kind {
+            Event::Revive => {
+                effects_alive = true;
+                effect_revive = pos;
+            }
+            Event::Kill => effects_alive = false,
+        }
+    }
+    if !reactive_spans.is_empty() && last_effect != reactive_spans.len() - 1 {
+        // The last `$:` contributed nothing, so its own thunk is the last word.
+        effects_alive = false;
+    }
+
     let mut removals: Vec<(usize, usize)> = Vec::new();
     for comment in &program.comments {
         let start = comment.span.start;
+        // A comment inside a `$:` is re-emitted with the effect body, which
+        // `rehome_reactive_statement_comments` owns.
+        if reactive_spans
+            .iter()
+            .any(|&(from, to)| start >= from && start < to)
+        {
+            continue;
+        }
         let idx = collector.events.partition_point(|&(pos, _)| pos <= start);
         let last = if idx > 0 {
             collector.events[idx - 1].1
         } else {
             seeded
         };
-        if last == Event::Kill {
+        if last == Event::Kill && !(effects_alive && start >= effect_revive) {
             removals.push((start as usize, comment.span.end as usize));
         }
     }
@@ -210,11 +246,99 @@ fn strip_from_program(src: &str, program: &Program<'_>, rules: Rules<'_>) -> Opt
     Some(out)
 }
 
+/// The `$:` spans and the walk's events, shared by the strip and the liveness
+/// query below.
+fn collect_events<'p>(
+    src: &'p str,
+    program: &Program<'_>,
+    rules: Rules<'p>,
+) -> (Vec<(u32, u32)>, EventCollector<'p>) {
+    // Upstream replaces each with `b.empty` and appends the effect after the
+    // whole instance body, so the subtree neither flushes nor revives here.
+    let reactive_spans: Vec<(u32, u32)> = if rules.legacy_reactive_effects {
+        program
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::LabeledStatement(labeled) if labeled.label.name == "$" => {
+                    Some((labeled.span.start, labeled.span.end))
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut collector = EventCollector {
+        events: Vec::new(),
+        reactive_events: Vec::new(),
+        in_reactive: None,
+        rune_accessors: rules.rune_accessors,
+        destructure_iife_targets: rules.destructure_iife_targets,
+        invalidate_inner_signals_targets: rules.invalidate_inner_signals_targets,
+        reactive_spans: Vec::new(),
+        src,
+    };
+    collector.reactive_spans = reactive_spans.clone();
+    collector.visit_program(program);
+    (reactive_spans, collector)
+}
+
+/// Whether esrap's cursor is alive at a given offset of the FIRST printing
+/// pass — the question `rehome_reactive_statement_comments` has to answer
+/// before it copies a `$:`'s comments onto the statement that follows it.
+pub(crate) struct CursorLiveness {
+    events: Vec<(u32, Event)>,
+    seeded: Event,
+}
+
+impl CursorLiveness {
+    pub(crate) fn alive_at(&self, offset: u32) -> bool {
+        let idx = self.events.partition_point(|&(pos, _)| pos <= offset);
+        let last = if idx > 0 {
+            self.events[idx - 1].1
+        } else {
+            self.seeded
+        };
+        last == Event::Revive
+    }
+}
+
+/// `None` when the script does not parse, so the caller keeps its old rule.
+pub(crate) fn cursor_liveness(src: &str, rules: Rules<'_>) -> Option<CursorLiveness> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, src, SourceType::mjs()).parse();
+    if !ret.diagnostics.is_empty() {
+        return None;
+    }
+    let (_, mut collector) = collect_events(src, &ret.program, rules);
+    collector
+        .events
+        .sort_by_key(|&(pos, kind)| (pos, kind == Event::Kill));
+    Some(CursorLiveness {
+        events: collector.events,
+        seeded: if rules.program_unlocated {
+            Event::Kill
+        } else {
+            Event::Revive
+        },
+    })
+}
+
 struct EventCollector<'s> {
     events: Vec<(u32, Event)>,
+    /// Events from inside a top-level `$:`, tagged with its index: they belong
+    /// to the second printing pass, in that pass's order.
+    reactive_events: Vec<(usize, u32, Event)>,
+    /// Index of the `$:` being walked, if any.
+    in_reactive: Option<usize>,
     rune_accessors: bool,
     destructure_iife_targets: &'s [String],
     invalidate_inner_signals_targets: &'s [String],
+    /// Top-level `$:` statements, whose subtree is printed in upstream's second
+    /// pass; `body()` skips the `EmptyStatement` left behind, so nothing inside
+    /// one moves the cursor for a comment outside it.
+    reactive_spans: Vec<(u32, u32)>,
     src: &'s str,
 }
 
@@ -230,12 +354,19 @@ impl<'s> EventCollector<'s> {
             .any(|target| target == name)
     }
 
+    fn push(&mut self, pos: u32, kind: Event) {
+        match self.in_reactive {
+            Some(index) => self.reactive_events.push((index, pos, kind)),
+            None => self.events.push((pos, kind)),
+        }
+    }
+
     fn kill_at(&mut self, offset: u32) {
         let rest = &self.src.as_bytes()[offset as usize..];
         let Some(nl) = memchr::memchr(b'\n', rest) else {
             return;
         };
-        self.events.push((offset + nl as u32 + 1, Event::Kill));
+        self.push(offset + nl as u32 + 1, Event::Kill);
     }
 }
 
@@ -262,7 +393,7 @@ impl<'a> Visit<'a> for EventCollector<'_> {
                         .any(|target| target == name)
                 });
             if transformed {
-                self.events.push((it.span.start, Event::Kill));
+                self.push(it.span.start, Event::Kill);
             }
         }
         // The thunk is appended after the mutation, and `$.mutate(obj, …)` still
@@ -284,8 +415,21 @@ impl<'a> Visit<'a> for EventCollector<'_> {
         walk::walk_update_expression(self, it);
     }
 
+    fn visit_labeled_statement(&mut self, it: &oxc_ast::ast::LabeledStatement<'a>) {
+        let index = self
+            .reactive_spans
+            .iter()
+            .position(|&(start, end)| start == it.span.start && end == it.span.end);
+        let outer = self.in_reactive;
+        if index.is_some() {
+            self.in_reactive = index;
+        }
+        walk::walk_labeled_statement(self, it);
+        self.in_reactive = outer;
+    }
+
     fn visit_class_body(&mut self, it: &ClassBody<'a>) {
-        self.events.push((it.span.start, Event::Revive));
+        self.push(it.span.start, Event::Revive);
         if self.rune_accessors
             && let Some(offset) = accessor_kill_offset(it)
         {
@@ -295,17 +439,17 @@ impl<'a> Visit<'a> for EventCollector<'_> {
     }
 
     fn visit_function_body(&mut self, it: &FunctionBody<'a>) {
-        self.events.push((it.span.start, Event::Revive));
+        self.push(it.span.start, Event::Revive);
         walk::walk_function_body(self, it);
     }
 
     fn visit_block_statement(&mut self, it: &BlockStatement<'a>) {
-        self.events.push((it.span.start, Event::Revive));
+        self.push(it.span.start, Event::Revive);
         walk::walk_block_statement(self, it);
     }
 
     fn visit_static_block(&mut self, it: &StaticBlock<'a>) {
-        self.events.push((it.span.start, Event::Revive));
+        self.push(it.span.start, Event::Revive);
         walk::walk_static_block(self, it);
     }
 }
@@ -450,6 +594,43 @@ mod tests {
     #[test]
     fn a_binding_outside_the_target_list_kills_nothing() {
         let src = "let other = { v: 1 };\nfunction bump() {\n\tother.v = 3;\n}\n// kept\n";
+        assert!(strip_invalidate(src).is_none());
+    }
+
+    /// The effects print after the whole instance body, so a block inside one
+    /// cannot revive the cursor for a comment BETWEEN two of them: the next
+    /// effect's own thunk kills again before anything flushes it.
+    #[test]
+    fn a_block_inside_a_reactive_statement_does_not_revive_what_follows_it() {
+        let src = "let obj = { v: 1 };\nlet bar = 2;\nfunction bump() {\n\tobj.v = 3;\n}\n$: if (obj.v) {\n\tbar = 5;\n}\n// gone\n$: obj.n = bar;\n";
+        let out = strip_invalidate(src).unwrap();
+        assert!(!out.contains("// gone"));
+    }
+
+    /// CONTROL — the same shape with nothing killing the cursor first. A rule
+    /// that treats a `$:` as a kill rather than as a hole breaks this row.
+    #[test]
+    fn a_reactive_statement_alone_kills_nothing_here() {
+        let src = "let obj = { v: 1 };\nlet bar = 2;\nfunction bump() {\n\tbar = 9;\n}\n$: if (obj.v) {\n\tbar = 5;\n}\n// kept\n$: obj.n = bar;\n";
+        assert!(strip_invalidate(src).is_none());
+    }
+
+    /// A comment inside a reactive statement belongs to the effect body this
+    /// pass never sees; `rehome_reactive_statement_comments` decides its fate.
+    #[test]
+    fn a_comment_inside_a_reactive_statement_is_left_alone() {
+        let src = "let obj = { v: 1 };\nlet bar = 2;\nfunction bump() {\n\tobj.v = 3;\n}\n$: if (obj.v) {\n\t// kept\n\tbar = 5;\n}\n// gone\n$: obj.n = bar;\n";
+        let out = strip_invalidate(src).unwrap();
+        assert!(out.contains("// kept"));
+        assert!(!out.contains("// gone"));
+    }
+
+    /// CONTROL — past the LAST `$:` the effects' own order decides, and a block
+    /// in the last-printed one leaves the cursor alive; `rehome_…` owns that
+    /// region, so this pass must not touch it.
+    #[test]
+    fn a_comment_past_the_last_reactive_statement_is_left_alone() {
+        let src = "let obj = { v: 1 };\nlet bar = 2;\nfunction bump() {\n\tobj.v = 3;\n}\n$: if (obj.v) {\n\tbar = 5;\n}\n// kept\nfunction after() {\n\treturn 1;\n}\n";
         assert!(strip_invalidate(src).is_none());
     }
 

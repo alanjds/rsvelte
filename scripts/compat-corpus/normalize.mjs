@@ -263,18 +263,36 @@ export function readIf(p) {
 	return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
 }
 
+const EXCERPT = 120;
+const LEAD = 40;
+
 /**
- * Locate the first line at which two texts diverge, truncated for display.
+ * Locate the first line at which two texts diverge, excerpted for display.
  * Returns `null` when the texts are identical. Shared by every verify
  * script's failure-detail reporting.
+ *
+ * The window is centred on the first differing COLUMN, not on the start of the
+ * line: a divergence past column 120 used to leave both sides showing the same
+ * prefix, so the evidence a ratchet entry has to be attributed from was absent
+ * and two unrelated divergences clustered together under one identical excerpt.
+ * Both sides take the same window so the two excerpts stay aligned.
  */
 export function firstDiffLine(a, b) {
 	const al = a.split('\n');
 	const bl = b.split('\n');
 	for (let i = 0; i < Math.max(al.length, bl.length); i++) {
-		if (al[i] !== bl[i]) {
-			return { line: i + 1, expected: (al[i] ?? '<EOF>').slice(0, 120), actual: (bl[i] ?? '<EOF>').slice(0, 120) };
-		}
+		if (al[i] === bl[i]) continue;
+		const e = al[i] ?? '<EOF>';
+		const c = bl[i] ?? '<EOF>';
+		let col = 0;
+		while (col < e.length && col < c.length && e[col] === c[col]) col++;
+		const start = Math.max(0, col - LEAD);
+		const cut = (s) => {
+			const head = start > 0 ? '…' : '';
+			const body = s.slice(start, start + EXCERPT);
+			return head + body + (start + EXCERPT < s.length ? '…' : '');
+		};
+		return { line: i + 1, column: col + 1, expected: cut(e), actual: cut(c) };
 	}
 	return null;
 }

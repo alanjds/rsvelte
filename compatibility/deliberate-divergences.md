@@ -676,6 +676,96 @@ The parity gate's unit is (source, oracle output); an input the subject declines
 compare, so the pair can only be excluded or scored as a failure. Excluding it is what keeps the
 gate's remaining population meaningful — and the exclusion list is shrink-only in both
 directions, so an entry that starts formatting fails the run.
+## A formatter difference the compiler cannot see
+
+**Ratchet** `compatibility/fmt-oracle-excluded.json`, five `oracle-bug` entries:
+`await-then-destruct-array-nested-rest`, `block-expression-assign`,
+`whitespace-after-script-tag`, `whitespace-after-style-tag`, `textarea-end-tag`.
+**Pinned by** `crates/rsvelte_formatter/tests/render_neutral_divergences.rs`.
+
+### Input
+
+An array pattern with elisions (`...[,, c, ...{ length }]`), an assignment used as a
+`{@const}` body (`{@const y = h = 0}`), a `<script>` and a `<style>` whose close tag carries
+whitespace and newlines before `>` (`</script     \n\n>`), and a `<textarea>` whose close tag is
+split the same way.
+
+### Both outputs
+
+| entry | `oxfmt(svelte: true)` | `rsvelte-fmt` |
+|---|---|---|
+| elisions | `...[, , c, ...{ length }]` | `...[,, c, ...{ length }]` |
+| `{@const}` | `{@const x = h = 0}` | `{@const x = (h = 0)}` |
+| `</script   >` | rewritten to `</script>` | preserved verbatim |
+| `</style   >` | rewritten to `</style>` | preserved verbatim |
+| `</textarea` split | the tail is deleted | the element is closed |
+
+### Why rsvelte's form is the correct one
+
+It is not a claim about which text reads better: **each pair compiles to byte-identical output**.
+Both texts of all five were run through
+`submodules/svelte/packages/svelte/src/compiler/index.js` for `generate: 'client'` and
+`'server'`, and `js.code` and `css.code` are equal on every one of the four comparisons. The
+divergence is therefore invisible to every consumer of the file, and rsvelte's side of it is the
+one its own engines produce — `oxc_formatter` for the JavaScript, and the source text for a close
+tag it has no reason to rewrite.
+
+The recorded justifications for all five claimed a *semantic* loss (a dropped nested rest, an
+unclosed paren, a discarded `<script>` body). Re-measured on 2026-08-31, none of them reproduces:
+the bodies survive, the patterns survive, and the outputs agree. A sixth entry filed the same way,
+`textarea-content`, now matches the oracle byte-for-byte and has been removed from the list
+outright.
+
+### Why no gate sees it
+
+The formatter-parity gate's unit is (source, oracle text) and its verdict is byte equality, so it
+cannot ask whether two texts mean the same program — the one question that separates these five
+from a real defect. Nothing in the tree compiles both sides of a formatter divergence; the
+measurement above had to be written for this row.
+
+---
+
+## The formatter's CSS engine is oxc, not prettier's PostCSS
+
+**Ratchet** `compatibility/fmt-oracle-excluded.json`, three `oracle-bug` entries: `css-vars`,
+`svelte.dev .../docs/[topic]/[...path]/+layout.svelte`, and
+`pattern/adversarial/css/css-custom-property-values`.
+**Pinned by** `crates/rsvelte_formatter/tests/css_native.rs`.
+
+### Input
+
+One declaration block carrying an empty custom-property value (`--bar:   !important`), a bracket
+value (`--arr: [1, 2]`), a selector-shaped value (`--sel: a > b ~ c`), and a nested `calc()` with
+a parenthesized subtraction group.
+
+### Both outputs, measured on the same bytes
+
+| | `--bar` | `--arr` | `--sel` | nested `calc()` group |
+|---|---|---|---|---|
+| `oxfmt x.css` | `--bar: !important;` | `[1 , 2]` | `a > b ~ c` | kept inline |
+| `rsvelte-fmt x.css` | `--bar: !important;` | `[1 , 2]` | `a > b ~ c` | kept inline |
+| `oxfmt(svelte: true)` | `--bar:    !important;` | `[1, 2]` | `a > b ~c` | broken onto its own lines |
+
+### Why rsvelte's form is the correct one
+
+`rsvelte-fmt` reproduces **oxfmt's own standalone CSS output byte-for-byte**, on all four. The
+oracle is the same tool answering differently, because its Svelte path prints embedded CSS through
+prettier's PostCSS printer while its `.css` path uses the oxc engine — the engine `rsvelte-fmt`
+also uses, on purpose. Parity against the Svelte path is therefore undefined: matching it would
+put `rsvelte-fmt` in disagreement with `oxfmt` on the same CSS depending only on whether it sat in
+a `.css` file or a `<style>` block, which is the defect the oracle already has. `a > b ~c` is also
+a token-stream change in a value that may be substituted, so the Svelte path is the side that
+moves meaning.
+
+### Why no gate sees it
+
+The parity gate compares against exactly one of the oracle's two answers and has no notion of the
+other, so a divergence caused by the oracle's own inconsistency is indistinguishable from an
+rsvelte defect. The comparison that separates them — `rsvelte-fmt` against `oxfmt <file>.css` —
+exists nowhere in the tree; the table above had to be measured for this row.
+
+---
+
 ## SCSS serialisation from the `grass` backend
 
 **Pinned by** `crates/rsvelte_preprocess/tests/grass_serialisation.rs`.

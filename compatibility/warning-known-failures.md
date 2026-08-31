@@ -34,7 +34,7 @@ compilers already run on every entry.
 
 ## Why the four per-target files are currently identical
 
-`warning-known-failures.<target>.json` holds the same 80 entries on all four,
+`warning-known-failures.<target>.json` holds the same 2 entries on all four,
 and `warning-position-known-failures.<target>.json` 0 entries on all four. That is not a
 bug in the partitioning — almost every warning is produced in Phase 1/2 (parse
 and analyze), before the target is consulted, so a divergence shows up on all
@@ -46,19 +46,23 @@ and stays sensitive to an entry that starts diverging on a second target while
 already listed for the first. Expect all eight files to move together in a
 burn-down PR.
 
-## Warning codes (`warning-known-failures.<target>.json`, 80 entries each)
+## Warning codes (`warning-known-failures.<target>.json`, 2 entries each)
 
 The multiset of warning **codes** differs: rsvelte warns where upstream does
 not, or stays silent where upstream warns. This is a semantic bug — a user sees
 noise they cannot suppress, or misses a diagnostic they should have seen.
 
-Not every entry is equally bad. Of the 80 entries that still diverge, **20 are
-under-warnings** — rsvelte stays silent where upstream warns — and **60 are
-over-warnings**, noise the user cannot suppress. No entry diverges in both
-directions at once. A missing diagnostic and an extra one fail
-differently, and the ratchet count alone does not distinguish them:
+Both remaining entries are **over-warnings** — rsvelte emits
+`state_referenced_locally` where upstream does not. A missing diagnostic and an
+extra one fail differently, and the ratchet count alone does not distinguish
+them, so the split is kept even at this size:
 
-Partition of `warning-known-failures.<target>.json` by direction: `20 + 60`
+Partition of `warning-known-failures.<target>.json` by direction: `0 + 2`
+
+The two ids are the same source file reached through two corpus sources
+(`svelte.dev/apps/svelte.dev/content/docs/svelte/03-template-syntax/11-declaration-tags.md/2.svelte`
+and `svelte/documentation/docs/03-template-syntax/11-declaration-tags.md/2.svelte`),
+so this ratchet is **one** defect, not two.
 
 **73 of the 83 pre-existing entries arrived with the wave-2 enrolment (#3130)**,
 which took the corpus from 37 corpus sources to 104. The remaining per-code

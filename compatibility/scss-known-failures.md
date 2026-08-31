@@ -236,3 +236,21 @@ node scripts/compat-corpus/scss-verify.mjs --update-baseline
 Both backends are version-pinned so the ratchet is reproducible: `sass` 1.102.0 in the root
 `devDependencies`, `grass` 0.13.4 in `crates/rsvelte_preprocess/Cargo.toml`. Bumping either is
 expected to move entries; re-baseline in the same PR and update the cluster counts above.
+
+## Attribution
+
+Attribution of `scss-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 155 | `deliberate-divergences` | render-neutral serialisation — colour spelling, comment placement, wrapped-selector indentation, quote style. Pinned by `crates/rsvelte_preprocess/tests/grass_serialisation.rs`. |
+| 59 | `upstream_issues/grass-hoists-a-declaration-written-after-a-nested-rule.md` | a declaration written after a nested rule is hoisted above it — the `mixed-decls` class, and the only css-mismatch cluster that changes the cascade |
+| 35 | `upstream_issues/grass-missing-css-color-4-api.md` | the CSS Color 4 `sass:color` API is missing, so the input does not compile |
+| 32 | `upstream_issues/grass-import-only-file-loaded-by-use.md` | a `*.import.scss` file is resolved from `@use` / `@forward` |
+| 28 | `upstream_issues/grass-explicit-extension-specifier.md` | a specifier carrying an explicit `.scss` extension does not resolve |
+| 3 | `upstream_issues/grass-css-color-4-relative-syntax.md` | relative colour syntax is parsed as a Sass `rgb()` call |
+| 2 | `upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md` | a slash list divides after a `not(`-shaped pseudo-class in a nested rule; `grid-row: 0.4` is CSS a browser drops |
+| 1 | `upstream_issues/grass-tailwind-important-apply.md` | Tailwind's `!`-prefixed utility inside `@apply` |
+
+The split is the computed classification of § *What the 315 entries are, measured* (155 / 59 / 2)
+plus the five `grass-rejects-accepted` causes (99), not a second reading of the same units.

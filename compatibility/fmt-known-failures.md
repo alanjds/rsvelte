@@ -108,6 +108,100 @@ and that is the burndown target, not the tail. Nothing here is an oracle bug: th
 `oracle-invalid` classification already carries those and is a pass, not a ratchet
 entry.
 
+## Three axes the cluster table does not carry (2026-08-31)
+
+The table above keys on the **first differing line**, which answers *what the
+divergence looks like* and nothing about *how much it costs*. Three orthogonal
+measurements over the same 788, each run on the current tree with the same
+invocations the gate uses (`oxfmt -c scripts/fixtures/fmt-corpus.oxfmtrc.json
+--stdin-filepath <basename>` and `rsvelte-fmt --stdin --stdin-filepath <basename>
+-c <same config> --oxfmt-bin <same oxfmt>`). Positive control that the harness
+reproduces the gate: **0 of 788 came back byte-equal** — the harness agrees with
+the ratchet on every entry.
+
+**1. Does the divergence change what the compiler emits?** Each side's formatted
+output was compiled with the official compiler (`generate: 'client'` and
+`'server'`, comparing `js.code` and `css.code`):
+
+| n | class |
+|---|---|
+| 674 | **render-neutral** — the compiler emits byte-identical JS *and* CSS from both forms |
+| 114 | **render-changing** — at least one of the four outputs differs |
+
+The 114 split 53 `client:js+server:js`, 43 `client:css+server:css`, 17
+`client:js` alone, 1 all four. **86% of this ratchet is invisible to the
+compiler**, so it is a formatting-taste backlog, not a correctness one — but the
+gate's unit is bytes, so the 114 that *are* a correctness question are filed
+beside the 674 that are not, indistinguishably.
+
+**2. Is rsvelte inside the oracle's own width budget?** Counting lines longer
+than `printWidth: 80` in each whole output:
+
+| n | class |
+|---|---|
+| 411 | both outputs overflow (long attribute values, URLs, class lists — neither engine can break them) |
+| 264 | **only rsvelte overflows** — rsvelte emits over-width lines the oracle does not |
+| 101 | neither overflows — pure break-point preference, both inside the budget |
+| 12 | only the oracle overflows |
+
+The asymmetry is the finding: 264 against 12. rsvelte **under-breaks**, which is
+the same direction Cluster 20 (385, *breaks-later*) reports and the opposite of
+what Cluster 21 (239, *breaks-earlier*) reads like in isolation — an entry can be
+`breaks-earlier` on its first differing line and still overflow further down.
+
+**3. Does rsvelte's own output still compile?** This is the question the gate
+structurally cannot ask, because its verdict is byte equality against the oracle:
+a mismatch is a mismatch whether the actual text is a two-space indent or is not
+a Svelte document at all.
+
+| n | class |
+|---|---|
+| 1 | **rsvelte-fmt output is rejected by the official compiler** |
+| 0 | oracle output rejected |
+
+That one is `sveltepress/packages/theme-default/src/components/icons/SystemDefault.svelte`,
+and it is not a formatting preference — **rsvelte-fmt duplicates an HTML comment
+and truncates the copies**, so the document is destroyed. Reduction (the trigger
+is a leading `<!-- … -->` child of an element whose open tag breaks, followed by a
+child that itself breaks; the comment's length is irrelevant):
+
+```svelte
+<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><!-- x --><path fill="currentColor" d="M10 16h4v0h-4z"><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="a;b" /></path></svg>
+```
+
+rsvelte-fmt emits the comment three times, and the second and third copies lose
+their `-->`:
+
+```
+><!-- x --><path fill="currentColor" d="M10 16h4v0h-4z"
+><!-- x   ><animate
+…
+    /></path
+><!-- x ></svg>
+```
+
+`compile()` on that text throws `expected_token` (*Expected token `-->`*); the
+oracle's output for the same input compiles. Removing the comment, flattening the
+nesting, or replacing `<svg>` with `<div>` each make the output valid, so the
+three ingredients are jointly required. The same check over
+`fmt-oracle-excluded.json` (27 entries, 2 of whose sources are already invalid and
+1 of which rsvelte-fmt refuses outright) finds **0** further cases, so the whole
+formatter-parity population contains exactly this one.
+
+**Attribution status of this ratchet.** *Nothing here is an oracle bug* — that
+classification lives in `fmt-oracle-excluded.json` — so no entry can be attributed
+to an `upstream_issues/` report. The only `deliberate-divergences` target that
+reaches this file is the CSS-engine boundary (#3628), which today is pinned for
+*value spelling* by `crates/rsvelte_formatter/tests/css_native.rs` and covers
+Clusters 8 and 11 plus the two `pattern/issues/3404-*` files inside Cluster 22 —
+**5 entries**. The remaining 783 are neither upstream nor deliberate: they have to
+be burned down to zero. The 43 CSS-only render-changing entries above are very
+likely the same engine boundary in its *line-breaking* facet (e.g.
+`huly/packages/ui/src/components/SearchInput.svelte`, where PostCSS breaks
+`background-color: var(--theme-button-default); // …` across three lines and OXC
+does not), but that facet has **no pin**, so they are recorded here as a candidate
+rather than counted as attributed.
+
 ## Cluster 1 — close-tag-dangle / open-tag hugging for inline & void children (3)
 
 The most common failure. Prettier prints whitespace-sensitive inline elements

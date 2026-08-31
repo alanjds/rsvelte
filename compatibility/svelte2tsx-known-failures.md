@@ -4,11 +4,11 @@ The svelte2tsx output-parity corpus (`scripts/compat-corpus/svelte2tsx-*`) compa
 rsvelte's svelte2tsx port against **official `svelte2tsx`** byte-for-byte (after
 oxfmt normalization). The ratchet may only shrink.
 
-**Current baseline: `svelte2tsx-known-failures.json`, 123 entries.**
+**Current baseline: `svelte2tsx-known-failures.json`, 70 entries.**
 
-Partition of `svelte2tsx-known-failures.json` by verdict: `121 + 2`
+Partition of `svelte2tsx-known-failures.json` by verdict: `68 + 2`
 
-- **121 — the emitted TSX differs** (`ts-mismatch`).
+- **68 — the emitted TSX differs** (`ts-mismatch`).
 - **2 — one side rejects and the other compiles** (`error-mismatch`).
 
 ## Wave-2 enrolment (#3130)
@@ -57,6 +57,71 @@ The two marker clusters are the single largest cause and are one question —
 **where a `/*Ωignore_*Ω*/` region begins and ends** — not two. Nothing here is
 an oracle bug: the `oracle-invalid` classification (94 entries this run) already
 carries those, and it is a pass, not a ratchet entry.
+
+**Read that table as five buckets, not as five causes, and the reason is the key.**
+`svelte2tsx-cluster.mjs:24` keys a cluster on `diffSignature` — the **first differing line**
+after blank-line normalization. A first differing line names a *symptom*, and for a whole class
+of defect it does not preserve the cause: a parser- or emitter-state leak surfaces at whichever
+later construct happens to be affected, so one cause scatters across several signatures while two
+unrelated causes with the same line shape fold into one. The row above where 42 and 8 are
+hand-annotated as "one question" is that failure mode caught after the fact, not a property of
+the key. The same key produced a wrong summary for the SCSS gate on 2026-08-30 — the divergence
+there was written up from its first differing line as a `:not()`-selector rule and is actually a
+parser-state leak that reaches every later slash list in the file — so treat this partition as a
+starting hypothesis and re-derive the cause from the mechanism before sizing any work off it.
+
+**And one number in it is a question that has not been asked.** The largest cluster is 42, and
+`svelte-lexical` contributes exactly 42 of the 123 entries. Whether those are the same 42 decides
+what the cluster means: one repository's one pattern (a single fix, and the "largest cause"
+framing is an artifact of which repositories were enrolled) or a coincidence between an
+emitter-wide defect and an unrelated concentration. The per-entry class is not stored anywhere —
+`svelte2tsx-cluster.mjs` reads `compatibility/report-s2t.json`, which is regenerated per run and
+not checked in — so answering it needs a corpus run, not a re-reading of this file. The
+distribution over sources IS derivable from the ratchet and is: `svelte-lexical` 42,
+`svelte-gantt` 10, `sveltekit` 8, `trakt-web` 7, `primo` 6, `svelte-inspect-value` 6, then 18
+sources with 1–5 each, 24 in total.
+
+Whoever picks this up should also read the Linux caveat above as a constraint on *what they can
+measure*, not only on what they can commit: a local macOS run reports a different set, so it can
+produce a classification but not a count.
+
+## The 42-vs-42 question is answered, and the cluster is one question about `$name`
+
+Measured 2026-08-31 on the 123 listed ids by running both implementations directly with the
+options `svelte2tsx-compile.mjs` passes (`{filename, isTsFile, mode:'ts', namespace:'html',
+version:'5'}`) and taking the first differing line after blank-line normalization. The bucket
+sizes reproduce this file's own table exactly — 42 extra-marker, 8 missing-marker, 16
+`ensureType` — which is the evidence that the *classification* is stable even though a macOS run
+cannot be trusted for a count.
+
+**They are not the same 42.** `svelte-lexical` contributes 42 entries and the extra-marker cluster
+holds 42, but the intersection is **36**: six `svelte-lexical` entries are in the tail, and the
+cluster's other six come from `svelte-inspect-value` (4), `sveltekit` (1) and `trakt-web` (1). So
+it is neither one repository's pattern nor a coincidence — it is an emitter-wide defect that one
+repository concentrates.
+
+**And the marker is a symptom, not the cause.** In 41 of the 42, rsvelte emits a
+`let $<name> = __sveltets_2_store_get(<name>);` declaration — inside the `/*Ωignore_startΩ*/`
+region, which is why the region marker is what the first differing line shows — and **official
+emits no `__sveltets_2_store_get` at all** in the same file. The question is therefore *when does
+`$name` become a store subscription*, one level below the marker. Splitting the 41 by whether the
+component is in runes mode and by where the `$name` text actually occurs:
+
+| n | component | where `$name` occurs | example |
+|---|---|---|---|
+| 28 | runes | in code | `svelte-lexical/…/TypeAheadMenu.svelte` — `$getSelection`, `$isRangeSelection` imported from `lexical` |
+| 9 | legacy | in code | `svelte-lexical/…/FontSizeDropDown.svelte` — same names, legacy component |
+| 4 | runes | **only inside a string literal** | `svelte-inspect-value/…/+layout.svelte` — the only `$types` in the file is `from './$types.js'` |
+
+The four string-literal cases are a scan reading a quoted import path, which the *compiler's* copy
+of this decision already excludes (`2_analyze/store_subscriptions.rs` skips object keys, member
+properties, string literals and comments). A fifth file, `trakt-web/…/Switch.svelte`, has its only
+`$color` inside a `<style lang="scss">` block, where it is an SCSS variable. So this is another
+instance of [`two-ports-inventory.md`](two-ports-inventory.md)'s shape: the svelte2tsx port carries
+its own answer to a question the compiler already answers, and no gate compares the two.
+
+The runes rows are the larger half and the same family as #3127/#3128: in runes mode `$name` is
+never a store subscription, and 32 of the 41 are components official reads as runes.
 
 
 

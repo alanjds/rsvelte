@@ -3989,6 +3989,47 @@ impl ScanState {
     }
 }
 
+/// The comments that live inside a hoisted import's own span, in source order.
+///
+/// Upstream removes the declaration node, so esrap's cursor flushes these onto
+/// the next located statement INSIDE the component function; carrying them out
+/// with the hoisted text loses them, because the module-scope printer never
+/// emits them. Comments leading, trailing or between imports are already routed
+/// to the body by the line scan and never reach here.
+fn import_span_comments(import_text: &str) -> Vec<(usize, String)> {
+    crate::compiler::phases::phase3_transform::shared::js_scan::comment_ranges(
+        import_text.as_bytes(),
+    )
+    .into_iter()
+    .filter_map(|(start, end)| {
+        let text = import_text.get(start..end)?.trim_end();
+        (!text.is_empty()).then(|| (start, text.to_string()))
+    })
+    .collect()
+}
+
+/// Hoist `text` as an import, recording the comments inside its span — with
+/// their offsets in `text` — so the caller can put them back into the body.
+fn hoist_import(imports: &mut Vec<String>, comments: &mut Vec<(usize, String)>, text: String) {
+    comments.extend(import_span_comments(&text));
+    imports.push(text);
+}
+
+/// [`hoist_import`] for the port that needs no source positions.
+fn hoist_import_text(imports: &mut Vec<String>, body: &mut Vec<String>, text: String) {
+    let mut spanned = Vec::new();
+    hoist_import(imports, &mut spanned, text);
+    body.extend(spanned.into_iter().map(|(_, comment)| comment));
+}
+
+/// [`peel_leading_imports`] for the same port.
+fn peel_leading_imports_text(s: &str, imports: &mut Vec<String>, body: &mut Vec<String>) -> String {
+    let mut spanned = Vec::new();
+    let remainder = peel_leading_imports(s, imports, &mut spanned);
+    body.extend(spanned.into_iter().map(|(_, comment)| comment));
+    remainder
+}
+
 pub(crate) fn extract_imports(script: &str) -> (Vec<String>, String) {
     let mut imports = Vec::new();
     let mut rest = Vec::new();
@@ -4026,17 +4067,18 @@ pub(crate) fn extract_imports(script: &str) -> (Vec<String>, String) {
                     && !trimmed[end..].trim().is_empty()
                 {
                     import_lines.push(trimmed[..end].to_string());
-                    imports.push(import_lines.join("\n"));
+                    hoist_import_text(&mut imports, &mut rest, import_lines.join("\n"));
                     current_import = None;
                     // The remainder may itself begin with further imports packed
                     // on the same line; peel them all before routing the rest.
-                    let remainder = peel_leading_imports(&trimmed[end..], &mut imports);
+                    let remainder =
+                        peel_leading_imports_text(&trimmed[end..], &mut imports, &mut rest);
                     if !remainder.trim().is_empty() {
                         rest.push(remainder);
                     }
                 } else {
                     import_lines.push(line.to_string());
-                    imports.push(import_lines.join("\n"));
+                    hoist_import_text(&mut imports, &mut rest, import_lines.join("\n"));
                     current_import = None;
                 }
             } else {
@@ -4063,7 +4105,7 @@ pub(crate) fn extract_imports(script: &str) -> (Vec<String>, String) {
                     // so each is hoisted, then route any trailing non-import code
                     // through `rest` so it is transformed normally instead of
                     // being swallowed into the import string.
-                    let remainder = peel_leading_imports(trimmed, &mut imports);
+                    let remainder = peel_leading_imports_text(trimmed, &mut imports, &mut rest);
                     if !remainder.trim().is_empty() {
                         rest.push(remainder);
                     }
@@ -4081,7 +4123,7 @@ pub(crate) fn extract_imports(script: &str) -> (Vec<String>, String) {
 
     // If we ended inside an import (shouldn't happen with valid code), add remaining as import
     if let Some(import_lines) = current_import {
-        imports.push(import_lines.join("\n"));
+        hoist_import_text(&mut imports, &mut rest, import_lines.join("\n"));
     }
 
     (imports, rest.join("\n"))
@@ -4092,10 +4134,81 @@ struct ExtractedSourcePart {
     source: std::ops::Range<u32>,
 }
 
+/// Hoist the accumulated `parts` of one import, putting the comments inside its
+/// span back into `rest` at the position the import occupied.
+///
+/// A comment keeps its real source range when the script slice still spells it,
+/// so the projection stays honest; otherwise it is emitted with an empty range,
+/// which `push_projection_chunk` skips rather than claim wrongly.
+fn flush_import(
+    imports: &mut Vec<String>,
+    rest: &mut Vec<ExtractedSourcePart>,
+    script: &str,
+    parts: Vec<(usize, String)>,
+) {
+    let joined = parts
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (at, comment) in import_span_comments(&joined) {
+        rest.push(ExtractedSourcePart {
+            source: absolute_span(script, &parts, at, &comment),
+            text: comment,
+        });
+    }
+    imports.push(joined);
+}
+
+/// The source range of `comment`, found at `at` in the joined text of `parts`,
+/// or an empty range when the script does not spell the same bytes there.
+fn absolute_span(
+    script: &str,
+    parts: &[(usize, String)],
+    at: usize,
+    comment: &str,
+) -> std::ops::Range<u32> {
+    let mut joined_start = 0usize;
+    for (start, text) in parts {
+        if at >= joined_start && at < joined_start + text.len() {
+            let absolute = start + (at - joined_start);
+            if script.get(absolute..absolute + comment.len()) == Some(comment) {
+                return absolute as u32..(absolute + comment.len()) as u32;
+            }
+            break;
+        }
+        joined_start += text.len() + 1;
+    }
+    0..0
+}
+
+/// Move the comments a peel reported — offsets relative to the peeled slice —
+/// into `rest`, at the position the imports occupied.
+fn drain_peeled_comments(
+    rest: &mut Vec<ExtractedSourcePart>,
+    script: &str,
+    comments: &mut Vec<(usize, String)>,
+    base: usize,
+) {
+    for (at, comment) in comments.drain(..) {
+        let absolute = base + at;
+        let source = if script.get(absolute..absolute + comment.len()) == Some(comment.as_str()) {
+            absolute as u32..(absolute + comment.len()) as u32
+        } else {
+            0..0
+        };
+        rest.push(ExtractedSourcePart {
+            text: comment,
+            source,
+        });
+    }
+}
+
 fn extract_imports_with_projection(script: &str) -> (Vec<String>, String, Vec<CopiedSourceChunk>) {
     let mut imports = Vec::new();
+    let mut peeled_comments: Vec<(usize, String)> = Vec::new();
     let mut rest: Vec<ExtractedSourcePart> = Vec::new();
-    let mut current_import: Option<Vec<String>> = None;
+    let mut current_import: Option<Vec<(usize, String)>> = None;
     let mut carry = ImportCarry::default();
     let mut scan = ScanState::default();
     let mut line_start = 0usize;
@@ -4124,13 +4237,27 @@ fn extract_imports_with_projection(script: &str) -> (Vec<String>, String, Vec<Co
                     && end < trimmed.len()
                     && !trimmed[end..].trim().is_empty()
                 {
-                    import_lines.push(trimmed[..end].to_string());
-                    imports.push(import_lines.join("\n"));
-                    current_import = None;
                     let trimmed_start = line.len() - line.trim_start().len();
+                    import_lines.push((line_start + trimmed_start, trimmed[..end].to_string()));
+                    flush_import(
+                        &mut imports,
+                        &mut rest,
+                        script,
+                        std::mem::take(import_lines),
+                    );
+                    current_import = None;
                     let remainder_source_start = trimmed_start + end;
-                    let (remainder, remainder_offset) =
-                        peel_leading_imports_ref(&trimmed[end..], &mut imports);
+                    let (remainder, remainder_offset) = peel_leading_imports_ref(
+                        &trimmed[end..],
+                        &mut imports,
+                        &mut peeled_comments,
+                    );
+                    drain_peeled_comments(
+                        &mut rest,
+                        script,
+                        &mut peeled_comments,
+                        line_start + remainder_source_start,
+                    );
                     if !remainder.trim().is_empty() {
                         rest.push(ExtractedSourcePart {
                             text: remainder.to_string(),
@@ -4142,12 +4269,17 @@ fn extract_imports_with_projection(script: &str) -> (Vec<String>, String, Vec<Co
                         });
                     }
                 } else {
-                    import_lines.push(line.to_string());
-                    imports.push(import_lines.join("\n"));
+                    import_lines.push((line_start, line.to_string()));
+                    flush_import(
+                        &mut imports,
+                        &mut rest,
+                        script,
+                        std::mem::take(import_lines),
+                    );
                     current_import = None;
                 }
             } else {
-                import_lines.push(line.to_string());
+                import_lines.push((line_start, line.to_string()));
             }
         } else {
             let trimmed = line.trim();
@@ -4164,7 +4296,13 @@ fn extract_imports_with_projection(script: &str) -> (Vec<String>, String, Vec<Co
                 {
                     let trimmed_start = line.len() - line.trim_start().len();
                     let (remainder, remainder_offset) =
-                        peel_leading_imports_ref(trimmed, &mut imports);
+                        peel_leading_imports_ref(trimmed, &mut imports, &mut peeled_comments);
+                    drain_peeled_comments(
+                        &mut rest,
+                        script,
+                        &mut peeled_comments,
+                        line_start + trimmed_start,
+                    );
                     if !remainder.trim().is_empty() {
                         rest.push(ExtractedSourcePart {
                             text: remainder.to_string(),
@@ -4174,7 +4312,7 @@ fn extract_imports_with_projection(script: &str) -> (Vec<String>, String, Vec<Co
                         });
                     }
                 } else {
-                    current_import = Some(vec![line.to_string()]);
+                    current_import = Some(vec![(line_start, line.to_string())]);
                     carry = scanned.carry;
                     carry.expect_attributes |= attributes_follow;
                 }
@@ -4189,7 +4327,7 @@ fn extract_imports_with_projection(script: &str) -> (Vec<String>, String, Vec<Co
     }
 
     if let Some(import_lines) = current_import {
-        imports.push(import_lines.join("\n"));
+        flush_import(&mut imports, &mut rest, script, import_lines);
     }
 
     let mut output = String::new();
@@ -4501,11 +4639,19 @@ fn strip_line_terminator(physical_line: &str) -> &str {
 /// `import a from 'x';import b from 'y';` → both hoisted, empty tail. Stops at
 /// the first non-import token or an *incomplete* import (one that continues on a
 /// following line) and returns it so the caller can route it.
-fn peel_leading_imports(s: &str, imports: &mut Vec<String>) -> String {
-    peel_leading_imports_ref(s, imports).0.to_string()
+fn peel_leading_imports(
+    s: &str,
+    imports: &mut Vec<String>,
+    comments: &mut Vec<(usize, String)>,
+) -> String {
+    peel_leading_imports_ref(s, imports, comments).0.to_string()
 }
 
-fn peel_leading_imports_ref<'a>(s: &'a str, imports: &mut Vec<String>) -> (&'a str, usize) {
+fn peel_leading_imports_ref<'a>(
+    s: &'a str,
+    imports: &mut Vec<String>,
+    comments: &mut Vec<(usize, String)>,
+) -> (&'a str, usize) {
     let mut offset = s.len() - s.trim_start().len();
     let mut cur = &s[offset..];
     while cur.starts_with("import ") || cur.starts_with("import{") {
@@ -4513,7 +4659,14 @@ fn peel_leading_imports_ref<'a>(s: &'a str, imports: &mut Vec<String>) -> (&'a s
             break;
         };
         let (import_part, remainder) = cur.split_at(end);
-        imports.push(import_part.trim().to_string());
+        let trimmed_lead = import_part.len() - import_part.trim_start().len();
+        let mut peeled = Vec::new();
+        hoist_import(imports, &mut peeled, import_part.trim().to_string());
+        comments.extend(
+            peeled
+                .into_iter()
+                .map(|(at, text)| (offset + trimmed_lead + at, text)),
+        );
         let whitespace = remainder.len() - remainder.trim_start().len();
         offset += end + whitespace;
         cur = &s[offset..];
@@ -6810,7 +6963,27 @@ fn transform_instance_script_for_visitors(
         std::borrow::Cow::Borrowed(script)
     } else {
         super::profile::record_pn(super::profile::PN_INV_COMMENTS);
-        let out = rehome_reactive_statement_comments(script);
+        // Only the `$.invalidate_inner_signals` kill is consulted: the
+        // destructure-IIFE targets live in the visitor state the caller holds,
+        // and a re-home after one of those is the behaviour this had before.
+        let invalidate_targets: Vec<String> = analysis
+            .root
+            .bindings
+            .iter()
+            .filter(|binding| !binding.legacy_indirect_bindings.is_empty())
+            .map(|binding| binding.name.clone())
+            .collect();
+        let liveness = (!invalidate_targets.is_empty()
+            && (memmem::find(script.as_bytes(), b"//").is_some()
+                || memmem::find(script.as_bytes(), b"/*").is_some()))
+        .then(|| {
+            dead_comments::cursor_liveness(
+                script,
+                dead_comments::Rules::component(false, &[], &invalidate_targets),
+            )
+        })
+        .flatten();
+        let out = rehome_reactive_statement_comments(script, liveness.as_ref());
         #[cfg(feature = "measure-pa-split")]
         if out != script {
             super::profile::record_pn(super::profile::PN_CHG_COMMENTS);
