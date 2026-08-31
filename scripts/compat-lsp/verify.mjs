@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { refuseUnrepresentativeBaseline } from "../compat-corpus/baseline-guard.mjs";
-import { svelteVersionForServer } from "./pin-official-svelte.mjs";
+import { svelteForDocument } from "./pin-official-svelte.mjs";
 import { projectionFailures } from "./projection-preflight.mjs";
 import {
   calibrationView,
@@ -180,6 +180,11 @@ function requireExecutable(command, label) {
     throw new Error(`${label} executable not found at ${command[0]}`);
   }
 }
+// Read by `initializationOptions` below and by the two preconditions, which
+// must agree: it decides whether the server resolves `svelte` from a document's
+// own workspace or from beside itself, and a precondition measuring the other
+// arm reports a version this run never loads.
+const TRUSTED = !selectedSuites.includes("corpus");
 requireExecutable(officialCommand, "official language server");
 requireExecutable(rsvelteCommand, "rsvelte language server");
 if (!process.env.OFFICIAL_LSP_COMMAND) {
@@ -190,26 +195,6 @@ if (!process.env.OFFICIAL_LSP_COMMAND) {
   if (!fs.existsSync(builtServer)) {
     throw new Error(
       "official language server is not built; run `pnpm --dir submodules/language-tools --filter svelte-language-server build`",
-    );
-  }
-}
-// `importPackage.ts:29-31` pushes the project directory onto the official
-// server's resolution paths only `if (isTrusted)`, and this gate runs untrusted,
-// so the server loads the Svelte installed beside itself. Under Svelte 4 its
-// svelte2tsx falls back to a Svelte 4 parser and `document.isSvelte5` is false:
-// the oracle does not fail, it answers differently, and those answers enrol into
-// a shrink-only ratchet that then defends the degradation.
-{
-  const script = officialCommand.find((argument) => argument.endsWith(".js"));
-  const resolved = script
-    ? svelteVersionForServer(script)
-    : { version: null, path: null };
-  console.log(
-    `[lsp-verify] official server resolves svelte ${resolved.version ?? "(none)"}${resolved.path ? ` from ${resolved.path}` : ""}`,
-  );
-  if (resolved.version && Number(resolved.version.split(".")[0]) < 5) {
-    throw new Error(
-      `the official server resolves svelte ${resolved.version}; run \`node scripts/compat-lsp/pin-official-svelte.mjs\` so it projects with the Svelte 5 parser this repository pins`,
     );
   }
 }
@@ -240,13 +225,39 @@ const PROJECTION_FAILURE_CEILING = 0.05;
 // measurement, and therefore before the current artifact exists at all.
 {
   const script = officialCommand.find((argument) => argument.endsWith(".js"));
-  const { failures, total, version } = script
-    ? projectionFailures(script, cases)
-    : { failures: [], total: 0, version: null };
+  // Resolved per document, because `TRUSTED` decides which arm the server reads.
+  // Reported as a set: a trusted run over several workspaces can legitimately
+  // load more than one Svelte, and collapsing that to a scalar hides it.
+  const roots = new Set(
+    cases
+      .map((entry) => entry.file ?? entry.path)
+      .filter((file) => file?.endsWith(".svelte"))
+      .map((file) => path.dirname(file)),
+  );
+  const loaded = new Map();
+  for (const root of roots) {
+    const resolved = script
+      ? svelteForDocument(script, root, TRUSTED)
+      : { version: null, path: null };
+    if (resolved.version) loaded.set(resolved.version, resolved.path);
+  }
+  for (const [version, from] of [...loaded].sort())
+    console.log(
+      `[lsp-verify] official server resolves svelte ${version} from ${from}${TRUSTED ? "" : " (untrusted run: the server's own fallback)"}`,
+    );
+  const stale = [...loaded].filter(([version]) => Number(version.split(".")[0]) < 5);
+  if (stale.length) {
+    throw new Error(
+      `the official server resolves svelte ${stale.map(([version]) => version).join(", ")} for this run's documents; run \`node scripts/compat-lsp/pin-official-svelte.mjs\` so it projects with the Svelte 5 parser this repository pins`,
+    );
+  }
+  const { failures, total, versions } = script
+    ? projectionFailures(script, cases, TRUSTED)
+    : { failures: [], total: 0, versions: [] };
   if (total) {
     const rate = failures.length / total;
     console.log(
-      `[lsp-verify] official server projects ${total - failures.length}/${total} of this run's components with svelte ${version} (${failures.length} fail, ${(rate * 100).toFixed(1)}%)`,
+      `[lsp-verify] official server projects ${total - failures.length}/${total} of this run's components with svelte ${versions.join(", ") || "(none)"} (${failures.length} fail, ${(rate * 100).toFixed(1)}%)`,
     );
     // Asserted on the corpus only. The fixture and upstream suites are chosen
     // inputs and include documents written to be unparseable — 45 of 154 —
@@ -282,7 +293,7 @@ if (selectedSuites.includes("corpus") && !UPDATE_POPULATION) {
 }
 
 const initializationOptions = {
-  isTrusted: !selectedSuites.includes("corpus"),
+  isTrusted: TRUSTED,
   configuration: {
     svelte: { plugin: {} },
     typescript: {
