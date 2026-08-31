@@ -1370,3 +1370,40 @@ not be folded in — a bare expression body is late by 3, and a prose-text body 
 breaks at all in the range measured while the oracle breaks at 86. Those are
 separate constants, so "all 54 share one parameter" stays a prediction the fix will
 test rather than a claim.
+
+### 2026-08-31 — the fix, and what it measured: 33 of the 54, not 54
+
+`push_open_tag` measures the open tag against the width from the element's leading
+column; `open_tag_leading_indent` already accounts for a `{#if …}` *prefix* by
+reading the element's source column, and nothing accounted for the `{/…}` *suffix*.
+`trailing_block_close_width` adds it. Every threshold in the table above is now 0,
+including the nested case, and the element controls did not move.
+
+Corpus differential over all 33,776 component outputs, base = the same tree with
+only this change reverted: **34 moved, 33 to byte-equal with the oracle, 0
+regressed**, 1 moved without reaching equality. All 34 are inside the 54.
+
+**So the 54 was not one decision point — 33 of it was.** The 21 that remain are not
+a residue of the same rule; they are the same missing quantity in a *different*
+pass, and the split is legible:
+
+- a body element with **no attributes to wrap** (`{#if p.rating}<small><Star … /> ({p.rating})</small>{/if}`)
+  must break by **hugging**, which is `collapse/hug.rs`, not the open-tag path;
+- a body that is a bare expression (`{@render children(feature)}`) is the
+  separately-measured constant of 3;
+- two are `<pre>` content indentation, which is a different mechanism entirely.
+
+That is the two-ports shape again: one upstream decision, two implementations here,
+and fixing one leaves the other. The hug path is the next instalment.
+
+**The first version of this fix regressed exactly one real file**, and no grid
+predicted it: `svelte-ux/…/docs/components/Table/+page.svelte` writes
+`</td>{/each}`, so the closer sits on the **close tag's** line, not the open tag's,
+and charging it to the open tag broke a tag that fits. The guard is that the
+element's own span must be single-line. Both halves have a positive control, and
+the first attempt at each was **non-discriminating**: the `{#each}` test passed
+under full ablation until its header was shortened so the element alone lands
+exactly on 80 (a longer header breaks with or without the fix), and the
+`</td>{/each}` test passed under guard ablation until the open tag was widened to
+75 columns so the closer is what crosses the width. Neither was visible from the
+assertion; both came out of running the ablation.
