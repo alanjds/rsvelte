@@ -1407,3 +1407,39 @@ exactly on 80 (a longer header breaks with or without the fix), and the
 `</td>{/each}` test passed under guard ablation until the open tag was widened to
 75 columns so the closer is what crosses the width. Neither was visible from the
 assertion; both came out of running the ablation.
+
+### 2026-08-31 — `rsvelte(oracle(S)) == oracle(S)` splits the residue without writing a fix
+
+Byte parity needs `rsvelte(oracle(S)) == oracle(S)`: the oracle's output is already in the
+oracle's own normal form, so a formatter that agrees with it must leave it alone. The condition
+is necessary, not sufficient, and it costs one extra pass — which makes it a way to size a
+defect class *before* anyone writes the fix. Measured over the listed ids on the tree at
+`9cbb4148b` (`instruments/fixedpoint.mjs`):
+
+| | ids |
+|---|---|
+| `rsvelte(S)` already equals `oracle(S)` | 173 |
+| diverges, but `rsvelte(oracle(S)) == oracle(S)` | **66** |
+| diverges on the oracle's own normal form | **549** |
+
+The 66 are the ones whose divergence **cannot survive re-formatting**, so nothing about the
+input's own content explains them — only its layout does. That is the fingerprint of a
+source-range pipeline: `format_with_arenas` rewrites spans, so a decision that reads the
+source's line breaks is reading an input prettier does not have (it parses and re-prints, and
+its input's layout is gone by then). The CRLF defect recorded above is the same shape one level
+down — a copied region carried the source's line *endings*; here a decision reads the source's
+line *positions*.
+
+**It is not the element-flatten decision.** That one was tested directly and is
+source-independent: the same over-width element flat in the source and broken in the source
+produce byte-identical rsvelte output (`instruments/widthgrid.mjs`, W1 vs W2), and the same
+holds for an under-width element (W3 vs W4). So whatever reads the layout sits in a different
+pass, and a fix aimed at the flatten decision would move none of the 66. Recorded before the
+66 are worked so the next person does not re-derive the hypothesis the grid already killed.
+
+Two cautions on the split. The 549 includes the 8 ids on which **the oracle is not its own
+fixed point** (below), where "agrees with the oracle" is not well-defined at all, so 549 is an
+upper bound on the layout-independent defects. And the buckets move as fixes land: the same
+measurement read 139 / 66 / 575 + 8 before the two fixes above, and the 34 they moved went from
+the third bucket to the first with the 66 unchanged — which is the control that the condition
+is measuring the classes it claims to.
