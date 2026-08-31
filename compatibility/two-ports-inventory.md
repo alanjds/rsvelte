@@ -1274,6 +1274,41 @@ installed from their own lockfiles. Closing this row is degree 1 (`rsvelte_check
 the same three rules) plus one run of the check gate; it is not a design question.
 
 
+### 24. May an element whose attribute value is indeterminate match a selector naming that value? — [D], one of six pairs closed
+
+**Upstream:** `css-prune.js` `attribute_matches` — one function. A value it cannot enumerate at
+compile time (an expression, a spread) returns `true`: the element may carry anything, so it
+satisfies any selector naming that attribute.
+
+**Ports — four, all in `3_transform/css.rs`, and they answer for different attributes:**
+
+| # | port | `class` indeterminate | `id` indeterminate |
+|---|---|---|---|
+| 1 | `selector_matches_element` | per element (`has_spread \|\| dynamic_attribute_names`) | **had none** → fixed here, same rule |
+| 2 | the element matcher inlined in `is_parent_chain_unused` | coarse: `ctx.has_dynamic_classes` gates the whole component | **had none at all** → fixed here, per element |
+| 3 | `structural_element_matches_attribute` | per element, plus `has_class_directive` | per element — already correct |
+| 4 | `is_simple_selector_unused` | coarse: `ctx.has_dynamic_classes` | coarse: `ctx.has_dynamic_ids` |
+
+**The demonstrated divergence is the `id` column**, and the inputs are in
+`pattern-corpus/issues/a-dynamic-id-matches-any-id-selector.svelte`. With `<div id={expr}>` in the
+component, official keeps all four of `#absent + .b`, `#absent ~ .b`, `.host:has(#absent)` and
+`#absent { .under { … } }`; before the fix rsvelte pruned every one, and the fourth as a whole
+`(empty)` rule rather than the nested selector official drops. Ports 1 and 2 are why: a sibling,
+a `:has()` argument and a `&` compound reach #1, and a parent prelude reaches #2.
+
+**The controls are what make this a two-*ports* row rather than an id bug.** The same component
+with `class={expr}` matched official *before* the fix — port 1 already had the class escape — so
+the two attributes were being answered by one function under two different rules. And an absent
+**static** id still prunes on all four shapes after the fix, which is what an over-wide escape
+would have broken.
+
+**What is closed:** ports 1 and 2 now agree with 3 on `id`. **What is not:** port 4 still answers
+`id` and `class` with whole-component flags, so it is permissive where 1–3 are per element — a
+component with one dynamic id keeps every `#id` selector it can reach. That direction over-keeps
+rather than over-prunes, so it is not a rendering defect, and it is `未測定` whether any input
+separates port 4 from the others. The `class` column's #2-vs-#1 disagreement (coarse vs per
+element) is likewise `未測定`; only the `id` column was measured here.
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the
