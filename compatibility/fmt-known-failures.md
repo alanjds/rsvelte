@@ -1199,3 +1199,66 @@ entry opens it with a **comment**, which is why that exact input is now pinned a
 `the_corpus_repro_leads_the_hoisted_script_with_a_comment`. Positive control:
 hardcoding the separator back to `\n` turns that test red along with the six
 others covering the same join.
+
+### 2026-08-31 — a fill is a break OPPORTUNITY, and the cluster it was scoped against had four mechanisms
+
+prettier prints a fragment's children as a **fill**: an inline space between two
+children is a break opportunity taken only when the line would overflow. rsvelte's
+indent pass took every one of them once the fragment was broken. Where the run can
+be measured from the source — every non-whitespace child an `ExpressionTag`, whose
+flat text is its own source slice — the width is now computed and the run stays on
+one line when it fits.
+
+The guard on that predicate is the load-bearing half. Upstream's `shouldHugStart`
+is false when the first child is a text node opening with a line break, and it then
+sets `noHugSeparatorStart = hardline` (`prettier-plugin-svelte/plugin.js:1218`),
+which **breaks the enclosing group** — so under a non-hugged start every separator
+breaks however well the run fits. Without the guard the first version of this fix
+turned `<div>\n  {key} {a}\n</div>` and its `<span>` twin from MATCH to DIVERGE.
+Both directions are pinned in `adjacent_expression_tags.rs`, and each ablation
+kills exactly the test that names it: no-op the predicate and only
+`a_hugged_run_separated_by_spaces_stays_on_one_line_when_it_fits` fails; delete the
+`shouldHugStart` guard and only `a_run_under_a_non_hugged_start_breaks_at_every_space`
+fails.
+
+Corpus differential over all 33,776 component outputs, base = the same tree without
+this change: **1 output moved, it moved to byte-equal with the oracle, 0 regressed**
+(`svelte-table/example/example6/ContactButtonComponent.svelte`, a listed entry).
+svelte.dev hard gate `1103/1103 pass, 0 fail, 0 unparseable`.
+
+**The reach is the finding.** This work was scoped against a cluster measured at 84
+files ("inline element content wrapping") and re-measured at 63 after the CRLF fix.
+Re-run against the oracle on the current tree, **45 of those 63 already match** — the
+list is a historical record, not an inventory — and the 18 that remain are not one
+mechanism: 11 are a hugged-close inline element whose content keeps the source
+indent, 3 are `<style>` body indentation, 2 a `<script type="application/ld+json">`
+body, 2 a block body that keeps source tabs. **A cluster named from a symptom
+(an indent delta) partitions by symptom, not by decision point.**
+
+The sibling cluster was two *directed* sets — 3 files where the oracle keeps a
+`} {` run flat and rsvelte breaks it, 34 where rsvelte keeps it flat and the oracle
+breaks it. The fix moves **1 of the 3 and 0 of the 34**, which answers the open
+question about whether they share a decision point: they do not. The mechanism says
+the same thing independently — the predicate can only *permit* a flat run, never
+force a break, so it structurally cannot reach the 34.
+
+### 2026-08-31 — an element's width budget omits four of its possible children
+
+Found while characterising those 34. `<strong><CHILD … /></strong>` at 90 columns
+under `printWidth: 80`, one cell per child kind, oracle = oxfmt(`svelte: true`):
+
+| child | oracle | rsvelte |
+|---|---|---|
+| `<div>`, `<em>`, `<Self>` | BROKEN | BROKEN (MATCH) |
+| `<svelte:self>`, `<svelte:fragment>` | BROKEN | **FLAT** |
+| `<svelte:component>`, `<svelte:element>` | BROKEN | BROKEN, but not the oracle's shape |
+
+Every ordinary child kind matches; all four `svelte:*` kinds diverge, in the same
+parent, with the same attributes. The controls move, so this is not a property of
+the width itself: the same four tags **do** break their own attribute list when they
+are the top-level node (measured, 6/6 MATCH), so what is missing is their
+contribution to the *parent's* budget. This is the same shape as the
+`trim_edge_target` gap recorded above — a `match` that enumerates
+`RegularElement` / `Component` and lets the `svelte:*` variants fall to `_` — and
+`build_open_attr_doc` (`collapse/doc_build.rs:685`) is one confirmed instance of the
+pattern, not yet shown to be *the* cause. Unfixed; its corpus reach is unmeasured.
