@@ -3116,6 +3116,40 @@ which is the shape recorded for `two-ports-inventory.md`: a comment asserting fi
 citation. Ask of a verdict-defining reduction what happens when its input contains the token it
 keys on **as data**.
 
+**Fixed on 2026-08-31, and the residue is not zero — nor is it one-directional.** `codeIdentity`
+now takes its comment ranges from the same single-pass string/template scanner `stripBlankLines`
+already used, which takes the population from **3,429 of 31,546 files to 27**. Read the 27 by
+direction, because they do not all mean the same thing:
+
+| | files | characters |
+|---|---|---|
+| before, reduction **shorter** than an acorn-exact stripper (real code deleted) | 3,429 | 3,202,954 |
+| before, reduction **longer** (a real comment kept) | 0 | 0 |
+| after, shorter | **21** | 2,942 |
+| after, longer | **6** | 2,453 |
+
+One cause, two directions: the scanner does not track regex literals, and whether a `/` opens one
+or is division is decided by the **previous significant token**. So a `//` inside a regex character
+class (`/[//]/`) still starts a comment (the 21), and a quote inside a regex (`/'/`) puts the
+scanner in a string state that swallows a *real* comment later on that line (the 6). That is the
+same ambiguity the `keyword-regex` matrix family exists for; closing it needs a tokenizer rather
+than a state machine over delimiters. The measurement itself is the second lesson here — the
+instrument summed the two directions signed, and reported **489** characters where the honest
+answer is 2,942 and 2,453. A total over a signed quantity cannot distinguish "small" from
+"cancelling", and the before-figure being one-directional was checked rather than assumed. `scripts/dev/test-code-identity-strings.mjs`
+pins both halves: the string cases as a **discriminating** control (the retired regex and the
+shipping reduction must disagree on the same pair), and the regex residue as an assertion that
+fails if it is ever fixed without updating this row.
+
+**The sibling reduction does NOT share the whole hole, and saying it does would be wrong.**
+`stripBlankLines` (`normalize.mjs:129`) has always had the string/template states, so it never had
+the `xmlns="http://…"` case; measured, the only input that moves it is a regex literal containing
+a **backtick** (`` /`/ ``), which puts it in template state and makes it *keep* newlines. Its blast
+radius differs too — the regex deletes code to the end of the line, this one only retains blank
+lines, and the same rule runs on both sides of the comparison. Two reductions can share a
+*cause* (neither tracks regex literals) and have entirely different *consequences*; the row has
+to state which.
+
 ---
 
 ## 21. Published-artifact glibc floor — `scripts/release/check-glibc-floor.sh`
