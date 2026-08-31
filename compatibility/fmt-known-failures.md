@@ -1583,3 +1583,56 @@ artefact of how the walk is anchored. **Both signs are in one cluster**: `{step.
 !location.id` is the same budget with rsvelte breaking too early, so a fix measured only against
 the `later` half would report half its own effect — and could move the `earlier` half the wrong
 way without anyone seeing it.
+
+### 2026-08-31 — the quoted-value interpolation cluster: 57 of the pinned 104, and a constant bracketed by its own regressions
+
+The framing in the section above — that this needs a change to `minimal_break_extra`'s policy —
+was wrong, and measuring it first is what showed that. `render_value_sequence_doc` already
+formats every interpolation at its true running column; it just declined to run below two
+interpolations. Letting a single-interpolation value through (`interp_count < 2` → `< 1`) reaches
+the whole cluster, and the legacy path's policy is untouched — it simply stops being reached for
+these values.
+
+The second half is one column, and it was **bracketed, not derived**. That function's printer
+measures at `line_width - 1` (reserving the closing `"`), while `broken_width` — which decides the
+*shape* — used a bare `line_width - col`. Three binaries, three full-corpus differentials:
+
+| reserved | moved | byte-identical | **regressed** |
+|---|---|---|---|
+| 0 columns (threshold alone) | 93 | 56 | **4** |
+| 2 columns | 91 | 57 | **4**, a different four |
+| **1 column** | 86 | **57** | **0** |
+
+The two sets of four run in opposite directions. At 0 the oracle breaks at 79 and rsvelte emits
+81 — under-breaking; at 2 the oracle's line lands on exactly 80 and rsvelte breaks earlier —
+over-breaking. Measured on the real columns, one set requires the reservation to be at least 1 and
+the other at most 1, so the integer is pinned from both sides by inputs that exist. Deriving it
+from the printer's own arithmetic gives 2, which is the value the corpus rejects.
+
+Against the id set pinned *before* the change, `match-oracle` goes **0 → 57 with 0 broken**, and
+those 57 are exactly the corpus-wide fixes — the change has no effect outside the cluster it was
+aimed at. The other 47 of the 104 are further decision points.
+
+**The first boundary tests written for this measured nothing.** Both passed on all four binaries,
+because the indentation was chosen by hand and put the first chunk off the boundary. Reduced again
+at the two real files' real attribute indents (4 columns and 14), each fails on exactly one wrong
+constant and on neither the right one nor the base. Two of the other four expectations were
+transcribed wrong — a continuation indented by 2 where the oracle indents by 4, and single
+quotes where an unquoted value keeps double — and the suite caught both, which is the whole
+reason a test states the output rather than asserting that the output did not change. A boundary case is a property of the column
+arithmetic, not of the shape — writing the shape and picking a plausible indent reproduces the
+shape and not the boundary.
+
+With that landed the layout-independent set stands at **490 of 549 diverging (59 now reproduce the
+oracle's fixed point, up from 2)**, and its largest cell changes hands: `later × attribute/CSS`
+drops 135 → 62 while `earlier × text/script` rises 120 → 133. The rise is not a regression — the
+corpus differential recorded 0 — it is 15 units whose *first* divergence moved to a later line
+once the earlier one was fixed, which is what a first-divergence key does by construction.
+
+That new largest cell has a name already. Its members are continuation lines of a quoted value
+with **two or more** interpolations, where the oracle keeps 68 columns and rsvelte breaks at 55 —
+over-narrow. `col` in `render_value_sequence_doc` is the running *flat* column, so once an earlier
+interpolation in the same value has broken, a later one's real column is much smaller than `col`
+says and `broken_width` is far too tight. That is the next decision point, and it is the mirror of
+the one just fixed: the same variable, wrong in the other direction, on the population the model
+was already running on.
