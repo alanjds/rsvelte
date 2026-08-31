@@ -99,6 +99,7 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `oxfmt-style-terminator-inside-a-css-string.md` | oxc-project/oxc (`oxfmt`) | #3567 | unrecorded |
 | `oxfmt-svelte-css-eats-a-css-escape-terminator-space.md` | oxc-project/oxc (`oxfmt`, `svelte: true`) | — | unrecorded |
 | `oxfmt-svelte-css-keeps-source-tabs-around-a-selector-comment.md` | oxc-project/oxc (`oxfmt`, `svelte: true`) | — | unrecorded |
+| `prettier-plugin-svelte-inline-element-overflows-print-width.md` | sveltejs/prettier-plugin-svelte | — | unrecorded |
 | `svelte-bind-group-unresolved-identifier-crash.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte-class-index-signature-crash.md` | sveltejs/svelte | #3422 | unrecorded |
 | `svelte-class-static-block-shares-the-instance-scope.md` | sveltejs/svelte | — | unrecorded |
@@ -112,13 +113,15 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte-snippet-name-colliding-with-an-import.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
 
-**19** reports carry no rsvelte issue number. Six came out of the lint-parity campaign (five
+**20** reports carry no rsvelte issue number. Six came out of the lint-parity campaign (five
 against `eslint-plugin-svelte`, one against `svelte-eslint-parser`), two out of the
 `two-ports-inventory.md` row 21 shadow probes, and seven out of the SCSS-backend burndown — five
 covering every unit `scss-known-failures.json` lists as `grass-rejects-accepted`, plus the two
 classes in that ratchet whose output is not render-neutral (a hoisted declaration, and a slash list
-divided inside a nested rule). The remaining four are later: two `oxfmt` CSS reports from the
-formatter-parity corpus, one against `esrap`, and one against `language-tools`. None of them names
+divided inside a nested rule). The remaining five are later: two `oxfmt` CSS reports from the
+formatter-parity corpus, one against `esrap`, one against `language-tools`, and one
+against `prettier-plugin-svelte` from the formatter-parity burndown (an inline element
+in a text run overflows `printWidth`, and re-formatting the output is not a fixed point). None of them names
 an issue internally — `—` records that, rather than inventing a number, and
 `check-upstream-issues.mjs` holds the count above to the table so this paragraph cannot go stale
 the way it already had (it read "Fifteen" against 19 rows).
