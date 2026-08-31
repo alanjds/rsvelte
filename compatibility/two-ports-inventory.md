@@ -1333,8 +1333,20 @@ Measured, three diverging shapes and four passing controls:
 | `id="a{x}"`, `id={x}` | keeps | keeps |
 | the same four shapes spelled with `class` | — | **all four match**, including the three above |
 
-It is an over-keep, so it costs CSS size and a missing `css_unused_selector`, not rendering. The
-`class` column's #2-vs-#1 disagreement (coarse vs per element) is still `未測定`.
+It is an over-keep, so it costs CSS size and a missing `css_unused_selector`, not rendering. Fixed
+in the same lane: `possible_class_names` is now `possible_attribute_values(value, is_class)` and
+`id` calls it, with the whitespace split kept as `class`'s own step.
+
+**The `class` column was then probed the same way and came back clean.** Seven shapes crossing
+{`class={dyn}`, a spread, a `class:` directive, nothing} × {nested rule, descendant combinator,
+the indeterminate element IS the ancestor} × {`class`, `id`}, each placing the indeterminate
+element where a per-element rule and a whole-component flag must disagree — as a **non-ancestor**
+of the subject. All seven MATCH, and the probe is strongly discriminating: its verdicts range over
+`[]`, one warning, two warnings, and three different CSS bodies (`(empty)`, `(unused)`, kept with
+a scoping hash). **What is not established is why**: port 2's coarse `has_dynamic_classes` does
+not surface on any of these, and no measurement here says whether that is because the flag is
+never binding for `class` or because these seven shapes miss the arm. Recorded as measured-clean,
+not as explained.
 
 ### 25. Does this reference warrant `state_referenced_locally`? — [D], both ports still live
 
