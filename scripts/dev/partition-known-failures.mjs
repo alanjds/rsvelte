@@ -8,6 +8,12 @@
 // parser accepts, which a match/mismatch verdict cannot distinguish from
 // ordinary wrong text).
 //
+// `js-mismatch` is a verdict, not a cause, so it is sub-classified by two
+// independent predicates over the WHOLE normalized output — attribution needs a
+// cause, and the first differing LINE is not one (an entry can carry two, and
+// the line only shows the first: reading them by eye scored a batch as comment
+// placement where `codeIdentity` puts 1 of 231 there).
+//
 //   node scripts/dev/partition-known-failures.mjs --binding path/to/rsvelte.node
 //
 // A git worktree usually has only some submodules populated, so `--corpus-root`
@@ -55,7 +61,7 @@ const svelte = await import(path.join(ROOT, OFFICIAL_COMPILER_REL));
 const rs = require(binding);
 const acorn = require(path.join(ROOT, 'node_modules/acorn'));
 const esbuild = require(path.join(ROOT, 'node_modules/esbuild'));
-const { stripBlankLines, flattenTemplateHoles } = await import(
+const { stripBlankLines, flattenTemplateHoles, codeIdentity } = await import(
 	path.join(ROOT, 'scripts/compat-corpus/normalize.mjs')
 );
 
@@ -73,6 +79,91 @@ const TARGETS = {
 	server: { generate: 'server', dev: false, css: false },
 	'server-dev': { generate: 'server', dev: true, css: false }
 };
+
+// The CSS scope class reaches the output in four spellings, and erasing it
+// shortens a line, so oxfmt re-wraps and adds or drops its trailing comma:
+// whitespace and `,)` have to go too, or the re-wrap reads as a second cause.
+const eraseScopeClass = (source) =>
+	source
+		.replace(/ ?svelte-[0-9a-z]{5,8}/g, '')
+		.replace(/class=\\"\\"/g, '')
+		.replace(/ class=""/g, '')
+		.replace(/,\s*\\""/g, '')
+		.replace(/,\s*""/g, '')
+		.replace(/\s+/g, '')
+		.replace(/,\)/g, ')');
+
+// `normalize.mjs`'s `codeIdentity` strips comments with a plain regex, so a `//`
+// inside a string literal — `xmlns="http://www.w3.org/2000/svg"`, which is every
+// inline SVG — eats the rest of the line on both sides and erases whatever
+// divergence sat there. Measured on official client output: it discards
+// non-comment code from 3429 of 31546 corpus files. Comment ranges come from
+// acorn here; `codeIdentity` is the fallback for output acorn cannot parse (1 of
+// those 31546), and the fallback is counted rather than taken silently.
+let regexFallbacks = 0;
+function commentFreeIdentity(source) {
+	const ranges = [];
+	try {
+		acorn.parse(source, {
+			ecmaVersion: 'latest',
+			sourceType: 'module',
+			onComment: (block, text, start, end) => ranges.push([start, end])
+		});
+	} catch {
+		regexFallbacks++;
+		return codeIdentity(source);
+	}
+	let out = '',
+		at = 0;
+	for (const [start, end] of ranges) {
+		out += source.slice(at, start);
+		at = end;
+	}
+	return (out + source.slice(at))
+		.replace(/\s+/g, '')
+		.replace(/([^,]),(?=[)\]}])/g, '$1')
+		.replace(/'((?:[^'\\\n]|\\.)*)'/g, (m, inner) => (inner.includes('"') ? m : `"${inner}"`));
+}
+
+function cause(expected, actual) {
+	const comment = commentFreeIdentity(expected) === commentFreeIdentity(actual);
+	const scope = eraseScopeClass(expected) === eraseScopeClass(actual);
+	// Not "both causes present": each predicate erases whitespace, so a pair that
+	// satisfies both differs only in comments AND only in the class, which is what
+	// a re-wrap looks like. Kept separate so it is never read as either one.
+	if (comment && scope) return 'js-mismatch:formatting-or-both';
+	if (comment) return 'js-mismatch:comment';
+	if (scope) return 'js-mismatch:scope-class';
+	return 'js-mismatch:other';
+}
+
+// A classifier whose output is a label cannot be checked by reading its labels:
+// every bucket is plausible. These pairs have a known answer, and one of them
+// must come back `other` or the classifier is answering `comment` to everything.
+if (process.argv.includes('--self-test')) {
+	const base = 'var a = `<div class="x svelte-1abcde">`;\nfoo(1);\n';
+	const checks = [
+		['identical', base, base, null],
+		['comment moved', base, '// hi\n' + base, 'js-mismatch:comment'],
+		['scope class dropped', base, 'var a = `<div class="x">`;\nfoo(1);\n', 'js-mismatch:scope-class'],
+		['both', base, '// hi\nvar a = `<div class="x">`;\nfoo(1);\n', 'js-mismatch:other'],
+		['a `//` inside a string', 'var a = "http://x";\nfoo(1);\n', 'var a = "http://x";\nfoo(2);\n', 'js-mismatch:other'],
+		['a real code change', base, 'var a = `<div class="x svelte-1abcde">`;\nfoo(2);\n', 'js-mismatch:other'],
+		// Reachable only on a pair oxfmt declined to format; without this the
+		// `formatting-or-both` label would ship never having fired.
+		['whitespace only', base, 'var a = `<div class="x svelte-1abcde">`;\n\t\tfoo(1);\n', 'js-mismatch:formatting-or-both']
+	];
+	let bad = 0;
+	for (const [what, e, a, want] of checks) {
+		const got = e === a ? null : cause(e, a);
+		const ok = got === want;
+		if (!ok) bad++;
+		console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${what.padEnd(22)} -> ${got ?? '<identical>'}`);
+	}
+	console.log(bad === 0 ? 'self-test PASS' : `self-test FAIL (${bad})`);
+	if (regexFallbacks) console.log(`  (${regexFallbacks} pair(s) fell back to the regex)`);
+	process.exit(bad === 0 ? 0 : 1);
+}
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rsvelte-partition-'));
 process.on('exit', () => fs.rmSync(work, { recursive: true, force: true }));
@@ -181,14 +272,22 @@ for (const [name, target] of Object.entries(TARGETS)) {
 			const e = stripBlankLines(fs.readFileSync(path.join(dir, 'expected', `${record.slot}.js`), 'utf8'));
 			const a = stripBlankLines(fs.readFileSync(path.join(dir, 'actual', `${record.slot}.js`), 'utf8'));
 			if (verdict !== 'output-unparseable') {
-				verdict = e !== a ? 'js-mismatch' : record.expectedCss !== record.actualCss ? 'css-mismatch' : 'ALREADY-PASSES';
+				verdict =
+					e !== a
+						? cause(e, a)
+						: record.expectedCss !== record.actualCss
+							? 'css-mismatch'
+							: 'ALREADY-PASSES';
 			}
 		}
 		record.verdict = verdict;
 		counts[verdict] = (counts[verdict] || 0) + 1;
 	}
 
-	console.log(`\n### ${name} (${ids.length} entries)  [entries where a compiler threw: ${threw}]`);
+	console.log(
+		`\n### ${name} (${ids.length} entries)  [entries where a compiler threw: ${threw}; ` +
+			`comment ranges from the regex fallback: ${regexFallbacks}]`
+	);
 	for (const [verdict, n] of Object.entries(counts).sort((x, y) => y[1] - x[1])) {
 		console.log(`  ${String(n).padStart(4)}  ${verdict}`);
 	}
