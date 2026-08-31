@@ -175,8 +175,13 @@ fn html_attribute_completions(
     strict_mode: bool,
     markdown: bool,
 ) -> CompletionList {
-    // `htmlCompletion.js:205-213` also skips a name the tag already carries;
-    // that dedup is not ported, so a written attribute is still offered.
+    // `seenAttributes` (`htmlCompletion.js:205-213`) is a single map, so it
+    // does two jobs: it skips a name the tag already carries — not ported, so a
+    // written attribute is still offered — and it keeps the FIRST of a repeated
+    // name. The provider repeats ten on `div` (eight `on:pointer*` plus
+    // `on:mouseenter` / `on:mouseleave`, once from the renamed upstream globals
+    // and again from `svelteEvents`) and twelve on `input`.
+    let mut seen = std::collections::HashSet::new();
     let index = LineIndex::new(text);
     let range = lsp_types::Range::new(
         index.position(text, replace.start),
@@ -192,6 +197,7 @@ fn html_attribute_completions(
         is_incomplete: false,
         items: provider::attributes(element)
             .into_iter()
+            .filter(|provided| seen.insert(provided.name.clone()))
             .map(|provided| {
                 let name = provided.name.as_ref();
                 let attribute = provided.data;
@@ -586,6 +592,29 @@ mod tests {
     fn labels_at(content: &str, offset: usize) -> Option<Vec<String>> {
         completions(content, offset)
             .map(|list| list.items.into_iter().map(|item| item.label).collect())
+    }
+
+    /// `seenAttributes` keeps the first of a repeated name. The provider
+    /// repeats ten on `div` and twelve on `input`, so an unported dedup shows
+    /// up as items upstream does not send.
+    #[test]
+    fn a_repeated_attribute_name_is_offered_once() {
+        for (source, provided) in [("<div ", 258), ("<input ", 298)] {
+            let offered = labels(source).expect("attribute completions");
+            let unique = offered.iter().collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                offered.len(),
+                unique.len(),
+                "{source} offers {} names, {} of them distinct",
+                offered.len(),
+                unique.len()
+            );
+            assert_eq!(
+                crate::html_data::provider::attributes(source[1..].trim()).len(),
+                provided,
+                "the provider itself still repeats them"
+            );
+        }
     }
 
     fn all_modifiers() -> Vec<String> {
