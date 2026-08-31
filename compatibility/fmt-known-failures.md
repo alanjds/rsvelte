@@ -1362,3 +1362,11 @@ observation. An element's own close tag is inside its span; a block's is not.
 component, 17 an HTML element), and the remaining 4 are a text or nested-block
 body, which the same rule predicts. Whether all 54 share this one parameter is
 what the fix will measure — the id list is in `agent-c/overwidth260.json`.
+
+The rule **composes**, which is the prediction that makes it a rule rather than a
+fitted constant: a block nested in a block (`{#if a}{#if b}<el …/>{/if}{/if}`) is
+late by **10**, exactly the two closers. Two body kinds are *not* covered and must
+not be folded in — a bare expression body is late by 3, and a prose-text body never
+breaks at all in the range measured while the oracle breaks at 86. Those are
+separate constants, so "all 54 share one parameter" stays a prediction the fix will
+test rather than a claim.
