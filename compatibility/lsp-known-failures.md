@@ -1,30 +1,34 @@
 # LSP differential known failures
 
-`lsp-known-failures.json` contains 32441 entries. Fixture and upstream entries identify one normalized
+`lsp-known-failures.json` contains 23890 entries. Fixture and upstream entries identify one normalized
 structural field for which `rsvelte-language-server` differs from the pinned official
 `svelte-language-server`, or from an upstream expected snapshot. A mismatched scalar key includes
 both value digests; a missing/extra field includes the present-side digest. Unmatched semantic
 array items are represented by their count and multiset digest.
 
-Partition of `lsp-known-failures.json` by key kind: `21792 + 10317 + 332` — real-world corpus
+Partition of `lsp-known-failures.json` by key kind: `21764 + 1794 + 332` — real-world corpus
 aggregates, per-field divergences against the pinned official server, and per-field divergences
 against an upstream expected snapshot. The three prefixes (`aggregate:corpus/`, `differential:`,
 `expected:`) are disjoint by construction in `merge-current.mjs`, which rejects an artifact
 carrying a key outside its suite's prefix.
 
-Partition of `lsp-known-failures.json` by request phase: `16226 + 16215`
+Partition of `lsp-known-failures.json` by request phase: `11950 + 11940`
 
 Opened-document keys and post-`didChange` keys. The edit phase re-runs the same request set, so the
 two addends differ by exactly the session-level keys, which run once per session rather than once per
-unit; they are all `differential:` keys, and the corpus and upstream halves double exactly. There
-were 17 when the phase landed and there are 11 now, because six of them were `initialize` fields
-#3016 closed. The opened addend moved for the first time in that same PR: the merge that introduced
-the second phase reported 16331 new entries and **0 stale**, so until then not one opened-phase key
-had moved. It has moved twice since — both addends dropped by two when three upstream test files
-started diverging on a diagnostic's message rather than on the item set, which retires the
-`missing-rsvelte`/`extra-rsvelte` pair and enrols one `message` key in its place.
+unit: the difference is 10, and those 10 are precisely the `differential:fixtures/capabilities|
+initialize|` keys below. There were 17 when the phase landed; six were `initialize` fields #3016
+closed and one more has since.
 
-Partition of `lsp-known-failures.json` entries under `aggregate:corpus/` by repository: `3696 + 7758 + 258 + 10080`
+The one-sided sets are larger than that difference and do not consist only of `differential:` keys,
+which is worth stating because the earlier wording said they did. Measured on this baseline: 17 keys
+appear only in the opened phase and 7 only in the edit phase. The 7 are the same seven corpus files'
+`textDocument/hover` aggregates on both sides — `divergentRequestCount` differs between the phases,
+so one file's one method enrols under two different keys and contributes 7 to each side, cancelling.
+That is the ratchet key carrying a measured quantity, which is also why progress here is reported as
+divergent fields and requests rather than as a change in entry count.
+
+Partition of `lsp-known-failures.json` entries under `aggregate:corpus/` by repository: `3678 + 7748 + 258 + 10080`
 
 bits-ui, flowbite-svelte, melt-ui, shadcn-svelte, in that order. This is the count
 that moves when a corpus submodule is bumped, and it is the reason the population floor is
