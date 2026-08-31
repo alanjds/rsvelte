@@ -1309,6 +1309,48 @@ rather than over-prunes, so it is not a rendering defect, and it is `未測定` 
 separates port 4 from the others. The `class` column's #2-vs-#1 disagreement (coarse vs per
 element) is likewise `未測定`; only the `id` column was measured here.
 
+### 25. Does this reference warrant `state_referenced_locally`? — [D], both ports still live
+
+**Upstream:** one branch, `2-analyze/visitors/Identifier.js:104-152`. Its three parts are the
+depth equality `state.function_depth === binding.scope.function_depth`, a binding-kind arm (a
+`$state` warns only when it is `reassigned` **or** its initial argument fails `should_proxy`), and
+a read/write test on the parent node.
+
+**Ports — two, and the second exists because the first is unreachable from where it is needed:**
+
+| # | port | depth equality | kind arm | scope searched |
+|---|---|---|---|---|
+| 1 | `2_analyze/visitors/identifier.rs` | yes | full, incl. `should_proxy`-equivalent on `initial_node_type` | the reference's own binding |
+| 2 | `2_analyze/visitors/declaration_tag.rs::warn_local_state_reads` | **none** | kind set only (`State \| RawState \| Derived`) | `analysis.root.scope.declarations` |
+
+Port 2 carries a comment stating why it exists — "rsvelte's main Identifier visitor … does not run
+on declaration tags" — which is true, and is exactly the shape this file warns about: a comment
+asserting fidelity reads as a citation.
+
+**Measured divergence (2026-08-31).** A `{let a = $state({ x: 1 })}` that is never reassigned,
+read synchronously by `{let b = a}`: official is silent (`should_proxy` is true, so the read still
+sees the proxy) and rsvelte warns. Same for `$state([1])`. Port 1 answers these correctly; port 2
+has no `should_proxy` arm at all. Not reachable from any collected input — 0 of the 4,201
+`submodules/svelte` units diverge — so only a constructed probe finds it.
+
+**Sharing the kind arm was tried and reverted, and the reason is the reusable part.** Pointing
+port 2 at port 1's rule fixed both cases and **broke three** that were correct: `{let a = $state(1)}`
+read by `{let b = a}` stopped warning at the top level, inside `{#if}`, and in the file's own
+control. `binding.initial_node_type` is not populated for a declaration-tag binding the way it is
+for a script one, so the shared predicate's `should_proxy` arm answers `false` where port 2's
+kind-only test answered `true`. **Two ports can disagree because they read different *inputs*, not
+because they encode different rules** — and a shared predicate then silently inherits whichever
+input is missing. Closing this row means populating `initial_node_type` for declaration tags
+first, and the port-vs-port test has to spell its expectations independently (degree 2 below),
+because port 2 as an oracle for port 1 passes on exactly the cases that are wrong.
+
+**What is still unmeasured:** the depth equality. Port 2 has none, so every kind-eligible read in
+a declaration-tag initializer warns regardless of where the binding lives; upstream realigns
+`function_depth` to `state.scope.function_depth` for that visit specifically, which makes the
+equality hold for a sibling declaration and not for anything shallower. No probe here separates
+those, so the agreement on `Prop` / `RestProp` (which port 2 excludes and upstream admits) is
+untested rather than correct.
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the
