@@ -997,3 +997,49 @@ reaches the 71 and not the 634 — and a `markup` divergence cannot be attribute
 to a deliberate choice at all, because the same Svelte-structure printer is held
 to the svelte.dev formatter gate, which has **no tolerance** and is green. Those
 are defects to fix.
+
+### 2026-08-31 — an element's edge whitespace: the predicate was already right, the branch was unreachable
+
+`<RadioTile value="test"> <div>c</div> </RadioTile>` — the space either side of the
+child is not significant inside a component, and the oracle drops it. rsvelte kept
+it. The rule was measured rather than read: 45 parent tags × a `<span>` child, and
+a 7×4 parent × child grid.
+
+**The oracle's answer depends on the parent alone.** Block-display elements,
+`<slot>` and components trim; inline elements (`span`, `a`, `b`, `button`,
+`label`, `svg`, a custom element, …) keep. rsvelte already agreed on every
+`RegularElement` in prettier-plugin-svelte's `blockElements` list and disagreed on
+exactly three parents — a component, `<svelte:element>`, and `<slot>` — plus,
+inconsistently, on a block parent whose child is *also* block, where it was
+consulting the child's display as well.
+
+rsvelte's predicate was already correct: `trims_edge_whitespace(tag) ||
+is_component_tag(tag)` (`collapse/collect.rs`) is the same partition the oracle
+uses. What was wrong is that `try_collapse` returns before reading it as soon as
+any child is an element, so only a *pure-text* body was ever trimmed.
+
+**Where the pass runs is not a detail: that whitespace is also the hug signal.**
+`shouldHugStart` hugs only when the content touches the open tag, so a trim placed
+*before* the layout passes makes both sides believe the content is adjacent and
+changes the layout. The pass therefore runs **last**, after every breaking pass has
+read the whitespace it needs. Two consequences worth stating: the trim only ever
+deletes spaces and tabs, so it can neither remove a line break nor lengthen a line;
+and it declines a fragment with two or more element children, where the element is
+laid out broken and the oracle breaks its edges too.
+
+Measured over the whole corpus with the two binaries, hashing all 33,776 component
+outputs:
+
+| | ids |
+|---|---|
+| output changed | 59 |
+| …now byte-equal to the oracle (was not) | **48** |
+| …**regressed** (was equal, now not) | **0** |
+| …differ from the oracle before and after | 11 |
+
+Regression tests: `crates/rsvelte_formatter/tests/edge_whitespace.rs`, four
+trimming shapes and five controls (three inline parents, a newline-bearing edge, a
+`<pre>`, and the two-child shape the pass declines).
+
+As with the line-ending fix above, the ids are **not** removed from the JSON here —
+the *Cross-platform baseline rule* binds this file to the Linux CI failure set.
