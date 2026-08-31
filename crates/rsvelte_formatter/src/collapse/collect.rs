@@ -1120,6 +1120,14 @@ fn trim_edge_target<'b, 'a>(node: &'b TemplateNode<'a>) -> Option<(&'b str, &'b 
         TemplateNode::TitleElement(t) => Some((t.name.as_str(), &t.fragment)),
         TemplateNode::SvelteComponent(c) => Some((c.name.as_str(), &c.fragment)),
         TemplateNode::SvelteElement(e) => Some((e.name.as_str(), &e.fragment)),
+        // `<svelte:options>` is absent because both compilers reject content in it.
+        TemplateNode::SvelteFragment(e)
+        | TemplateNode::SvelteHead(e)
+        | TemplateNode::SvelteBoundary(e)
+        | TemplateNode::SvelteBody(e)
+        | TemplateNode::SvelteWindow(e)
+        | TemplateNode::SvelteDocument(e)
+        | TemplateNode::SvelteSelf(e) => Some((e.name.as_str(), &e.fragment)),
         _ => None,
     }
 }

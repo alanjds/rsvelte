@@ -78,3 +78,27 @@ fn two_element_children_are_out_of_scope() {
         "<A value=\"t\"> <div>c</div>\n  <div>d</div> </A>\n",
     );
 }
+
+/// Every remaining `svelte:*` parent. Measured one tag at a time against the
+/// oracle: all seven trim there and none of them trimmed here, because the
+/// node types carry `SvelteElement` and the target match listed only
+/// `<svelte:element>` and `<svelte:component>`. `<svelte:options>` is absent
+/// because both compilers reject content in it.
+#[test]
+fn every_svelte_special_element_drops_it() {
+    for (open, close) in [
+        ("<svelte:fragment slot=\"a\">", "</svelte:fragment>"),
+        ("<svelte:head>", "</svelte:head>"),
+        ("<svelte:boundary>", "</svelte:boundary>"),
+        ("<svelte:body>", "</svelte:body>"),
+        ("<svelte:window>", "</svelte:window>"),
+        ("<svelte:document>", "</svelte:document>"),
+        ("<svelte:self>", "</svelte:self>"),
+    ] {
+        assert_eq!(
+            fmt(&format!("{open} <b>c</b> {close}\n")),
+            format!("{open}<b>c</b>{close}\n"),
+            "{open} must drop its edge whitespace",
+        );
+    }
+}

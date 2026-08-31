@@ -1137,3 +1137,40 @@ trimming shapes and five controls (three inline parents, a newline-bearing edge,
 
 As with the line-ending fix above, the ids are **not** removed from the JSON here —
 the *Cross-platform baseline rule* binds this file to the Linux CI failure set.
+
+### 2026-08-31 — the same trim, seven node types it never reached
+
+The pass above was measured on *tags* and implemented on *node types*, and the two
+are not the same partition. `is_component_tag` already answers `true` for every
+`svelte:` prefix, so the predicate was right for `<svelte:fragment>` and its
+siblings — but `trim_edge_target`'s `match` listed only `SvelteElement`
+(`<svelte:element>`) and `SvelteComponent`, and the other seven `svelte:*` node
+types fell to its `_ => None`. **A predicate keyed on a name cannot be reached by a
+caller keyed on a variant**, and nothing in the first measurement could see the gap:
+the 45-parent grid injected tags into one `RegularElement` slot.
+
+Measured one tag at a time against the oracle, `<TAG> <b>c</b> </TAG>`:
+
+| parent | oracle trims | rsvelte trimmed (before) |
+|---|---|---|
+| `svelte:fragment`, `svelte:head`, `svelte:boundary`, `svelte:body`, `svelte:window`, `svelte:document`, `svelte:self` | yes | **no** |
+| `svelte:element`, `svelte:component`, `div`, `Comp` | yes | yes |
+| `span` | no | no |
+
+`<svelte:options>` is absent because both compilers reject content in it
+(`svelte_meta_invalid_content`) — measured, not assumed.
+
+Corpus differential over all 33,776 component outputs, base = the merge commit's
+own binary (md5 identical to the tree built before this change):
+
+| | ids |
+|---|---|
+| output changed | 24 |
+| …now byte-equal to the oracle | **24** |
+| …**regressed** | **0** |
+| …still differ from the oracle | 0 |
+
+Those 24 are exactly the residue's `intra-line-ws` × `markup` cell — 23
+`<svelte:fragment slot="…">` and one `<svelte:head>`. Positive control: with the
+seven arms removed, `every_svelte_special_element_drops_it` fails at
+`<svelte:fragment>` and the other eight tests in the file stay green.
