@@ -166,7 +166,7 @@ samples) — see `AGENTS.md` § "Generated shape matrix" and issue #2281.
 | 17 | svelte2tsx fixture suite | per-fixture TSX text | text after the `export default class` cut is dropped from both sides | [S] |
 | 18 | Compatibility report (`AGENTS.md` numbers) | pass/fail per fixture | it asserts nothing — a number moving cannot fail CI | [S] |
 | 19 | Output parseability (`verify.mjs`) | rsvelte's `js.code` alone, parsed with acorn | says nothing about whether the output is *right*; no CSS, no maps | [S] |
-| 20 | Corpus-seeded mutation fuzz | per-mutant × target JS text, normalized as gate 1 | the operator only **inserts comments** — a delimiter in a *string* is unreachable at any corpus size | [D] |
+| 20 | Corpus-seeded mutation fuzz | per-mutant × target JS text, normalized as gate 1 | the operator only **inserts comments** — a delimiter in a *string* is unreachable at any corpus size; and the `codeIdentity` reduction that decides which half is ratcheted deletes real code on **10.9%** of the corpus (20h) | [D] |
 | 21 | Published-artifact glibc floor | max `GLIBC_*` version referenced by each Linux artifact | whether the binary actually **runs** anywhere; every non-glibc dependency | [D] |
 | 22 | NAPI option boundary | per declared option key: baseline vs. one-key variant, through the raw addon | it never compares against **official** — a key wired to the wrong semantics stays green | [S] |
 | 23 | Escaped-quote lookback shape | one line of Rust source, over every `.rs` under `crates/` + `apps/` | it matches a **spelling**; a scanner with *no* escape check at all produces no line to match | [D] |
@@ -3069,6 +3069,52 @@ a hole, on the argument that "oxfmt does not delete comments, so the divergence 
 normalization artifact". That argument is sound and rules out the *normalizer* — and says nothing
 about the *comparator*, which is a different stage that ignores comments by design. Eliminating
 one candidate is not confirming another.
+
+### Blind spot 20h — the classifier that DEFINES the ratcheted class deletes real code on 10.9% of the corpus [D]
+
+*Also gate 5, which computes its `comment-mismatch` verdict from the same function.*
+
+Only `code-mismatch` is ratcheted here (`comment-mismatch` is ratcheted per id by gate 5
+instead), so the `codeIdentity` call at `mutate-corpus.mjs:73` / `matrix/run.mjs:363` is not a
+presentation detail — it decides which divergences this gate can fail on. It strips comments with
+a plain regex (`normalize.mjs:300`):
+
+```js
+const COMMENT_RE = /\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+```
+
+A `//` inside a string or template literal therefore starts a "comment" that runs to the end of
+the line, on **both** sides, and whatever divergence sat after it is deleted before the
+comparison. The commonest instance in generated Svelte output is
+`xmlns="http://www.w3.org/2000/svg"` — every inline SVG.
+
+Discriminating case, as a positive control on the function itself:
+
+| input A | input B | `codeIdentity` |
+|---|---|---|
+| `var a = "x"; foo(1);` | `var a = "x"; foo(2);` | differ (correct) |
+| `var a = "http://x"; foo(1);` | `var a = "http://x"; foo(2);` | **equal** — both reduce to `vara="http:` |
+| `` var a = `<b href="http://x" class="svelte-1">`; `` | `` var a = `<b href="http://x">`; `` | **equal** |
+
+Measured over the corpus on 2026-08-31, comparing `codeIdentity` against an acorn `onComment`
+equivalent on the official compiler's client output: the regex discards non-comment code from
+**3,429 of 31,546 compiled files (10.9%)**, **3,202,954 characters** in total. Output acorn could
+not parse: **1**. So an exact stripper is available at essentially no coverage cost — this is a
+defect, not a tradeoff.
+
+It has already mislabelled real data. Sub-classifying the four output ratchets by cause put
+**15 of 231 entries** in "comment fidelity" whose sole difference was a CSS scope class: for
+`trakt-web/…/icons/MediaIcon.svelte` the only divergence is ` class="svelte-1rwg3wr"` on the
+`<svg>`, and the `xmlns` earlier on that line caused both sides to be truncated to the same
+prefix. With the exact stripper the comment count over all four ratchets is **0**.
+
+The generalisable part is not the regex. Both gates here are careful about their *keys* — 5's
+verdict split exists precisely so a comment entry cannot suppress a code regression — and that
+care is spent through a **shared reduction** that no test pins. `codeIdentity` has a doc comment
+asserting what it removes ("the comments, all whitespace, and the trailing comma oxfmt adds"),
+which is the shape recorded for `two-ports-inventory.md`: a comment asserting fidelity reads as a
+citation. Ask of a verdict-defining reduction what happens when its input contains the token it
+keys on **as data**.
 
 ---
 
