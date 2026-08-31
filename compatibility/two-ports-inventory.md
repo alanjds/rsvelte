@@ -1302,12 +1302,39 @@ the two attributes were being answered by one function under two different rules
 **static** id still prunes on all four shapes after the fix, which is what an over-wide escape
 would have broken.
 
-**What is closed:** ports 1 and 2 now agree with 3 on `id`. **What is not:** port 4 still answers
-`id` and `class` with whole-component flags, so it is permissive where 1–3 are per element — a
-component with one dynamic id keeps every `#id` selector it can reach. That direction over-keeps
-rather than over-prunes, so it is not a rendering defect, and it is `未測定` whether any input
-separates port 4 from the others. The `class` column's #2-vs-#1 disagreement (coarse vs per
-element) is likewise `未測定`; only the `id` column was measured here.
+**What is closed:** ports 1 and 2 now agree with 3 on `id`.
+
+**Port 4 was measured on 2026-08-31 and is a different kind of port from 1–3.** Its two callers
+(`css.rs:1981`, `css.rs:2010`) are an early-out *screen*: a `true` declares the whole rule unused
+without consulting the real matcher, while a `false` is non-binding and falls through to it. A
+whole-component flag is therefore strictly more conservative than upstream's per-element rule at
+the only step where it is consulted — it can make the screen keep more, never prune more. Seven
+constructed inputs crossing {dynamic id, dynamic class, spread, static} × {simple `#absent`,
+simple `.absent`, `span#absent`} all MATCH, and the probe has a moving control on the axis in
+question: with a dynamic id in the component neither compiler warns, without one both emit
+`css_unused_selector` at the same position.
+
+**Probing what that does NOT close found the live one.** The screen prunes on
+`!used_ids.contains(…)` / `!used_classes.contains(…)`, so the risk sits in how those two sets are
+*built* — and there the two attributes are answered by different code. `class` goes through
+`css::possible_class_names` (rsvelte's port of upstream's chunk expansion over
+`get_possible_values`); `id` has a bespoke branch in `2_analyze/visitors/shared/element.rs:414-438`
+that marks **any** expression indeterminate. Upstream runs one expansion for both, with `is_class`
+controlling only whether array/object expressions are inspected.
+
+Measured, three diverging shapes and four passing controls:
+
+| `id` value | official | rsvelte |
+|---|---|---|
+| `id={c ? 'a' : 'b'}` | prunes `#zzz` | keeps it |
+| `id={'a' \|\| 'b'}` | prunes `#zzz` | keeps it |
+| `id={'a'}` | prunes `#zzz` | keeps it |
+| ``id={`ab`}`` | keeps | keeps — upstream cannot enumerate it either |
+| `id="a{x}"`, `id={x}` | keeps | keeps |
+| the same four shapes spelled with `class` | — | **all four match**, including the three above |
+
+It is an over-keep, so it costs CSS size and a missing `css_unused_selector`, not rendering. The
+`class` column's #2-vs-#1 disagreement (coarse vs per element) is still `未測定`.
 
 ### 25. Does this reference warrant `state_referenced_locally`? — [D], both ports still live
 
