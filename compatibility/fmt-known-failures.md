@@ -923,3 +923,77 @@ and the accompanying commit touches no formatter code. The claim that the entry
 fails on Linux is inferred from the oracle agreeing across the two platform
 descriptions, not measured there — if the Formatter-parity job reports this id
 as already passing, delete it from this ratchet rather than re-excluding it.
+
+### 2026-08-31 — the formatter now normalizes line endings; 67 entries are ready to shrink
+
+`rsvelte_formatter::format_with_arenas` rewrote spans in the source it was
+handed, so every region it copies **verbatim** carried that source's line
+endings through. Prettier normalizes `\r\n` / `\r` to `\n` before it parses, so
+the oracle never can. Two regions were reachable — a comment body and a
+whitespace-only `<style>` — and everything else (markup between tags, a
+`<script>`, a non-empty `<style>`) was already normalized because the indent
+pass rewrites those separators itself. That asymmetry is why the defect looked
+like six unrelated clusters: **how loud it is depends on which region the file's
+CRLF happens to land in, not on the defect.**
+
+Measured on the 788 listed ids that have a source, staged and formatted with the
+pinned oracle and `rsvelte-fmt` in directory mode:
+
+| | ids |
+|---|---|
+| listed and diverging before | 788 |
+| rsvelte keeps a CR the oracle does not | 76 |
+| …of which the CR is the *only* difference | 63 |
+| **now byte-equal to the oracle** | **67** |
+
+The four beyond the 63 are ids where removing the CR also removed a second
+difference that the CR was creating (a line the CR pushed past the print width).
+
+**Blast radius, stated as a set rather than as a risk.** The normalizer returns
+its input borrowed when the source holds no `\r`, so every source without one is
+byte-identical by construction. Of the 33,776 component entries, **306** contain
+a CR: 84 listed here, and **222 unlisted — all 222 still match the oracle**
+after the change (they were re-formatted and compared, not assumed).
+
+The 67 ids are **not removed from the JSON here**: the *Cross-platform baseline
+rule* above binds this file to the Linux CI failure set, and this measurement is
+macOS. Shrink them from the next Linux Formatter-parity run.
+
+The regression tests are `crates/rsvelte_formatter/tests/line_endings.rs`, one
+per region plus two controls, rather than a `pattern-corpus/` repro: convention 5
+of that directory is *commit formatted files*, and a CRLF file is by definition
+not the shape the oracle emits.
+
+### 2026-08-31 — what the remaining entries are, by which printer owns them
+
+The residue is classified by **region**, because the ratchet's own clusters
+(`breaks-later`, `indent-only`, …) name the *symptom* and every target the
+attribution contract accepts names a *printer*. Each diverging line's first
+differing column is mapped to an offset in the oracle's output and tested against
+the spans official's `parse({modern: true})` reports, so a file is labelled by
+the set of regions its divergences fall in — `js` (a `<script>` body or a
+template expression: oxc here, prettier there), `css` (`oxc_formatter_css` here,
+PostCSS there), `markup` (Svelte structure, which both sides print with the
+*same* intent).
+
+Measured on the 721 that still diverge after the line-ending fix:
+
+| region set | layout-only | characters differ |
+|---|---|---|
+| `js` only | 51 | 6 |
+| `css` only | 13 | 1 |
+| `js` + `markup` | 182 | 72 |
+| `css` + `js` + `markup` | 114 | 52 |
+| `css` + `markup` | 30 | 0 |
+| `markup` only | 182 | 2 |
+| oracle unparseable | 12 | 4 |
+
+`layout-only` means the two outputs are byte-equal once all whitespace is
+removed. Read the table by the two totals it implies: **71 files diverge only
+where a different engine prints**, and **634 carry at least one `markup`
+divergence**. The existing `deliberate-divergences` entry *The formatter's
+JavaScript engine is oxc, not prettier* is about embedded JS and CSS, so it
+reaches the 71 and not the 634 — and a `markup` divergence cannot be attributed
+to a deliberate choice at all, because the same Svelte-structure printer is held
+to the svelte.dev formatter gate, which has **no tolerance** and is green. Those
+are defects to fix.

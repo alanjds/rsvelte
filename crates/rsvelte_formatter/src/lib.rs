@@ -127,15 +127,41 @@ pub fn format_with_arenas(
     // the stripped text; slicing the unstripped source with one is three bytes
     // off. Prettier keeps the BOM in its output, so it goes back on afterwards.
     let stripped = rsvelte_core::remove_bom(source);
+    let had_bom = stripped.len() != source.len();
+    // Prettier rewrites every `\r\n` / lone `\r` to `\n` before it parses, so a
+    // region the formatter copies verbatim (a comment body, a whitespace-only
+    // `<style>`) must not be able to carry a CR through.
+    let normalized = normalize_line_endings(stripped);
+    let stripped = normalized.as_ref();
     let formatted = match format_attempt(stripped, options, arenas, false) {
         Err(e) if e.is_dialect_sensitive() => format_attempt(stripped, options, arenas, true),
         other => other,
     }?;
-    Ok(if stripped.len() == source.len() {
+    Ok(if !had_bom {
         formatted
     } else {
         format!("\u{feff}{formatted}")
     })
+}
+
+/// Prettier's `endOfLine: "lf"` normalization, applied before the parse so every
+/// span is relative to the text the output is built from.
+fn normalize_line_endings(source: &str) -> std::borrow::Cow<'_, str> {
+    if !source.contains('\r') {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(i) = rest.find('\r') {
+        out.push_str(&rest[..i]);
+        out.push('\n');
+        rest = &rest[i + 1..];
+        if rest.starts_with('\n') {
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
 }
 
 fn normalize_file_edges(out: &mut String) {
