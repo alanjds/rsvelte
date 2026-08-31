@@ -1481,3 +1481,70 @@ with `{:`, and the whole remainder of the block follows it on that line. The sec
 block-display body, where the oracle emits the block-break form rather than a hug and rsvelte
 measures the open tag alone — the content and the close tag are outside its budget. The
 `<span>` control is what makes that a claim about block-display rather than about blocks.
+
+### 2026-08-31 — the trailing-tag scan reads a closer only, and the arm is on the line too
+
+`trailing_block_close_width` counted a run of `{/…}` after the element and nothing else, so
+`{#if a}<Label … />{:else}{label}{/if}` was late by **19** — the exact width of
+`{:else}{label}{/if}`. Reading any tag rather than only a closer fixes it, and the same one-line
+change also fixes a shape that was never diagnosed: a plain sibling expression tag
+(`{#if a}<Label … />{aVeryLongExpressionNameIndeedYes}{/if}`) was late by 34 on all four widths
+probed, and now matches on all four.
+
+The scan stops at the first thing that is **not** a tag, and that boundary is measured rather
+than assumed. With a second element there (`{#if a}<Label … /><OtherComponent />{/if}`) the
+oracle breaks the SECOND element and keeps the first flat at 26, 30 and 36 columns of
+attribute — so charging that element's width to the first would move rsvelte in the wrong
+direction. That trio diverges identically before and after the change, which is what makes it a
+control rather than a regression.
+
+Measured: the `{:else}` width grid goes 5 diverging cells → 0, the expression-tag grid 4 → 0,
+the 33,776-file corpus differential moves **7 files, 3 to byte equality, 0 regressions**, and the
+`overwidth260` cluster goes 34 → 37 matching.
+
+### 2026-08-31 — where the layout-independent residue actually is
+
+The 549 entries that satisfy `rsvelte(oracle(S)) != oracle(S)` were split by the SIGN of the
+first differing line's width — the direction team-lead asked for, because "packs one more" and
+"packs one fewer" are opposite defects that a count folds together:
+
+| | count |
+|---|---|
+| later — rsvelte packs more onto the line | 328 |
+| earlier — rsvelte packs fewer | 218 |
+| same width, different text | 2 |
+
+Crossed with the construct that starts the line, the largest single cell is **135 = later ×
+attribute or CSS declaration**, and reading it names one shape: **the oracle breaks inside an
+expression embedded in an attribute value and rsvelte does not**. Splitting `later` by where the
+oracle's line ends gives 17 that break immediately after the `{` and **179 that break
+mid-expression**; of those 179, **101** have a ternary arm (`?` / `:`) on rsvelte's next line.
+
+Two reductions came out of that 101, and the second is the one that matters:
+
+- A `style:` / `class:` directive whose value is a ternary keeps the test flat where a **plain
+  attribute of the identical name length** breaks it exactly like the oracle (12 columns each,
+  same expression, same indent; a plain attribute swept from 6 to 16 columns never diverges).
+  That is the directive value's own narrowing path in `markup/directive.rs`. It is **6 of the
+  101**.
+- The dominant sub-shape is **78 of the 101**: an expression interpolated into a *quoted*
+  attribute value whose literal prefix is already past the width. Six lines reproduce it, with
+  three controls at MATCH — a short prefix, the same ternary as the whole unquoted value, and a
+  long prefix with a non-ternary binary.
+
+The reusable part is that the first reduction **drifted**: it is a real defect and a real
+control, and it accounts for 6 of the population the grid was drawn from. A hand-built grid
+finds the shape its author reached for; only classifying the whole cluster says which shape the
+population is made of.
+
+The code path for that 78 is located, and it is a policy rather than an oversight.
+`render_value_sequence_doc` (`markup/value_sequence.rs:52`) — the Doc model that formats each
+interpolation at its true running column — returns `None` when `interp_count < 2`, so a value
+with exactly ONE interpolation falls to the legacy branch. That branch narrows by the
+expression's start column only, and when the start-column form still fits it calls
+`minimal_break_extra`, whose stated contract is *"force the MINIMAL break so only the
+expression's top-level operator wraps, matching the oracle"*. For a ternary the top-level
+operator is `?`/`:`, so the test is never re-measured — which is exactly the divergence. The
+oracle instead formats the expression at the width actually left at its start column, and at a
+start column past 80 that breaks the test too. Changing this is a change to that policy, not a
+missing case, so it needs its own before/after id set.
