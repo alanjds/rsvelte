@@ -6,7 +6,7 @@ entirely (neither matched nor failed). Each entry carries a `"class"`
 (`oracle-bug` | `invalid-input` | `migrate` | `engine-divergence`) and a
 `"reason"`; this file records the class-level rationale.
 
-**Current baseline: `fmt-oracle-excluded.json`, 29 entries.**
+**Current baseline: `fmt-oracle-excluded.json`, 28 entries.**
 
 `fmt-verify.mjs` warns if an excluded id is no longer in the parity set (can be
 deleted) and notices if an excluded id now matches byte-for-byte (the oracle bug
@@ -25,7 +25,7 @@ Attribution of `fmt-oracle-excluded.json`:
 | 6 | [`deliberate-divergences`](deliberate-divergences.md#the-formatter-declines-an-input-its-own-parser-rejects) | `invalid-input` and `migrate` — inputs no compiler accepts, and Svelte 4 migrator output |
 | 2 | [`upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md`](../upstream_issues/3035-prettier-plugin-svelte-drops-a-nested-pattern-key-in-each.md) | `oracle-bug` — the `{#each}` head drops a nested pattern's property key |
 
-The remaining **14** `oracle-bug` entries are **deliberately absent from this table**. Listing
+The remaining **13** `oracle-bug` entries are **deliberately absent from this table**. Listing
 them against a report that does not cover them would make the gate green on a citation, which is
 the failure mode a citation is most likely to hide. Each gets a row when its own report is filed
 with both outputs measured.
@@ -47,6 +47,34 @@ sixteen and feeding each result back to `svelte@5.56.10`'s `parse({modern: true}
   identical (`=` is right-associative). Whether the entry would now *match* rsvelte-fmt
   byte-for-byte — and so should be deleted rather than re-worded — is unmeasured; it needs
   a built `rsvelte-fmt`.
+
+**A second stated reason was falsified on 2026-08-31, and that entry left this file.**
+`shadcn-svelte/docs/src/lib/components/theme-customizer-code.svelte` was excluded as
+`oracle-bug` for "cross-platform non-determinism": the overflowing self-closing
+`<ColorIndicator color={value} />` inside `<pre>` was recorded as *collapsed on macOS,
+attribute-wrapped on Linux*, with rsvelte-fmt matching the macOS form — so byte-parity
+was declared undefined. Re-measured on macOS with the pinned oracle (`oxfmt@0.64.0`,
+`fmt-corpus.oxfmtrc.json`, run over the real corpus source), the oracle emits the
+**attribute-wrapped** form — the one the reason ascribes to Linux — at all 20
+`<ColorIndicator>` sites, byte-identically on 5 consecutive runs:
+
+```
+oracle (macOS)   >&nbsp;&nbsp;&nbsp;--{key}: <ColorIndicator
+                   color={value}
+                 /> {value};</span
+rsvelte-fmt      >&nbsp;&nbsp;&nbsp;--{key}: <ColorIndicator color={value} />
+                 {value};</span
+```
+
+The two platform descriptions now coincide, so nothing is left of the non-determinism
+claim; what remains is an ordinary rsvelte-fmt line-breaking divergence, which belongs in
+`fmt-known-failures.json` and is now there. **The ratchet growing by one is a
+reclassification, not a regression** — this pair has always differed, it was merely
+unobserved. Two controls from the same repository (`announcement.svelte`,
+`block-viewer-code.svelte`) were run through the same staged invocation and came out
+byte-identical, so the harness can produce a match. What is *not* measured is the Linux
+oracle: that needs CI. If the Formatter-parity job reports this id as already passing, the
+right correction is to delete it from both files, not to restore the exclusion.
 
 **This exclusion list is permanent, so nothing re-checks it.** The ratchets are two-sided and a
 listed entry that starts passing fails CI; an *exclusion* has no such pressure, and its
@@ -92,10 +120,6 @@ correct; file upstream at `oxformatter/oxfmt` or `prettier/prettier-plugin-svelt
   output byte-for-byte, so parity against the svelte path is undefined here (and
   the svelte path's `~c` changes the token stream the value substitutes). —
   `pattern/adversarial/css/css-custom-property-values`.
-- **Cross-platform non-determinism.** oxfmt produces different output on macOS vs
-  Linux for the same input (an overflowing self-closing component inside `<pre>` is
-  collapsed on macOS, attribute-wrapped on Linux), so byte-parity is undefined. —
-  `shadcn-svelte .../theme-customizer-code.svelte`.
 - **Nested object-destructure default in `{#each}` loses its key.**
   `{#each xs as { id, meta: { tags: [t = 'x'] } = {} }}` is mangled to
   `{ id, { tags: [t = 'x'] } = { } }` — the `meta:` property key is dropped,
