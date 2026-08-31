@@ -33,7 +33,7 @@ use super::super::utils::TrimWs;
 use crate::ast::arena::{IdRange, ParseArena};
 use crate::ast::js::Expression;
 use crate::ast::typed_expr::{
-    JsNode, LiteralValue, Loc, RegexValue, SourcePosition, TemplateElementValue,
+    JsNode, LiteralValue, Loc, RegexValue, SourcePosition, TemplateElementValue, TsMemberModifiers,
     alloc_deser_children, alloc_deser_node, child_node_from_value,
 };
 use crate::compiler::phases::phase1_parse::utils::find_matching_bracket;
@@ -2108,8 +2108,13 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
     // the error label lands on the offending region. (Parsing the bare string as
     // a program is unreliable: OXC's statement-level error recovery folds
     // trailing tokens into one recovered node, hiding the boundary.)
-    let mut wrapped = String::with_capacity(content.len() + 2);
-    wrapped.push('(');
+    // In TypeScript a bare `(` also opens an arrow parameter list, where a type
+    // annotation is legal, so OXC reads past the colon acorn-typescript stops at.
+    // A leading operand cannot be a parameter, which forces the sequence reading
+    // and puts the error back on the colon.
+    let open: &str = if ts { "(0," } else { "(" };
+    let mut wrapped = String::with_capacity(content.len() + open.len() + 2);
+    wrapped.push_str(open);
     wrapped.push_str(content);
     // a trailing `//` comment would swallow a same-line `)`
     wrapped.push_str("\n)");
@@ -2127,8 +2132,8 @@ pub fn trailing_token_offset(content: &str, ts: bool) -> Option<usize> {
         // enclosing construct's opening delimiter, which is never where acorn
         // returned an expression.
         let start = first_error.labels.first()?.offset() as usize;
-        // Map the label's *start* back into `content` (strip the leading `(`).
-        start.checked_sub(1)
+        // Map the label's *start* back into `content` (strip the synthetic open).
+        start.checked_sub(open.len())
     })?;
 
     // A trailing-token error has leftover input *before* the synthetic closing
@@ -5541,6 +5546,15 @@ fn convert_class_element_for_expr(
             );
             obj.set_field("value", value.as_json().clone());
 
+            push_member_modifiers(
+                &mut obj,
+                method.accessibility,
+                &[
+                    ("override", method.r#override),
+                    ("optional", method.optional),
+                ],
+            );
+
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -5563,6 +5577,18 @@ fn convert_class_element_for_expr(
             } else {
                 obj.set_field("value", Value::Null);
             }
+
+            push_member_modifiers(
+                &mut obj,
+                prop.accessibility,
+                &[
+                    ("declare", prop.declare),
+                    ("definite", prop.definite),
+                    ("optional", prop.optional),
+                    ("override", prop.r#override),
+                    ("readonly", prop.readonly),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
@@ -8115,6 +8141,35 @@ fn first_non_ecmascript_whitespace(content: &str, irregular: &[oxc_span::Span]) 
         .min()
 }
 
+/// acorn-typescript stamps `importKind`/`exportKind` on every import and export
+/// and acorn stamps none, so the field's presence is a fact about the parser
+/// rather than about the statement.
+fn estree_module_kind(
+    arena: &ParseArena,
+    kind: oxc_ast::ast::ImportOrExportKind,
+) -> Option<CompactString> {
+    if kind == oxc_ast::ast::ImportOrExportKind::Type {
+        Some(CompactString::from("type"))
+    } else if arena.is_ts_program() {
+        Some(CompactString::from("value"))
+    } else {
+        None
+    }
+}
+
+/// Restores the arena's TypeScript flag when a program conversion returns, so a
+/// nested conversion cannot leave the outer one reading the wrong parser.
+struct TsProgramGuard<'a> {
+    arena: &'a ParseArena,
+    previous: bool,
+}
+
+impl Drop for TsProgramGuard<'_> {
+    fn drop(&mut self) {
+        self.arena.set_ts_program(self.previous);
+    }
+}
+
 fn convert_parsed_program<'ast>(
     arena: &ParseArena,
     program: &OxcProgram<'_>,
@@ -8132,6 +8187,10 @@ fn convert_parsed_program<'ast>(
         script_tag_start,
         script_tag_end,
     } = params;
+    let _ts_guard = TsProgramGuard {
+        arena,
+        previous: arena.set_ts_program(is_typescript),
+    };
     {
         // Mirror upstream acorn's throw-on-error behaviour: capture the first
         // parse error (acorn reports `err.pos` where it stopped consuming
@@ -8968,11 +9027,7 @@ fn convert_statement_for_program(
                 line_offsets,
             ));
 
-            let import_kind = if import_decl.import_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let import_kind = estree_module_kind(arena, import_decl.import_kind);
 
             Some(JsNode::ImportDeclaration {
                 start: start as u32,
@@ -10216,11 +10271,7 @@ fn convert_import_specifier(
                 line_offsets,
             ));
 
-            let import_kind = if import_spec.import_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let import_kind = estree_module_kind(arena, import_spec.import_kind);
 
             JsNode::ImportSpecifier {
                 start: start as u32,
@@ -11528,12 +11579,11 @@ fn convert_class_element_for_program_as_node(
 ) -> TypedClassElem {
     match element {
         oxc_ast::ast::ClassElement::MethodDefinition(method) => {
-            // Abstract methods are dropped by the Value path (`return None`).
-            if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
-                return TypedClassElem::Skip;
-            }
-            // TS modifiers / decorators have no typed representation here.
+            // TS modifiers / decorators have no typed representation here, and
+            // an abstract method's `value` is a `TSDeclareMethod` the typed
+            // function variant cannot spell.
             if !method.decorators.is_empty()
+                || method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
                 || method.r#override
                 || method.optional
                 || method.accessibility.is_some()
@@ -11568,6 +11618,9 @@ fn convert_class_element_for_program_as_node(
                 kind: CompactString::from(kind),
                 r#static: method.r#static,
                 computed: method.computed,
+                // Any written modifier bails to the Value blob above, so a
+                // typed member never carries one.
+                modifiers: TsMemberModifiers::default(),
             })
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
@@ -11607,9 +11660,9 @@ fn convert_class_element_for_program_as_node(
                 value,
                 r#static: prop.r#static,
                 computed: prop.computed,
-                // AccessorProperty bails above, so a typed PropertyDefinition is
-                // never an `accessor` field.
-                accessor: false,
+                // AccessorProperty and every written modifier bail to the Value
+                // blob above, so a typed PropertyDefinition never carries one.
+                modifiers: TsMemberModifiers::default(),
             })
         }
         // AccessorProperty: the Value path emits a `PropertyDefinition` with an
@@ -11623,6 +11676,29 @@ fn convert_class_element_for_program_as_node(
 }
 
 /// Convert a class element to JSON value (for program context).
+/// acorn-typescript emits a class-member modifier **only where the source wrote
+/// it**, so absence and `false` are different facts and a modifier must be
+/// skipped rather than emitted as `false`.
+fn push_member_modifiers(
+    obj: &mut Map<String, Value>,
+    accessibility: Option<oxc_ast::ast::TSAccessibility>,
+    flags: &[(&str, bool)],
+) {
+    for (name, present) in flags {
+        if *present {
+            obj.set_field(name, Value::Bool(true));
+        }
+    }
+    if let Some(accessibility) = accessibility {
+        let spelling = match accessibility {
+            oxc_ast::ast::TSAccessibility::Private => "private",
+            oxc_ast::ast::TSAccessibility::Protected => "protected",
+            oxc_ast::ast::TSAccessibility::Public => "public",
+        };
+        obj.set_field("accessibility", Value::String(spelling.to_string()));
+    }
+}
+
 fn convert_class_element_for_program(
     arena: &ParseArena,
     element: &oxc_ast::ast::ClassElement,
@@ -11631,10 +11707,8 @@ fn convert_class_element_for_program(
 ) -> Option<Value> {
     match element {
         oxc_ast::ast::ClassElement::MethodDefinition(method) => {
-            // Filter out abstract methods (TSAbstractMethodDefinition)
-            if method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition {
-                return None;
-            }
+            let is_abstract =
+                method.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition;
             let start = offset + method.span.start as usize;
             let end = offset + method.span.end as usize;
             let mut obj = Map::new();
@@ -11656,15 +11730,41 @@ fn convert_class_element_for_program(
             let key = convert_property_key(arena, &method.key, offset, line_offsets);
             obj.set_field("key", key.to_value());
 
-            // value (function expression)
-            let value =
+            // value (function expression). acorn-typescript gives a bodyless
+            // abstract method a `TSDeclareMethod`: same fields minus `body`,
+            // plus the `expression` flag and the return type it always writes.
+            let mut value =
                 convert_function_expression_for_program(arena, &method.value, offset, line_offsets);
+            if is_abstract && let Value::Object(func) = &mut value {
+                func.set_field("type", Value::String("TSDeclareMethod".to_string()));
+                func.remove("body");
+                func.set_field("expression", Value::Bool(false));
+                if let Some(return_type) = &method.value.return_type {
+                    func.set_field(
+                        "returnType",
+                        convert_type_annotation_adjusted(arena, return_type, offset, line_offsets),
+                    );
+                }
+            }
             obj.set_field("value", value);
+
+            push_member_modifiers(
+                &mut obj,
+                method.accessibility,
+                &[
+                    ("abstract", is_abstract),
+                    ("override", method.r#override),
+                    ("optional", method.optional),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
         oxc_ast::ast::ClassElement::PropertyDefinition(prop) => {
-            // Filter out abstract property definitions (TSAbstractPropertyDefinition)
+            // An abstract property is still dropped: official keeps it in the
+            // AST *and* prints `abstract p;` into the compiled output, which no
+            // JS parser accepts, so emitting it here would need that decision
+            // taken first.
             if prop.r#type == oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition {
                 return None;
             }
@@ -11688,10 +11788,17 @@ fn convert_class_element_for_program(
                 obj.set_field("value", Value::Null);
             }
 
-            // TypeScript: declare field (for `declare bar: string;` in class)
-            if prop.declare {
-                obj.set_field("declare", Value::Bool(true));
-            }
+            push_member_modifiers(
+                &mut obj,
+                prop.accessibility,
+                &[
+                    ("declare", prop.declare),
+                    ("definite", prop.definite),
+                    ("optional", prop.optional),
+                    ("override", prop.r#override),
+                    ("readonly", prop.readonly),
+                ],
+            );
 
             Some(Value::Object(obj))
         }
@@ -11752,7 +11859,17 @@ fn convert_function_expression_for_program(
     let mut obj = Map::new();
     obj.set_field("type", Value::String("FunctionExpression".to_string()));
     push_span_fields(&mut obj, start, end, line_offsets);
-    obj.set_field("id", Value::Null);
+    // acorn keeps a named function expression's own identifier; dropping it hid
+    // the name from every consumer of the serialized program, the scope walk
+    // included.
+    if let Some(id) = &func.id {
+        let id_start = offset + id.span.start as usize;
+        let id_end = offset + id.span.end as usize;
+        let id_expr = create_identifier(&id.name, id_start, id_end, line_offsets);
+        obj.set_field("id", id_expr.as_json().clone());
+    } else {
+        obj.set_field("id", Value::Null);
+    }
     obj.set_field("generator", Value::Bool(func.generator));
     obj.set_field("async", Value::Bool(func.r#async));
 
@@ -11801,9 +11918,9 @@ fn convert_function_expression_for_program(
 /// `JsNode::Raw(Value)` blob, so the function body subtree routes through the
 /// typed analyze walker. Serializes byte-identically to the Value blob (modulo
 /// the `expression: false` field, which the official ESTree output also emits
-/// and the Value blob was missing). `id` is always `null` to match the Value
-/// blob, and params keep the TS-aware `convert_formal_parameter` shape (TS bits
-/// fall through to `JsNode::Raw` via `expr_to_node`).
+/// and the Value blob was missing). Params keep the TS-aware
+/// `convert_formal_parameter` shape (TS bits fall through to `JsNode::Raw` via
+/// `expr_to_node`).
 fn convert_function_expression_for_program_as_node(
     arena: &ParseArena,
     func: &oxc_ast::ast::Function,
@@ -11864,11 +11981,22 @@ fn convert_function_expression_for_program_as_node(
         ))
     });
 
+    let id = func.id.as_ref().map(|id| {
+        let id_start = offset + id.span.start as usize;
+        let id_end = offset + id.span.end as usize;
+        arena.alloc_js_node(expr_to_node(create_identifier(
+            &id.name,
+            id_start,
+            id_end,
+            line_offsets,
+        )))
+    });
+
     JsNode::FunctionExpression {
         start: start as u32,
         end: end as u32,
         loc: create_typed_loc(start, end, line_offsets),
-        id: None,
+        id,
         params: arena.alloc_js_children(params),
         body,
         generator: func.generator,
@@ -13906,11 +14034,7 @@ fn convert_export_named_as_node(
                 line_offsets,
             ));
 
-            let export_kind = if spec.export_kind == oxc_ast::ast::ImportOrExportKind::Type {
-                Some(CompactString::from("type"))
-            } else {
-                None
-            };
+            let export_kind = estree_module_kind(arena, spec.export_kind);
 
             JsNode::ExportSpecifier {
                 start: spec_start as u32,
@@ -13923,11 +14047,7 @@ fn convert_export_named_as_node(
         })
         .collect();
 
-    let export_kind = if kind == oxc_ast::ast::ImportOrExportKind::Type {
-        Some(CompactString::from("type"))
-    } else {
-        None
-    };
+    let export_kind = estree_module_kind(arena, kind);
 
     let source = src.map(|source| {
         let source_start = offset + source.span.start as usize;
@@ -14011,8 +14131,22 @@ mod tests {
 
         // OXC recovers a type annotation in a JavaScript parse. Acorn returns
         // the complete `src` expression and leaves the colon for Svelte's
-        // close-token check.
-        assert_eq!(trailing_token_offset("src: string;", false), Some(3));
+        // close-token check. acorn-typescript stops at the colon too — a type
+        // annotation is not an expression in either language, and only the
+        // synthetic wrapper's `(` makes one legal (as an arrow parameter list).
+        for source in ["src: string;", "data: string", "\n\tdata: string;\n"] {
+            let colon = source.find(':').unwrap();
+            assert_eq!(
+                trailing_token_offset(source, false),
+                Some(colon),
+                "js: {source:?}"
+            );
+            assert_eq!(
+                trailing_token_offset(source, true),
+                Some(colon),
+                "ts: {source:?}"
+            );
+        }
     }
 
     #[test]

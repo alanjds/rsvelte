@@ -12,7 +12,9 @@ use crate::ast::typed_expr::{JsNode, LiteralValue};
 use crate::compiler::phases::phase2_analyze::scope::BindingKind;
 use crate::compiler::phases::phase3_transform::client::console_wrap;
 use crate::compiler::phases::phase3_transform::client::destructure_transforms::string_expr_has_toplevel_await;
-use crate::compiler::phases::phase3_transform::client::types::ComponentContext;
+use crate::compiler::phases::phase3_transform::client::types::{
+    ComponentContext, IdentifierTransform,
+};
 use crate::compiler::phases::phase3_transform::js_ast::ExprId;
 use crate::compiler::phases::phase3_transform::js_ast::nodes::*;
 use compact_str::CompactString;
@@ -1143,6 +1145,8 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
             // the typed path (taken for event-handler bodies) was missing it, so a
             // nested handler mutating an outer item dropped the outer block's index.
             if let Some(root) = original_root_name.as_deref()
+                && !original_root_start
+                    .is_some_and(|start| context.state.reference_is_plain_local(root, start))
                 && let Some((_, flag)) = context
                     .state
                     .each_item_name_flags
@@ -1157,6 +1161,20 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
             let should_proxy = Some(should_proxy_jsnode(right_node, pa, context));
 
             let assignment_left = without_outer_source_span(conv_left.clone(), context);
+            // The right-hand side is transformed eagerly below, before the outer
+            // walk that would have built a scope for it, so hand it the locals
+            // its own source range declares.
+            let right_scope = match (right_node.start(), right_node.end()) {
+                (Some(from), Some(to)) if from < to => {
+                    super::shared::utils::LocalScope::from_shadowed(
+                        context
+                            .state
+                            .plain_local_names_in_range(from, to)
+                            .into_iter(),
+                    )
+                }
+                _ => super::shared::utils::LocalScope::new(),
+            };
             let result = if let Some(transformed) = try_transform_assignment(
                 operator_str,
                 &assignment_left,
@@ -1164,7 +1182,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                 should_proxy,
                 original_root_name.as_deref(),
                 original_root_start,
-                &super::shared::utils::LocalScope::new(),
+                &right_scope,
                 context,
             ) {
                 transformed
@@ -1216,9 +1234,15 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
 
             let arg_node = pa.get_js_node(*argument);
             let original_root_name = extract_root_identifier_from_jsnode(arg_node, pa);
+            let original_root_start = extract_root_identifier_start_from_jsnode(arg_node, pa);
+            let root_is_shadow = original_root_name.as_deref().is_some_and(|name| {
+                original_root_start
+                    .is_some_and(|start| context.state.reference_is_plain_local(name, start))
+            });
 
             // Check if the argument is a simple identifier with an update transform
             if let Some(name_str) = get_jsnode_identifier_name(arg_node)
+                && !root_is_shadow
                 && let Some(update_transform) = context.state.transform.get(&name_str)
                 && let Some(update_fn) = update_transform.update
             {
@@ -1253,6 +1277,7 @@ fn convert_js_node(node: &JsNode, context: &mut ComponentContext) -> JsExpr {
                 prefix,
                 context.arena.get_expr(conv_argument),
                 original_root_name.as_deref(),
+                original_root_start,
                 context,
             ) {
                 transformed
@@ -4271,11 +4296,19 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                     .get("param")
                     .filter(|p| !p.is_null())
                     .and_then(|p| convert_param_pattern(p, context));
+                // A catch parameter binds like a function parameter, so it shadows
+                // the same transforms one does — for the body only.
+                let mut names: Vec<String> = Vec::new();
+                if let Some(param_val) = h_obj.get("param").filter(|p| !p.is_null()) {
+                    collect_param_names(param_val, &mut names);
+                }
+                let restore = enter_shadowed_names(&names, context);
                 let body = h_obj
                     .get("body")
                     .and_then(|b| b.as_object())
                     .map(|b| convert_block_statement(b, context))
                     .unwrap_or_else(JsBlockStatement::new);
+                leave_shadowed_names(restore, context);
                 Some(JsCatchClause { param, body })
             });
             let finalizer = obj
@@ -4410,13 +4443,8 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                 && let Some(decls) = left_obj.get("declarations").and_then(|d| d.as_array())
             {
                 for decl in decls {
-                    if let Some(id_obj) = decl
-                        .as_object()
-                        .and_then(|d| d.get("id"))
-                        .and_then(|id| id.as_object())
-                        && let Some(name) = id_obj.get("name").and_then(|n| n.as_str())
-                    {
-                        left_var_names.push(name.to_string());
+                    if let Some(id_val) = decl.as_object().and_then(|d| d.get("id")) {
+                        collect_param_names(id_val, &mut left_var_names);
                     }
                 }
             }
@@ -4474,16 +4502,7 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                         .alloc_expr(JsExpr::Literal(JsLiteral::Undefined))
                 });
 
-            // Save transforms for loop variables
-            let saved_transform = if !left_var_names.is_empty() {
-                let saved = context.state.transform.clone();
-                for name in &left_var_names {
-                    context.state.transform.remove(name);
-                }
-                Some(saved)
-            } else {
-                None
-            };
+            let restore = enter_shadowed_names(&left_var_names, context);
 
             let body = obj
                 .get("body")
@@ -4491,9 +4510,7 @@ fn convert_statement(stmt: &Value, context: &mut ComponentContext) -> Option<JsS
                 .map(|s| context.arena.alloc_stmt(s))
                 .unwrap_or_else(|| context.arena.alloc_stmt(JsStatement::Empty));
 
-            if let Some(saved) = saved_transform {
-                context.state.transform = saved;
-            }
+            leave_shadowed_names(restore, context);
 
             let is_await = obj.get("await").and_then(|a| a.as_bool()).unwrap_or(false);
             // `for...in` and `for...of` share `JsForOfStatement`; the `is_for_in`
@@ -4818,8 +4835,12 @@ fn convert_assignment_expression(
     // `uses_index = true` on the OWNING each block, forcing the `$$index` callback
     // parameter to be emitted even when the produced code does not reference it.
     // We look the name up in `each_item_name_flags` (most-recent first) so a nested
-    // each body that mutates an outer item still sets the outer block's flag.
+    // each body that mutates an outer item still sets the outer block's flag — and
+    // skip a reference a local declaration owns, which upstream's `scope.get` never
+    // reaches the item for.
     if let Some(root) = original_root_name.as_deref()
+        && !original_root_start
+            .is_some_and(|start| context.state.reference_is_plain_local(root, start))
         && let Some((_, flag)) = context
             .state
             .each_item_name_flags
@@ -5029,6 +5050,17 @@ pub(crate) fn check_ownership_validation(
     // Get the root object name
     let root_name = get_root_identifier_from_member_json(left_val)?;
 
+    // Upstream resolves the root through the scope at the mutation, so a local
+    // declaration shadowing a prop is not a prop mutation.
+    let root_start = get_root_start_position(left_val);
+    if root_start.is_some_and(|start| {
+        context
+            .state
+            .reference_is_shadowed_non_prop(&root_name, start)
+    }) {
+        return None;
+    }
+
     // Get the binding for the root object
     let binding = context.state.get_binding(&root_name)?;
 
@@ -5049,7 +5081,7 @@ pub(crate) fn check_ownership_validation(
     let prop_alias = binding.prop_alias.clone();
 
     // Get source location from the root identifier's start position
-    let source_loc = get_root_start_position(left_val).and_then(|start| {
+    let source_loc = root_start.and_then(|start| {
         let source = &context.state.analysis.source;
         if !source.is_empty() {
             use crate::compiler::phases::phase3_transform::utils::locate_in_source;
@@ -5239,6 +5271,17 @@ fn try_transform_assignment(
     let root_name = extract_root_identifier_from_expr(&context.arena, left)
         .or_else(|| original_root_name.map(|s| s.to_string()))?;
 
+    // Upstream resolves the write target once, through `scope.get(name)`; phase 3's
+    // current scope here is the template's, so a name lookup alone reaches the prop
+    // and a shadow's member write is lowered as a prop write. The dev-mode mutation
+    // validator already asks this question — the two must agree or the same source
+    // is judged a prop mutation on one path and not the other.
+    if original_root_start
+        .is_some_and(|start| context.state.reference_is_plain_local(&root_name, start))
+    {
+        return None;
+    }
+
     // Check if there's a transform for this identifier
     let transform = context.state.transform.get(&root_name)?;
 
@@ -5335,8 +5378,21 @@ fn try_transform_assignment(
                 .unwrap_or(false)
         };
 
+        let is_store_sub = {
+            use crate::compiler::phases::phase2_analyze::scope::BindingKind;
+            context
+                .state
+                .get_binding(&root_name)
+                .map(|b| matches!(b.kind, BindingKind::StoreSub))
+                .unwrap_or(false)
+        };
+
         let visited_left = if is_prop_binding {
             apply_transforms_to_expression_with_shadowed(left, context, local_scope)
+        } else if is_store_sub {
+            // The store root is replaced by `store_sub_mutate`, but a computed index is an
+            // ordinary read and still owes its site's transform.
+            super::shared::utils::transform_computed_indices_only(left, context, local_scope)
         } else {
             left.clone()
         };
@@ -5419,6 +5475,16 @@ pub(crate) fn transform_synthesized_assignment_with_shadowed(
     apply_transforms_to_expression_with_shadowed(&assignment, context, local_scope)
 }
 
+/// The root of a member mutation that upstream routes through the each block's
+/// `transform.mutate` — which returns before `build_assignment`'s dev `$.assign`
+/// wrap, so that wrap must not fire here either.
+pub(crate) fn is_each_item_mutation_root(root_name: &str, context: &ComponentContext) -> bool {
+    !context.state.shadowed_prop_names.contains(root_name)
+        && context.state.each_binding_context.iter().rev().any(|each| {
+            each.item_name == root_name || each.destructured_update_paths.contains_key(root_name)
+        })
+}
+
 /// Preserve the sequence that upstream's each-item `mutate` transform always
 /// builds, including when its invalidation tail is empty. A plain mutation is
 /// equivalent at runtime, but esrap prints the one-element sequence with
@@ -5439,12 +5505,7 @@ pub(crate) fn preserve_each_mutation_sequence(
     let Some(root_name) = original_root_name else {
         return result;
     };
-    let is_each_item = !context.state.shadowed_prop_names.contains(root_name)
-        && context.state.each_binding_context.iter().rev().any(|each| {
-            each.item_name == root_name || each.destructured_update_paths.contains_key(root_name)
-        });
-
-    if is_each_item {
+    if is_each_item_mutation_root(root_name, context) {
         // A one-element sequence is treated by the recursive transform walk as a
         // synthesized, already-transformed node. Apply the each-item read/mutate
         // transform before adding that marker; otherwise `item.v = 1` is frozen
@@ -5696,6 +5757,12 @@ fn try_dev_assign_wrap_typed(
         return None;
     }
 
+    if extract_root_identifier_from_jsnode(left_node, pa)
+        .is_some_and(|root| is_each_item_mutation_root(&root, context))
+    {
+        return None;
+    }
+
     let (left_start, computed) = match left_node {
         JsNode::MemberExpression {
             start, computed, ..
@@ -5836,6 +5903,13 @@ fn try_coercive_assignment_transform(
     let left_json = obj.get("left")?.as_object()?;
     let left_type = left_json.get("type")?.as_str()?;
     if left_type != "MemberExpression" {
+        return None;
+    }
+
+    if let Some(left_value) = obj.get("left")
+        && extract_root_identifier_from_json(left_value)
+            .is_some_and(|root| is_each_item_mutation_root(&root, context))
+    {
         return None;
     }
 
@@ -6756,29 +6830,34 @@ fn convert_block_statement_from_jsnode(
     JsBlockStatement::with_body(body)
 }
 
-/// Add the top-level variable-declaration names from a JsNode statement to
-/// `shadowed_prop_names`.  Only simple `Identifier` lhs patterns are handled;
-/// destructuring patterns are ignored (they rarely shadow a prop name and the
-/// code is cleaner without the extra complexity).
+/// Add the names a statement declares to `shadowed_prop_names`.
+///
+/// A destructuring pattern binds names like any other declaration —
+/// `const { a: v } = …` shadows a prop `v` exactly as `const v = …` does — so
+/// the whole pattern is walked. Reading only a bare `Identifier` here left the
+/// prop's getter on a read the local owns.
 fn register_block_decl_names_jsnode(
     node: &JsNode,
     pa: &ParseArena,
     context: &mut ComponentContext,
 ) {
-    let names: Vec<String> = match node {
-        JsNode::VariableDeclaration { declarations, .. } => pa
-            .get_js_children(*declarations)
-            .iter()
-            .filter_map(|d| match d {
-                JsNode::VariableDeclarator { id, .. } => match pa.get_js_node(*id) {
-                    JsNode::Identifier { name, .. } => Some(name.to_string()),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect(),
-        _ => vec![],
-    };
+    let mut names: Vec<String> = Vec::new();
+    match node {
+        JsNode::VariableDeclaration { declarations, .. } => {
+            for declarator in pa.get_js_children(*declarations) {
+                if let JsNode::VariableDeclarator { id, .. } = declarator {
+                    collect_param_names_from_jsnode(pa.get_js_node(*id), &mut names);
+                }
+            }
+        }
+        // A function or class DECLARATION binds its name in the enclosing block
+        // exactly as `let` does; only a variable declaration was read here.
+        JsNode::FunctionDeclaration { id: Some(id), .. }
+        | JsNode::ClassDeclaration { id: Some(id), .. } => {
+            collect_param_names_from_jsnode(pa.get_js_node(*id), &mut names);
+        }
+        _ => {}
+    }
     for name in names {
         context.state.shadowed_prop_names.insert(name);
     }
@@ -6936,6 +7015,61 @@ fn convert_statement_from_jsnode(
 }
 
 /// Collect parameter names from a JsNode, avoiding JSON serialization for simple identifiers.
+/// What `names` displaced while a binding construct's body is converted.
+///
+/// A parameter, a `catch` clause and a `for…of` head all bind names for their
+/// body only, and every one of them has to hide the same two things: the read
+/// transform, and `shadowed_prop_names`, which is what the non-source-prop
+/// rewrite gates on. Removing only the transform leaves `$$props.v` on a local.
+type SavedTransforms = (
+    im::HashMap<String, IdentifierTransform>,
+    im::HashMap<String, ()>,
+);
+
+struct ShadowedNames {
+    transform: Option<SavedTransforms>,
+    newly_shadowed: Vec<String>,
+}
+
+fn enter_shadowed_names(names: &[String], context: &mut ComponentContext) -> ShadowedNames {
+    if names.is_empty() {
+        return ShadowedNames {
+            transform: None,
+            newly_shadowed: Vec::new(),
+        };
+    }
+    let saved = (
+        context.state.transform.clone(),
+        context.state.transform_deep_read.clone(),
+    );
+    let newly_shadowed: Vec<String> = names
+        .iter()
+        .filter(|n| !context.state.shadowed_prop_names.contains(n.as_str()))
+        .cloned()
+        .collect();
+    for name in names {
+        context.state.transform.remove(name);
+        context.state.transform_deep_read.remove(name);
+    }
+    for name in &newly_shadowed {
+        context.state.shadowed_prop_names.insert(name.clone());
+    }
+    ShadowedNames {
+        transform: Some(saved),
+        newly_shadowed,
+    }
+}
+
+fn leave_shadowed_names(restore: ShadowedNames, context: &mut ComponentContext) {
+    for name in &restore.newly_shadowed {
+        context.state.shadowed_prop_names.remove(name);
+    }
+    if let Some((transform, deep_read)) = restore.transform {
+        context.state.transform = transform;
+        context.state.transform_deep_read = deep_read;
+    }
+}
+
 fn collect_param_names_from_jsnode(node: &JsNode, names: &mut Vec<String>) {
     match node {
         JsNode::Identifier { name, .. } => {
@@ -6996,6 +7130,10 @@ fn convert_update_expression(
     // apply the update transform directly to avoid invalid JS like $.get(x)++ or x()++.
     if let Some(arg_val) = argument_value
         && let Some(name) = extract_identifier_name_from_json(arg_val)
+        // The typed and `try_transform_update` paths both ask this; the JSON one asked
+        // nothing, so a local shadowing a signal was updated through the signal.
+        && !get_root_start_position(arg_val)
+            .is_some_and(|start| context.state.reference_is_plain_local(&name, start))
         && let Some(update_transform) = context.state.transform.get(&name)
         && let Some(update_fn) = update_transform.update
     {
@@ -7066,6 +7204,7 @@ fn convert_update_expression(
         prefix,
         context.arena.get_expr(argument),
         original_root_name.as_deref(),
+        argument_value.and_then(get_root_start_position),
         context,
     ) {
         transformed
@@ -7130,6 +7269,7 @@ fn try_transform_update(
     prefix: bool,
     argument: &JsExpr,
     original_root_name: Option<&str>,
+    original_root_start: Option<u32>,
     context: &ComponentContext,
 ) -> Option<JsExpr> {
     use crate::compiler::phases::phase3_transform::js_ast::builders as b;
@@ -7140,6 +7280,12 @@ fn try_transform_update(
     let root_name = original_root_name
         .map(str::to_owned)
         .or_else(|| extract_root_identifier_from_expr(&context.arena, argument))?;
+
+    if original_root_start
+        .is_some_and(|start| context.state.reference_is_plain_local(&root_name, start))
+    {
+        return None;
+    }
 
     // Check if there's a transform for this identifier
     let transform = context.state.transform.get(&root_name)?;

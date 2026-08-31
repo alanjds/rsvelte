@@ -664,7 +664,8 @@ fn run_behavior_case(case: &BehaviorCase) -> Result<()> {
             let (source, offset) = source_at_marker(case)?;
             let response = hover::hover(&source, offset).context("no hover response")?;
             // `getHoverInfo.ts:56` answers a tag with `{ contents: documentation[tag] }`
-            // — a bare string, where only the modifier hover next to it is markup.
+            // — a bare string, where only the modifier hover beside it is markup, so the
+            // shape is asserted and not only the text.
             let HoverContents::Scalar(MarkedString::String(value)) = response.contents else {
                 anyhow::bail!("tag hover response was not a bare string");
             };

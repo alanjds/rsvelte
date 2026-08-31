@@ -21,7 +21,8 @@
 //! - **JSON fallback (`TAG_JSON`)**: the entire `StyleSheet` sub-tree,
 //!   `SvelteOptions`, `TransitionDirective`/`AnimateDirective`
 //!   `metadata`, `Root.js`, and the two opaque TypeScript declaration
-//!   variants (`TSTypeAliasDeclaration` and `TSInterfaceDeclaration`).
+//!   variants (`TSTypeAliasDeclaration`, `TSInterfaceDeclaration` and
+//!   `TSDeclareMethod`).
 //!   These are rare and have many optional fields; switching them to
 //!   dedicated tags is a follow-up.
 //!
@@ -2052,6 +2053,9 @@ fn write_js_node<W: Writer>(w: &mut W, node: &JsNode, arena: &ParseArena) -> std
             kind,
             r#static,
             computed,
+            // The envelope has never carried TS member modifiers; widening it
+            // is a separate change with its own decoder side.
+            modifiers: _,
         } => {
             write_preamble(w, JS_METHOD_DEFINITION, *start, *end);
             write_typed_loc(w, loc.as_deref());
@@ -2069,7 +2073,7 @@ fn write_js_node<W: Writer>(w: &mut W, node: &JsNode, arena: &ParseArena) -> std
             value,
             r#static,
             computed,
-            accessor: _,
+            modifiers: _,
         } => {
             write_preamble(w, JS_PROPERTY_DEFINITION, *start, *end);
             write_typed_loc(w, loc.as_deref());
@@ -2111,7 +2115,8 @@ fn write_js_node<W: Writer>(w: &mut W, node: &JsNode, arena: &ParseArena) -> std
         // stored raw value, so the JsNode serializer also restores comments
         // captured in the arena side table (#3702).
         JsNode::TSTypeAliasDeclaration { start, end, .. }
-        | JsNode::TSInterfaceDeclaration { start, end, .. } => {
+        | JsNode::TSInterfaceDeclaration { start, end, .. }
+        | JsNode::TSDeclareMethod { start, end, .. } => {
             write_json_node(w, *start, *end, node)?;
         }
         JsNode::TSParameterProperty { start, end, loc } => {

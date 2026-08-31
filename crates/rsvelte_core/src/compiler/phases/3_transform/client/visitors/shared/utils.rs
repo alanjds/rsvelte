@@ -292,15 +292,107 @@ fn extract_pattern_names_to_scope(pattern: &JsPattern, scope: &mut LocalScope) {
     }
 }
 
-/// Scan a block body for variable declarations and register them in the local scope.
+/// Every `var` declaration reachable from `stmt` without crossing into a nested
+/// function or class body, which open a `var` scope of their own. The oxc-AST twin
+/// of this walk is `shared::hoisted_vars`; this one reads the phase-3 IR.
+fn collect_hoisted_var_declarations<'x>(
+    stmt: &'x JsStatement,
+    arena: &'x crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
+    out: &mut Vec<&'x JsVariableDeclaration>,
+) {
+    let descend = |id, out: &mut Vec<&'x JsVariableDeclaration>| {
+        collect_hoisted_var_declarations(arena.get_stmt(id), arena, out)
+    };
+    match stmt {
+        JsStatement::VariableDeclaration(decl) if matches!(decl.kind, JsVariableKind::Var) => {
+            out.push(decl)
+        }
+        JsStatement::Block(block) => {
+            for stmt in &block.body {
+                collect_hoisted_var_declarations(stmt, arena, out);
+            }
+        }
+        JsStatement::If(stmt) => {
+            descend(stmt.consequent, out);
+            if let Some(alternate) = stmt.alternate {
+                descend(alternate, out);
+            }
+        }
+        JsStatement::For(stmt) => {
+            if let Some(JsForInit::Variable(decl)) = &stmt.init
+                && matches!(decl.kind, JsVariableKind::Var)
+            {
+                out.push(decl);
+            }
+            descend(stmt.body, out);
+        }
+        JsStatement::ForOf(stmt) => {
+            if let JsForOfLeft::Variable(decl) = &stmt.left
+                && matches!(decl.kind, JsVariableKind::Var)
+            {
+                out.push(decl);
+            }
+            descend(stmt.body, out);
+        }
+        JsStatement::While(stmt) => descend(stmt.body, out),
+        JsStatement::DoWhile(stmt) => descend(stmt.body, out),
+        JsStatement::Labeled(stmt) => descend(stmt.body, out),
+        JsStatement::Try(stmt) => {
+            for stmt in &stmt.block.body {
+                collect_hoisted_var_declarations(stmt, arena, out);
+            }
+            if let Some(handler) = &stmt.handler {
+                for stmt in &handler.body.body {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+            if let Some(finalizer) = &stmt.finalizer {
+                for stmt in &finalizer.body {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+        }
+        JsStatement::Switch(stmt) => {
+            for case in &stmt.cases {
+                for stmt in &case.consequent {
+                    collect_hoisted_var_declarations(stmt, arena, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block body for the names it declares and register them in the local scope.
 /// This tracks local `const`/`let`/`var` declarations so that should_proxy() can
-/// check their init expression types when they're referenced in assignments.
+/// check their init expression types when they're referenced in assignments, and a
+/// `function` / `class` declaration, which binds a name in the block exactly as
+/// `let` does.
 fn register_block_local_vars(
     block: &[JsStatement],
     arena: &crate::compiler::phases::phase3_transform::js_ast::arena::JsArena,
     scope: &mut LocalScope,
 ) {
+    // A `var` is function-scoped, so one declared in a nested block, loop head or
+    // `case` arm binds here too; the loop below only sees this list's own statements.
+    let mut hoisted = Vec::new();
     for stmt in block {
+        collect_hoisted_var_declarations(stmt, arena, &mut hoisted);
+    }
+    for decl in hoisted {
+        for d in &decl.declarations {
+            extract_pattern_names_to_scope(&d.id, scope);
+        }
+    }
+    for stmt in block {
+        match stmt {
+            JsStatement::FunctionDeclaration(JsFunctionDeclaration { id: Some(id), .. })
+            | JsStatement::ClassDeclaration {
+                class: JsClassExpression { id: Some(id), .. },
+                ..
+            } => scope.add_shadowed(id.to_string()),
+            _ => {}
+        }
         if let JsStatement::VariableDeclaration(var_decl) = stmt {
             for decl in &var_decl.declarations {
                 if let JsPattern::Identifier(name) = &decl.id {
@@ -1016,6 +1108,10 @@ pub fn apply_transforms_to_expression_with_shadowed(
         JsExpr::Function(func) => {
             // Extract parameter names - these shadow any outer transforms
             let mut new_scope = local_scope.clone();
+            // A named function expression binds its own name inside its body.
+            if let Some(id) = &func.id {
+                new_scope.add_shadowed(id.to_string());
+            }
             for param in &func.params {
                 extract_pattern_names_to_scope(param, &mut new_scope);
             }
@@ -1909,7 +2005,7 @@ fn has_call_in_base_chain(
 ///
 /// This allows `mutate_value_legacy` to then replace `list` with `$.get(list)`,
 /// resulting in the correct: `$.get(list)[$.get(key)] = $$value`
-fn transform_computed_indices_only(
+pub(crate) fn transform_computed_indices_only(
     expr: &JsExpr,
     context: &ComponentContext,
     local_scope: &LocalScope,
@@ -3559,7 +3655,7 @@ fn push_folded_tag_comments(tag_start: u32, tag_end: u32, context: &mut Componen
     }
 }
 
-/// Drop the opaque chunks [`push_folded_tag_comments`] emitted for the tag in
+/// Drop the opaque chunks `push_folded_tag_comments` emitted for the tag in
 /// `[tag_start, tag_end)`. A generated node anchored on the same source region
 /// carries those comments itself, and keeping both prints each one twice.
 pub fn drop_folded_tag_comments(
@@ -3722,45 +3818,8 @@ pub fn build_template_chunk(
                         };
                     }
 
-                    // Check if the expression is guaranteed to be non-null.
-                    // This corresponds to Svelte's `state.scope.evaluate(value).is_defined` check.
-                    //
-                    // We use a two-step approach:
-                    // 1. Check the ORIGINAL expression with full binding context (knows EachIndex
-                    //    is always a number, const bindings with defined values, etc.)
-                    // 2. If the original was defined, check if a transform made it potentially
-                    //    undefined by wrapping it in $.get() (which returns a Call expression).
-                    //
-                    // This correctly handles:
-                    // - Non-keyed each index `i`: original=defined, built=Identifier => defined
-                    // - Keyed each index `$.get(index)`: original=defined, built=Call => NOT defined
-                    // - Normal variables: original=not defined => NOT defined
-                    // Determine defined-ness by checking the built (transformed) expression.
-                    //
-                    // For simple identifiers that weren't transformed (like non-keyed each
-                    // index `i`), we check the original expression which has binding context
-                    // (knows EachIndex is always a number). For everything else, we check
-                    // the built JsExpr.
-                    let mut value_for_definedness = &value;
-                    while let JsExpr::Spanned(inner, _, _) = value_for_definedness {
-                        value_for_definedness = context.arena.get_expr(*inner);
-                    }
-                    let is_defined = if let JsExpr::Identifier(name) = value_for_definedness {
-                        // Check if this is a memoized parameter ($0, $1, etc.)
-                        // Memoized parameters are unknown identifiers, so they're not defined.
-                        // The official compiler evaluates the memoized expression through
-                        // scope.evaluate() which returns is_defined=false for unknown identifiers.
-                        if name.starts_with('$') && name[1..].chars().all(|c| c.is_ascii_digit()) {
-                            false
-                        } else {
-                            // Value is still a plain identifier (no $.get() wrapping).
-                            // Use the original expression check which has binding context.
-                            is_expression_defined(&expr_tag.expression, context)
-                        }
-                    } else {
-                        // Value was transformed. Check the built expression.
-                        is_js_expr_defined(value_for_definedness, &context.arena, context)
-                    };
+                    let is_defined =
+                        template_chunk_value_is_defined(&value, &expr_tag.expression, context);
 
                     // Add ?? '' where necessary (only if not guaranteed to be defined)
                     let final_value = if is_defined {
@@ -4129,6 +4188,33 @@ pub(crate) fn is_global_constant(keypath: &str) -> bool {
             | "Math.SQRT2"
             | "Math.SQRT1_2"
     )
+}
+
+/// Upstream `build_template_chunk` / `TitleElement` both ask
+/// `state.scope.evaluate(value).is_defined` of the BUILT value, never of the
+/// source expression — a legacy prop read becomes a `SequenceExpression`, which
+/// upstream's `evaluate` has no case for, so it is never `is_defined`. The
+/// original is consulted only where the transform left a bare identifier, which
+/// is the one shape whose binding context survives it.
+pub(crate) fn template_chunk_value_is_defined(
+    value: &JsExpr,
+    original: &crate::ast::js::Expression,
+    context: &ComponentContext,
+) -> bool {
+    let mut built = value;
+    while let JsExpr::Spanned(inner, _, _) = built {
+        built = context.arena.get_expr(*inner);
+    }
+    if let JsExpr::Identifier(name) = built {
+        // A memoizer parameter (`$0`) is unknown to the component scope.
+        if name.starts_with('$') && name[1..].chars().all(|c| c.is_ascii_digit()) {
+            false
+        } else {
+            is_expression_defined(original, context)
+        }
+    } else {
+        is_js_expr_defined(built, &context.arena, context)
+    }
 }
 
 pub(crate) fn is_js_expr_defined(

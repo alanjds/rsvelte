@@ -7,8 +7,9 @@ Svelte structure, oxc for embedded JS, and PostCSS for embedded CSS) and require
 embedded CSS by default, so the ratchet intentionally includes CSS-engine parity
 as well as Svelte-structure parity. The ratchet may only shrink.
 
-**Current baseline: `fmt-known-failures.json`, 787 entries** — 22 from before the
-wave-2 corpus enrolment and 765 in the current expanded-corpus population.
+**Current baseline: `fmt-known-failures.json`, 789 entries** — 22 from before the
+wave-2 corpus enrolment, 766 in the current expanded-corpus population, and 1
+from a pattern-corpus repro added during the campaign (Cluster 12).
 Oracle-bug / invalid-input / migrate cases are NOT here — those are permanently
 excluded in `fmt-oracle-excluded.json` (see `fmt-oracle-excluded.md`).
 
@@ -28,13 +29,15 @@ An id that carries two clusters' divergences at once is filed under its dominant
 one (see *Multiple clusters per id*), so the per-cluster counts below remain a
 partition of the ratchet rather than an over-count:
 
-Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 2 + 385 + 239 + 85 + 38 + 14 + 1 + 2 + 1`
+Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 1 + 2 + 386 + 239 + 85 + 38 + 14 + 1 + 2 + 1`
 
 ## Wave-2 enrolment (#3130) — Clusters 20-27
 
 The corpus went from 37 to 104 corpus sources, and the formatter-parity set
 with it. The current run has **33,483 included components, 32,667 matched, 787
-failing** (29 excluded, 239 skipped). The original enrolment added 764 entries
+failing** (29 excluded, 239 skipped) — those five numbers are the CI report as it
+stood *before* the 2026-08-31 reclassification below, which moves one id out of
+`excluded` and into this ratchet without changing what the two formatters emit. The original enrolment added 764 entries
 from the 67 new repositories; later submodule and pattern-corpus updates moved
 that expanded-population residue to 765. At enrolment time 51 repositories
 contributed at least one; sparrow-app
@@ -75,7 +78,7 @@ whitespace → **intra-line-ws**; anything else → **other**.
 
 | n | cluster | what the first differing line looks like |
 |---|---|---|
-| 385 | **20 — breaks-later** | rsvelte keeps on one line what the oracle has already broken (`{#each …sort( (a,b) => {` vs a wrapped form) |
+| 386 | **20 — breaks-later** | rsvelte keeps on one line what the oracle has already broken (`{#each …sort( (a,b) => {` vs a wrapped form) |
 | 239 | **21 — breaks-earlier** | the mirror image: rsvelte breaks where the oracle keeps going (`selected_category.id ===` vs `… === category.id}`) |
 | 38 | **23 — indent-only** | same trimmed text at a different indent, typically a member-chain continuation inside `<script>` or a nested element's body |
 | 85 | **22 — intra-line-ws** | same tokens, different interior spacing — most of it a sole arrow argument the oracle hugs (`sort((a, b) =>`) and rsvelte pads (`sort( (a, b) =>`) |
@@ -104,6 +107,100 @@ it with `--no-native-css`; #3628 records that decision and the engine boundary.
 and that is the burndown target, not the tail. Nothing here is an oracle bug: the
 `oracle-invalid` classification already carries those and is a pass, not a ratchet
 entry.
+
+## Three axes the cluster table does not carry (2026-08-31)
+
+The table above keys on the **first differing line**, which answers *what the
+divergence looks like* and nothing about *how much it costs*. Three orthogonal
+measurements over the same 788, each run on the current tree with the same
+invocations the gate uses (`oxfmt -c scripts/fixtures/fmt-corpus.oxfmtrc.json
+--stdin-filepath <basename>` and `rsvelte-fmt --stdin --stdin-filepath <basename>
+-c <same config> --oxfmt-bin <same oxfmt>`). Positive control that the harness
+reproduces the gate: **0 of 788 came back byte-equal** — the harness agrees with
+the ratchet on every entry.
+
+**1. Does the divergence change what the compiler emits?** Each side's formatted
+output was compiled with the official compiler (`generate: 'client'` and
+`'server'`, comparing `js.code` and `css.code`):
+
+| n | class |
+|---|---|
+| 674 | **render-neutral** — the compiler emits byte-identical JS *and* CSS from both forms |
+| 114 | **render-changing** — at least one of the four outputs differs |
+
+The 114 split 53 `client:js+server:js`, 43 `client:css+server:css`, 17
+`client:js` alone, 1 all four. **86% of this ratchet is invisible to the
+compiler**, so it is a formatting-taste backlog, not a correctness one — but the
+gate's unit is bytes, so the 114 that *are* a correctness question are filed
+beside the 674 that are not, indistinguishably.
+
+**2. Is rsvelte inside the oracle's own width budget?** Counting lines longer
+than `printWidth: 80` in each whole output:
+
+| n | class |
+|---|---|
+| 411 | both outputs overflow (long attribute values, URLs, class lists — neither engine can break them) |
+| 264 | **only rsvelte overflows** — rsvelte emits over-width lines the oracle does not |
+| 101 | neither overflows — pure break-point preference, both inside the budget |
+| 12 | only the oracle overflows |
+
+The asymmetry is the finding: 264 against 12. rsvelte **under-breaks**, which is
+the same direction Cluster 20 (385, *breaks-later*) reports and the opposite of
+what Cluster 21 (239, *breaks-earlier*) reads like in isolation — an entry can be
+`breaks-earlier` on its first differing line and still overflow further down.
+
+**3. Does rsvelte's own output still compile?** This is the question the gate
+structurally cannot ask, because its verdict is byte equality against the oracle:
+a mismatch is a mismatch whether the actual text is a two-space indent or is not
+a Svelte document at all.
+
+| n | class |
+|---|---|
+| 1 | **rsvelte-fmt output is rejected by the official compiler** |
+| 0 | oracle output rejected |
+
+That one is `sveltepress/packages/theme-default/src/components/icons/SystemDefault.svelte`,
+and it is not a formatting preference — **rsvelte-fmt duplicates an HTML comment
+and truncates the copies**, so the document is destroyed. Reduction (the trigger
+is a leading `<!-- … -->` child of an element whose open tag breaks, followed by a
+child that itself breaks; the comment's length is irrelevant):
+
+```svelte
+<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><!-- x --><path fill="currentColor" d="M10 16h4v0h-4z"><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="a;b" /></path></svg>
+```
+
+rsvelte-fmt emits the comment three times, and the second and third copies lose
+their `-->`:
+
+```
+><!-- x --><path fill="currentColor" d="M10 16h4v0h-4z"
+><!-- x   ><animate
+…
+    /></path
+><!-- x ></svg>
+```
+
+`compile()` on that text throws `expected_token` (*Expected token `-->`*); the
+oracle's output for the same input compiles. Removing the comment, flattening the
+nesting, or replacing `<svg>` with `<div>` each make the output valid, so the
+three ingredients are jointly required. The same check over
+`fmt-oracle-excluded.json` (27 entries, 2 of whose sources are already invalid and
+1 of which rsvelte-fmt refuses outright) finds **0** further cases, so the whole
+formatter-parity population contains exactly this one.
+
+**Attribution status of this ratchet.** *Nothing here is an oracle bug* — that
+classification lives in `fmt-oracle-excluded.json` — so no entry can be attributed
+to an `upstream_issues/` report. The only `deliberate-divergences` target that
+reaches this file is the CSS-engine boundary (#3628), which today is pinned for
+*value spelling* by `crates/rsvelte_formatter/tests/css_native.rs` and covers
+Clusters 8 and 11 plus the two `pattern/issues/3404-*` files inside Cluster 22 —
+**5 entries**. The remaining 783 are neither upstream nor deliberate: they have to
+be burned down to zero. The 43 CSS-only render-changing entries above are very
+likely the same engine boundary in its *line-breaking* facet (e.g.
+`huly/packages/ui/src/components/SearchInput.svelte`, where PostCSS breaks
+`background-color: var(--theme-button-default); // …` across three lines and OXC
+does not), but that facet has **no pin**, so they are recorded here as a candidate
+rather than counted as attributed.
 
 ## Cluster 1 — close-tag-dangle / open-tag hugging for inline & void children (3)
 
@@ -339,6 +436,37 @@ oxfmt over the same two selectors as standalone CSS
 reproduces rsvelte's output byte for byte. Neither spelling changes what the
 selector matches. Changing the product engine or teaching the AST printer to
 preserve these spellings has the same high blast radius as Cluster 8.
+
+## Cluster 12 — a block written entirely on one line is expanded, and that is significant whitespace (1)
+
+`pattern/issues/4046-each-const-parameter-comment.svelte`. The source is
+
+```svelte
+{#each [1] as i}{@const c = /* c */ v * i}<p>{c}</p>{/each}
+```
+
+with no whitespace anywhere between the block tag, the `{@const}` and the child.
+The oracle keeps the first child glued to the open tag and the close tag glued to
+the last child — `{#each [1] as i}{@const c = /* c */ v * i}` then
+`  <p>{c}</p>{/each}` — which reads oddly and is the whitespace-sensitive answer.
+rsvelte-fmt normalizes the block to the canonical multi-line form instead.
+
+**This one is not cosmetic: the formatted text compiles to different code.** Run
+through the official compiler, the source and the oracle's output are
+byte-identical (`compile(source).js.code === compile(oracle).js.code`), while
+rsvelte-fmt's output is not — the each callback loses the comment from its
+parameter list, `($$anchor, i /* c */) =>` becoming `($$anchor, i) =>`. A
+formatter must not move that, so the fix belongs in rsvelte: a block whose first
+child begins with no whitespace must not gain any.
+
+Two controls were measured. Removing the comment reproduces the same five-line
+divergence, so **the comment is not the trigger** — the one-line layout is. And
+handed the multi-line spelling, both formatters return it unchanged and agree
+byte-for-byte, so this is rsvelte-fmt *adding* whitespace rather than the oracle
+preserving something rsvelte cannot see.
+
+The repro cannot be re-spelled to dodge this. Its subject is exactly the comment
+that the multi-line spelling drops, so a multi-line version pins nothing.
 
 ## Resolved
 
@@ -865,3 +993,27 @@ Linux `corpus-compat.yml` run (macOS `--update-baseline` drops
 loose-declaration-tag entries Linux includes and breaks CI): read the
 Formatter-parity job log for the "N known failures now PASS" count and per-id
 NOTICEs, then remove exactly the confirmed-fixed ids.
+
+### 2026-08-31 — one entry arrived by reclassification, not by regression
+
+`shadcn-svelte/docs/src/lib/components/theme-customizer-code.svelte` (Cluster 20,
+breaks-later) is the 789th entry, and it did not start failing: it had been
+**excluded** from the comparison set since it was enrolled, so no run ever
+compared it. Its exclusion reason claimed the oracle was platform-dependent
+("collapsed on macOS, attribute-wrapped on Linux, so byte-parity is undefined").
+Measured with the pinned oracle on macOS (`oxfmt@0.64.0`,
+`fmt-corpus.oxfmtrc.json`, five consecutive runs, byte-identical) the oracle
+emits the attribute-wrapped form at all 20 `<ColorIndicator>` sites — the form
+the reason ascribes to Linux — so the two platform descriptions coincide and
+nothing supports the claim. What is left is an ordinary line-break divergence
+inside `<pre>`: the oracle wraps the component's attribute, rsvelte-fmt keeps
+`<ColorIndicator color={value} />` on the line and breaks before `{value};`
+instead. Full outputs and the controls are in `fmt-oracle-excluded.md`.
+
+**Growing a shrink-only ratchet is legitimate here only because the pair was
+never in the compared population.** The *Cross-platform baseline rule* above
+governs shrinking, and it still does; this addition changes neither formatter,
+and the accompanying commit touches no formatter code. The claim that the entry
+fails on Linux is inferred from the oracle agreeing across the two platform
+descriptions, not measured there — if the Formatter-parity job reports this id
+as already passing, delete it from this ratchet rather than re-excluding it.

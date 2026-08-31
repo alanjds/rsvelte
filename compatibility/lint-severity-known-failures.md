@@ -14,7 +14,7 @@ preset leaves `off`. Gate 33 (`lint-preset.mjs`) pins the two presets, but it
 reads them through `--list-rules` and upstream's exported config object — the
 declared tables, never a run (gate-coverage blind spot 33b).
 
-`lint-severity-known-failures.json` holds 61 entries.
+`lint-severity-known-failures.json` holds 58 entries.
 
 Key classes:
 
@@ -25,7 +25,7 @@ Key classes:
 | `exit` | `exit\|<id>\|<oracle>-><rsvelte>\|<causes>` | the process exit codes differ |
 | `oracle-crash` | `oracle-crash\|<id>\|<rule>` | an upstream rule threw and took the file's whole report with it |
 
-Partition of `lint-severity-known-failures.json` by cause: `56 + 4 + 1`
+Partition of `lint-severity-known-failures.json` by cause: `57 + 1`
 
 Two of those addends are a `4` and they are unrelated: the standalone `4` is the
 `exit` 1→0 class below (a type-aware rule `lint-universe.mjs` excludes, which
@@ -49,27 +49,38 @@ oracle and 2,504 / 1,035 from rsvelte. The control was also exercised directly:
 re-running the subject with `--error svelte/no-at-debug-tags` moves 38 findings
 and the gate reports **76** `severity` keys.
 
-## `exit` 0→1, 56 entries — rsvelte surfaces a compiler diagnostic ESLint cannot see
+## `exit` 0→1, 57 entries — rsvelte surfaces a compiler diagnostic ESLint cannot see
 
 `rsvelte-lint` merges the Svelte compiler's own diagnostics into its report and
 exits non-zero on any `Error`, exactly as it does for a rule at `error`.
 `svelte-eslint-parser` is deliberately more permissive than the compiler, so a
 file the compiler rejects is linted cleanly by ESLint and exits 0.
 
-Every one of these 56 patterns fails to compile, and it is the compiler saying
+Every one of these 57 patterns fails to compile, and it is the compiler saying
 so rather than a rule: the key's cause field carries the diagnostic code, and
-all 56 are compiler codes (`slot_element_invalid_name` ×13,
+all 57 are compiler codes (`slot_element_invalid_name` ×13,
 `dollar_prefix_invalid` ×7, `state_invalid_placement` ×4, `legacy_export_invalid`
-×4, `animation_invalid_placement` ×4, `parse-error` ×4, and 15 more codes accounting for
+×4, `animation_invalid_placement` ×4, `parse-error` ×5, and 15 more codes accounting for
 20 between them), never a `svelte/…` rule id. Many are inherent to the rule being
 exercised — `no-dynamic-slot-name`'s whole subject is a construct Svelte 5
 rejects outright.
 
-**Cross-checked against the official compiler, not assumed.** Compiling all 56
-with `submodules/svelte`'s own `compile`/`compileModule`: **all 56 are rejected by
+**Cross-checked against the official compiler, not assumed.** Compiling all 57
+with `submodules/svelte`'s own `compile`/`compileModule`: **all 57 are rejected by
 the official compiler too**, so the two tools disagree only about whether a linter
 should report a compile error — a product decision, and rsvelte's is the more
 useful one for a Svelte-specific linter.
+
+**That cross-check is now a test, not a measurement.**
+`scripts/dev/test-lint-severity-exit-attribution.mjs` re-runs it in CI over whatever
+this list currently holds, with two valid patterns as an accepting control so a
+harness that rejected everything could not pass. The bucket is recorded as a
+deliberate divergence in
+[`deliberate-divergences.md`](deliberate-divergences.md#a-linter-reports-the-compilers-own-errors-rsvelte-lint-exit-code);
+these 57 are an accepted difference rather than a burndown target. Four entries that
+were rsvelte over-rejections hid in this same bucket until #3172, which is exactly
+what the check exists to catch: if a listed pattern ever compiles, it goes red and
+names the file.
 
 This bucket held **59** entries until #3172 fixed issues #3127 and #3128. The four
 that left were rsvelte over-rejections rather than a product decision — a
@@ -77,27 +88,64 @@ that left were rsvelte over-rejections rather than a product decision — a
 (`runes: false`, or `<svelte:options runes={false} />`) not turning a rune-named
 `$` reference into a store subscription. The remaining 56 are the ones official
 rejects too, which is what the re-measured cross-check above now reports as
-56 of 56.
+57 of 57 with the entry below.
 
 The 56th is `prefer-const/22-decorated-class-method.svelte`, whose decorated class the
 official compiler rejects with `typescript_invalid_feature` at the same point rsvelte
 does. It was invisible until the `lint-adversarial-end` step above it stopped failing:
 the job's shell is `bash -e`, so a red step hides every comparison below it.
 
-## `exit` 1→0, 4 entries — `svelte/no-navigation-without-resolve`
+The 57th is `prefer-const/23-redeclared-let.svelte`, and it is worth its own note
+because the shape is not optional. rsvelte's `prefer-const` used to report a `let`
+declared twice in one scope; ESLint merges a redeclaration into one variable with two
+write references and bails. Reproducing that needs an actual redeclaration, and a
+redeclared `let` is an early error in every JavaScript — so the pattern that pins the
+fix cannot also be a program the compiler accepts. Official rejects it too.
 
-`no-goto-without-base/{17-non-call-references,21-module-goto.svelte.js,23-alias-chains}`
-and `no-navigation-without-base/12-module-file.svelte.ts`. Upstream's
-`flat/recommended` runs this rule at `error`; it reports, and ESLint exits 1
-while rsvelte exits 0.
+## `exit` 1→0 — **closed, 0 entries**
 
-The rule is on `scripts/compat-corpus/lint-universe.mjs`'s `EXCLUDE` list — it
-needs the TypeScript checker to match upstream, and the type-aware path lives in
-the out-of-workspace `rsvelte_lint_types` crate — so its findings are outside
-this gate's comparison population, as they are outside gate 28's. The **exit
-code is not**, because it is a property of the whole run: excluding a rule from a
-finding comparison cannot exclude it from the process's exit status. That is the
-one thing this class records, and it is why an `EXCLUDE` entry is not free.
+`no-goto-without-base/{17-non-call-references,23-alias-chains}` were the last two.
+Upstream resolves `goto` through `ReferenceTracker.iterateEsmReferences`, which
+follows a copied binding (`const one = goto; const two = one; two('/x')`) and a
+copied namespace (`const nsCopy = nav; nsCopy.goto('/x')`); rsvelte's local
+`call_kind` matched the imported identifier and a `* as ns` member directly and
+stopped there. The rule now resolves its callee through `kit_nav::nav_call_kind`,
+the scope index the sibling `no-goto-without-base` already used, and `call_kind`
+is deleted.
+
+**This bucket held four entries and the reason was not one cause.** It was read as
+"the rule needs the TypeScript checker, and the type-aware path lives in the
+out-of-workspace `rsvelte_lint_types` crate" — which the rule's `EXCLUDE` entry in
+`scripts/compat-corpus/lint-universe.mjs` makes plausible, and which was wrong for
+half of them. Measured instead of assumed, with the rule's own binary:
+
+| input | in a `.svelte` | in a `.svelte.(js\|ts)` |
+|---|---|---|
+| `export function bad() { return goto('/module-bad'); }` | reported | **silent** |
+
+`no-navigation-without-resolve` was a `check_root` rule only, so a
+`.svelte.(js|ts)` — which reaches `run_script_rules_module`, a separate entry
+point — never ran it, while its sibling had implemented both halves since it
+shipped. `crates/rsvelte_lint/tests/navigation_resolve_module_surface.rs` pins
+both halves: the module surface reports, a component still reports once, a
+resolved URL is the accepting control, and the two sibling hooks are asserted to
+run on the same file set — with the note that the sibling is a port-vs-port
+oracle and the absolute answers are pinned separately.
+
+### DoD-4 attribution
+
+Attribution of `lint-severity-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 57 | [`deliberate-divergences`](deliberate-divergences.md#a-linter-reports-the-compilers-own-errors-rsvelte-lint-exit-code) | `exit\|…\|0->1\|<code>` — `rsvelte-lint` exits 1 on a source the compiler rejects, ESLint exits 0 |
+| 1 | [`upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md) | `oracle-crash` — the rule throws on `<a href="…" rel>` |
+
+The 57 are one product decision, not 57: every one is a file the official compiler
+rejects, verified 57 of 57 by the pin the deliberate-divergences entry names, with
+accepting controls. Splitting them per compiler code would multiply one decision by
+its inputs — the rows here are causes, and the `code` histogram that belongs to this
+table is above, not in it.
 
 ## `oracle-crash`, 1 entry — `no-target-blank/02-rel-dynamic.svelte`
 
@@ -113,7 +161,7 @@ rule is SvelteKit-gated, so it does not run without it):
 ```
 
 Reported upstream in
-[`upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-crash.md).
+[`upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md`](../upstream_issues/eslint-plugin-svelte-no-navigation-without-resolve-empty-rel-crash.md).
 
 The crash is only reachable because this gate runs upstream's **default preset**:
 every other lint gate enables an explicit rule universe that excludes this rule,

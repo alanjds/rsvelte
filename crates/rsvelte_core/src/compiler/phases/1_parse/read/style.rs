@@ -321,6 +321,42 @@ fn nth_of_tail(text: &str, anb: usize) -> Option<usize> {
 /// A comment where a compound selector should begin. Upstream's `read_selector`
 /// tolerates one only immediately before `,`, `{` or `)`; anywhere else the loop
 /// falls through to `read_identifier`, which rejects the `/`.
+/// Upstream reads a combinator, consumes only WHITESPACE after it, and then
+/// requires a compound: `read_selector` raises `css_selector_invalid` on a `,`,
+/// on the rule's `{` (or the argument list's `)` inside a pseudo-class) and
+/// reads an identifier on anything else — so a comment there is
+/// `css_expected_identifier`, reported at the comment and not at the
+/// terminator. Both selector scans lose that terminator to trimming, so it is
+/// recovered from the source rather than from the text they were handed.
+fn record_trailing_combinator_error(
+    cell: &std::cell::Cell<Option<crate::error::ParseError>>,
+    source: &str,
+    offset: usize,
+    combinator_end: usize,
+) {
+    let Some(rest) = combinator_end
+        .checked_sub(offset)
+        .and_then(|i| source.get(i..))
+    else {
+        return;
+    };
+    let skip = rest.len() - rest.trim_start_ws().len();
+    let pos = combinator_end + skip;
+    let after = &rest[skip..];
+    if after.starts_with("/*") {
+        record_selector_comment_error(cell, pos);
+    } else if after.starts_with(',') || after.starts_with('{') || after.starts_with(')') {
+        record_first_error(
+            cell,
+            crate::error::ParseError::svelte(
+                "css_selector_invalid",
+                "Invalid selector",
+                (pos, pos),
+            ),
+        );
+    }
+}
+
 fn record_selector_comment_error(
     cell: &std::cell::Cell<Option<crate::error::ParseError>>,
     pos: usize,
@@ -674,10 +710,14 @@ impl<'a> Parser<'a> {
                         // declaration property and stops at the first property
                         // colon on the following line. Its point diagnostic is
                         // immediately after that colon, rather than at </style>.
-                        let colon_pos = style_content.find(':').map(|pos| content_start + pos + 1);
-                        let err_pos = first_line_comment
-                            .or(colon_pos)
-                            .unwrap_or(content_start + style_content.len());
+                        // Upstream stops at whichever it reaches first, so the
+                        // earlier position wins rather than the `//`.
+                        let colon_pos =
+                            sass_stop_colon(style_content).map(|pos| content_start + pos);
+                        let err_pos = match (first_line_comment, colon_pos) {
+                            (Some(a), Some(b)) => a.min(b),
+                            (a, b) => a.or(b).unwrap_or(content_start + style_content.len()),
+                        };
                         no_rule_error = Some(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
@@ -721,8 +761,14 @@ impl<'a> Parser<'a> {
                         && !stripped.starts_with('@')
                     {
                         // Non-empty CSS content with no blocks and no at-rules - invalid
-                        let err_pos =
-                            first_line_comment.unwrap_or(content_start + style_content.len());
+                        // Upstream stops at whichever it reaches first, so the
+                        // earlier position wins rather than the `//`.
+                        let colon_pos =
+                            sass_stop_colon(style_content).map(|pos| content_start + pos);
+                        let err_pos = match (first_line_comment, colon_pos) {
+                            (Some(a), Some(b)) => a.min(b),
+                            (a, b) => a.or(b).unwrap_or(content_start + style_content.len()),
+                        };
                         no_rule_error = Some(crate::error::ParseError::svelte(
                             "css_expected_identifier",
                             "Expected a valid CSS identifier",
@@ -869,12 +915,7 @@ impl<'a> CssParser<'a> {
 
         // Read at-rule name
         let name_start = self.offset + self.index;
-        // Upstream's `read_identifier` rejects a name starting `-?\d` before reading it.
-        let leading_digit = {
-            let rest = &self.source[self.index..];
-            let rest = rest.strip_prefix('-').unwrap_or(rest);
-            rest.starts_with(|c: char| c.is_ascii_digit())
-        };
+        let leading_digit = starts_with_hyphen_or_digit(&self.source[self.index..]);
         let name = self.read_identifier();
         if leading_digit || name.is_empty() {
             record_first_error(
@@ -1573,12 +1614,14 @@ impl<'a> CssParser<'a> {
                 let rel_selector =
                     self.create_empty_relative_selector_with_combinator(comb, comb_start, comb_end);
                 result.push(rel_selector);
+                record_trailing_combinator_error(&self.error, self.source, self.offset, comb_end);
             }
         } else if let Some((comb, comb_start, comb_end)) = last_combinator {
             // Trailing combinator with no selector after it
             let rel_selector =
                 self.create_empty_relative_selector_with_combinator(comb, comb_start, comb_end);
             result.push(rel_selector);
+            record_trailing_combinator_error(&self.error, self.source, self.offset, comb_end);
         }
 
         // If no selectors were found, create one for the whole text
@@ -2154,6 +2197,68 @@ impl<'a> CssParser<'a> {
     }
 }
 
+/// Where upstream's CSS reader gives up on a block that never opens a rule.
+///
+/// Indented Sass is read as ordinary CSS, so the whole block is one selector
+/// until a `:` is followed by something `read_identifier` refuses, and the point
+/// diagnostic sits immediately after that colon — not after the first colon in
+/// the block, which is usually a pseudo-class. A `:` inside a comment or a
+/// string is not a colon, and `::` is one pseudo-element token.
+fn sass_stop_colon(content: &str) -> Option<usize> {
+    let b = content.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(b.len());
+            }
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != quote {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b':' => {
+                let mut after = i + 1;
+                if b.get(after) == Some(&b':') {
+                    after += 1;
+                }
+                if !starts_css_identifier(content.get(after..).unwrap_or("")) {
+                    return Some(after);
+                }
+                i = after;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Can `rest` begin a name `read_identifier` accepts? A leading `-` is fine
+/// (`:-moz-…`, `--custom`) unless a digit follows it, which is the
+/// `-?\d` the reader refuses outright.
+fn starts_css_identifier(rest: &str) -> bool {
+    if starts_with_hyphen_or_digit(rest) {
+        return false;
+    }
+    rest.chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '-' || c == '\\' || !c.is_ascii())
+}
+
+/// `REGEX_LEADING_HYPHEN_OR_DIGIT` — upstream's `read_identifier` refuses a name
+/// starting `-?\d` before it reads a single character of it.
+fn starts_with_hyphen_or_digit(rest: &str) -> bool {
+    rest.strip_prefix('-')
+        .unwrap_or(rest)
+        .starts_with(|c: char| c.is_ascii_digit())
+}
+
 /// Read a CSS identifier starting at `*index` in `source`, decoding escape
 /// sequences exactly the way the official `read_identifier` does.
 ///
@@ -2498,7 +2603,7 @@ impl<'a> SelectorParser<'a> {
         self.advance(); // consume first ':'
         self.advance(); // consume second ':'
 
-        let name = self.read_identifier();
+        let name = self.read_identifier_checked()?;
 
         let args = if self.current_char() == '(' {
             let args_start = self.offset + self.index + 1;
@@ -2562,24 +2667,10 @@ impl<'a> SelectorParser<'a> {
         let start = self.offset + self.index;
         self.advance(); // consume ':'
 
-        let name_start = self.offset + self.index;
-        let name = self.read_identifier();
-        if name.is_empty() {
-            // Upstream delegates the name to `read_identifier`, which throws
-            // at the byte immediately after `:` when there is no identifier.
-            // This also matters for unprocessed indented Sass: `color: red`
-            // is first read as a descendant selector, and this is its earliest
-            // syntax error rather than the eventual end of the style block.
-            record_first_error(
-                &self.error,
-                crate::error::ParseError::svelte(
-                    "css_expected_identifier",
-                    "Expected a valid CSS identifier",
-                    (name_start, name_start),
-                ),
-            );
-            return None;
-        }
+        // The empty half also matters for unprocessed indented Sass: `color: red`
+        // is first read as a descendant selector, and this is its earliest syntax
+        // error rather than the eventual end of the style block.
+        let name = self.read_identifier_checked()?;
         // Check for arguments in parentheses
         let args = if self.current_char() == '(' {
             let args_start = self.offset + self.index + 1;
@@ -3096,18 +3187,10 @@ impl<'a> SelectorParser<'a> {
             }
         }
 
-        // Upstream reads a combinator and then requires a compound after it;
-        // hitting the argument list's `)` instead is `css_selector_invalid`.
-        if last_combinator.is_some() && text[current_start..].trim_ws().is_empty() {
-            let pos = base_offset + text.len();
-            record_first_error(
-                &self.error,
-                crate::error::ParseError::svelte(
-                    "css_selector_invalid",
-                    "Invalid selector",
-                    (pos, pos),
-                ),
-            );
+        if let Some((_, _, comb_end)) = last_combinator
+            && text[current_start..].trim_ws().is_empty()
+        {
+            record_trailing_combinator_error(&self.error, self.source, self.offset, comb_end);
         }
 
         // If no selectors were found, create one for the whole text
@@ -3171,7 +3254,7 @@ impl<'a> SelectorParser<'a> {
         let start = self.offset + self.index;
         self.advance(); // consume '.'
 
-        let name = self.read_identifier();
+        let name = self.read_identifier_checked()?;
         let end = self.offset + self.index;
 
         let mut obj = Map::new();
@@ -3190,7 +3273,7 @@ impl<'a> SelectorParser<'a> {
         let start = self.offset + self.index;
         self.advance(); // consume '#'
 
-        let name = self.read_identifier();
+        let name = self.read_identifier_checked()?;
         let end = self.offset + self.index;
 
         let mut obj = Map::new();
@@ -3211,22 +3294,8 @@ impl<'a> SelectorParser<'a> {
             self.advance();
         }
 
-        // Read attribute name (identifier)
-        let name_pos = self.offset + self.index;
-        let name = self.read_identifier();
-        if name.is_empty() {
-            // Upstream reads the name with the same `read_identifier`, which
-            // rejects an empty one — there is no namespace syntax inside `[…]`.
-            record_first_error(
-                &self.error,
-                crate::error::ParseError::svelte(
-                    "css_expected_identifier",
-                    "Expected a valid CSS identifier",
-                    (name_pos, name_pos),
-                ),
-            );
-            return None;
-        }
+        // There is no namespace syntax inside `[…]`, so the name is read straight.
+        let name = self.read_identifier_checked()?;
 
         // Skip whitespace
         while !self.is_eof() && is_js_whitespace(self.current_char()) {
@@ -3398,24 +3467,11 @@ impl<'a> SelectorParser<'a> {
     /// Read the local name after a `|` namespace separator, which upstream
     /// reads with the same `read_identifier` — so an empty one is an error.
     fn read_namespaced_local_name(&mut self) -> Option<String> {
-        let pos = self.offset + self.index;
         if self.current_char() == '*' {
             self.advance();
             return Some("*".to_string());
         }
-        let local = self.read_identifier();
-        if local.is_empty() {
-            record_first_error(
-                &self.error,
-                crate::error::ParseError::svelte(
-                    "css_expected_identifier",
-                    "Expected a valid CSS identifier",
-                    (pos, pos),
-                ),
-            );
-            return None;
-        }
-        Some(local)
+        self.read_identifier_checked()
     }
 
     fn is_eof(&self) -> bool {
@@ -3472,5 +3528,28 @@ impl<'a> SelectorParser<'a> {
     /// Read a CSS identifier, decoding CSS escape sequences.
     fn read_identifier(&mut self) -> String {
         read_css_identifier(self.source, &mut self.index)
+    }
+
+    /// Upstream reads every selector name with one `read_identifier`, which
+    /// raises `css_expected_identifier` at the name's start on both of its
+    /// rules: a leading `-?\d`, and nothing readable at all. Each `.`/`#`/`:`
+    /// /`::`/`[` site here answered that question for itself, and three of them
+    /// did not ask it — so `. { }` and `.1a { }` compiled.
+    fn read_identifier_checked(&mut self) -> Option<String> {
+        let pos = self.offset + self.index;
+        let leading = starts_with_hyphen_or_digit(&self.source[self.index..]);
+        let name = self.read_identifier();
+        if leading || name.is_empty() {
+            record_first_error(
+                &self.error,
+                crate::error::ParseError::svelte(
+                    "css_expected_identifier",
+                    "Expected a valid CSS identifier",
+                    (pos, pos),
+                ),
+            );
+            return None;
+        }
+        Some(name)
     }
 }

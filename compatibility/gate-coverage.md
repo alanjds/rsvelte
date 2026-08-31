@@ -728,6 +728,39 @@ onto real positions — and **4 from the `no-dupe-on-directives` start-tag fix**
 count with changed hashes says the identity moved, and says nothing about which field did it;
 inverting the hashes is what answers that.
 
+### Blind spot 27k — a net shrink is not "nothing was added": the key carries a content hash [D]
+
+Every key ends in `[count=…,hash=…]` (or `[official=…,rsvelte=…]`), so **the same divergence
+gets a different key whenever its content changes**. A re-baseline that improves a response
+without eliminating the divergence therefore retires one key and enrols another, and a reader
+diffing the JSON sees an addition that is indistinguishable from a regression.
+
+Measured on the `20114f183` re-baseline (`origin/main` → that head), which CI accepted with all
+17 artifacts green:
+
+| | keys | units (key with the trailing `[…]` stripped) |
+|---|---:|---:|
+| main | 32,669 | 32,669 |
+| head | 32,441 | 32,441 |
+| removed | 486 | of which **254** are units still listed |
+| added | 258 | of which **254** are units already listed |
+
+So `-228` decomposes as **232 units eliminated and 4 units genuinely new** — and the 4 are one
+defect (`textDocument/diagnostic` message, two files × two phases, one `official`/`rsvelte` hash
+pair). **98% of the churn in that re-baseline is the same unit with different content**, which is
+why the key-level diff cannot be read as a verdict.
+
+Two consequences. **A shrink-only ratchet is shrink-only in its key count and says nothing about
+its composition**: `--update-baseline` writes what it measures, so a newly-broken unit enrols
+silently as long as more units left than arrived. And **the correct instrument is a set difference
+over units, not over keys** — strip the trailing bracket, then diff. Every re-baseline of this
+ratchet should publish the four numbers above, because a net shrink with a new unit inside it is
+exactly what the gate is meant to catch and exactly what it reports as a pass.
+
+This is the general form of the last paragraph of 27i, which observed that an unchanged entry
+count with changed hashes says the identity moved. The same is true of a *changed* count: the
+count is the sum of two movements and names neither.
+
 ### Blind spot 27n — the edit phase never asks a question of the document it broke [D]
 
 `edits.mjs:14` inserts an **unclosed** `{#if __rsvelte_lsp_probe}` and says why: "Unclosed on
@@ -864,6 +897,39 @@ because 1a means no gate reaches this code path with `Meaningful`.
 `result.js.map`, `result.css.map`, `result.metadata` (including the `runes` flag),
 `result.ast`. **[S]** A `metadata.runes` regression produces zero corpus signal.
 
+### Blind spot 1f — the report's line number is a position in NORMALIZED text, not in either output or the source
+
+`verify.mjs:642` builds every `js-mismatch` detail with `firstDiffLine(expJs, actJs)`, and
+`verify.mjs:566-567` defines those operands as
+`stripBlankLines(readIf(<expected|actual>/<id>/<target>.js))` — files `oxfmtTree` has already
+rewritten in place. `normalize.mjs:271-280` returns `i + 1` of the first differing line. So the
+number in a divergence report addresses the **comparison-side normalized text**, which is not
+either compiler's output and is not the `.svelte` source at all.
+
+Three things follow, and only the first is obvious:
+
+1. A report line cannot be mapped back to a source line. **[S]**
+2. `firstDiffLine` stops at the FIRST differing line, so a report shows one hunk per
+   `(id, target)` however many exist. A second cause in the same file is invisible until the
+   first is fixed. **[S]**
+3. **Where a hunk appears in the report is not evidence about codegen.** oxfmt's line breaking
+   is a function of the whole file, so a change that moves a construct across the printer's
+   width threshold renumbers every later line and can reorder which divergence is "first" with
+   no change to what either compiler emitted. **[D]** — during the 2026-08-29 cluster-E work a
+   SMUI JSDoc divergence was inferred to be a fresh regression from the report's first-diff
+   ordering; rebuilding at the merge base produced identical line counts (416/357) and the same
+   hunk, so it pre-existed. The ordering argument was invalid, not merely wrong on the facts.
+
+**Point 2 is not theoretical, and it mis-assigns work.** On 2026-08-30 three of the 19 unlisted
+failing ids were routed by the line the report printed, and all three were the wrong cause: the
+`$.mutate` "over-generation" in `adventurelog/.../LodgingDetails.svelte` was actually a missing
+`$.invalidate_inner_signals(() => { $t(); })` wrapper, and `$.event(` "line splitting" in two
+`sparrow-app` files was a **symptom** of official printing six comments inside that call. Both
+were found only by diffing the whole artifact. The reusable rule: **to attribute a divergence to
+a commit, rebuild that commit and re-measure the file — never compare two reports' line numbers
+or their hunk order.** A report answers "does this pair differ", and its coordinates answer
+nothing else.
+
 ### Blind spot 1d — the compile-option surface is one point
 
 `compile.mjs:99-100`: `{ generate, dev, filename }` plus `css: 'external'` for components.
@@ -960,6 +1026,31 @@ once-per-process is a decision rather than a drift. Note the asymmetry the issue
 only the **option** path dedupes upstream. The `<svelte:options accessors />` *tag* path is
 raised from `2-analyze/index.js` with no `warn_once` at all, so it warns on every compile in
 both compilers — and that half this gate does see.
+
+### Blind spot 2f — phase 2's `Identifier` visitor never enters a template expression's function body
+
+The gate compares whatever `result.warnings` holds, so it can only see a warning that is
+*raised*. **[D]** Instrumented on a component whose instance script and whose template each
+contain a rune read inside a nested function: `2_analyze/visitors/identifier.rs` fires **3**
+times on the instance script and **0** times on the template expression's arrow body. The
+consequence is not one missing warning — it is that **every warning class the `Identifier`
+visitor raises is unreachable in that position**, `state_referenced_locally` among them. The
+warning gates cannot distinguish "no warning is due here" from "no visitor ran here", because
+both produce an empty list and an empty list matches an empty list whenever upstream also
+stays quiet.
+
+This is recorded rather than fixed: the scope is phase 2's visitor dispatch, and it was found
+while narrowing a repro during a re-baseline window. The repro
+(`compatibility/pattern-corpus/issues/rune-local-in-a-template-function-is-not-a-plain-local.svelte`)
+was narrowed to read its runes through a closure so it does not depend on this hole, which is
+exactly why the hole needs its own row — the narrowing removed the only artifact that pointed
+at it.
+
+A second, smaller lesson from the same narrowing, worth a line because it cost a full
+four-target run to diagnose: **a `//` comment written as a note inside a repro's handler is
+compiler input.** Official prints `var // …` and swallows the rest of the line, so all four
+targets diverged on a file whose only new content was an explanatory comment. Repro notes go in
+an HTML comment or in the README row, never in a script-level `//`.
 
 ---
 
@@ -1472,6 +1563,27 @@ recorded set to shrink deliberately rather than silently. The hazard the field i
 it can also hide a real divergence; only "official's output for this target does not parse"
 justifies it, and nothing enforces that rule mechanically.
 
+**And the opt-out is written per (declaration, container) pair, so it is exactly as wide as the
+axis values its author enumerated.** `rune-statement-container` excluded
+`state-let × switch-case-bare` on the client for #3420 — a lexical rune declared bare in a `case`
+clause, which official lowers while leaving its references untransformed. The same defect applies
+to `$derived`, and **the family had no `derived-let` row at all**, so that half was neither
+excluded nor compared: it was invisible, not tolerated. **[D]** It surfaced only when a probe run
+for an unrelated fix widened the declaration axis to seven values and found official returning the
+`Derived` object itself. An exclusion is a statement about the cells that exist; the cells that do
+not exist are a separate question, and the ratchet cannot ask it.
+
+**A related discipline about the write-up rather than the gate.** An upstream defect recorded here
+is usually summarised from the first shape that reproduced it, and that summary becomes the pin.
+`grass`'s slash divergence was first written as "a nested rule whose compound selector carries
+`:not()`", which is right about the reproducer and wrong about the rule twice over — the trigger is
+the Sass `not` **keyword** followed by `(` (`:nots(`, `:xnot(`, `:is(` all agree), and the effect
+leaks to every later slash list in the file, including a top-level rule after the block. Written
+the narrow way, the pin passes on a build that fixes either half alone. **Do not write an upstream
+bug's summary until the trigger has been narrowed from BOTH sides — one input that fires it and one
+that removes each condition and does not.** A one-sided summary does not merely under-describe; as
+a pin it manufactures green.
+
 ### Blind spot 5n — `constant-fold` compares text, so it cannot see what the folded code *does*
 
 Family `constant-fold` (17 expression kinds × 15 `EXPRESSION_SLOTS`, plus 2 `const`
@@ -1589,6 +1701,19 @@ What `write-host` still does not vary, so it is not read as more than it is: one
 arrow through one prop name, and the write is always a member expression — a bare
 `p = p + 1` reassignment is `binding-position`'s `assignment.right` row and is not repeated
 here. **[S]**
+
+**And the same confounding recurs one level down, in the hand-written shadow grids rather than in
+this family.** The client's `reference_is_plain_local` veto — "does this write target resolve to
+the component's binding or to a shadow" — was measured by ablation over a 24-cell grid crossing
+the shadow's HOST (instance function, template handler, each-block handler) with the WRITE SHAPE
+(`=`, `++`, `--`, member vs bare). Removing the veto moved **6** cells, and all six are prop
+bindings: `$bindable()` and legacy `export let`. A `$state` shadowed by a local and an each item
+shadowed by a local moved **0** cells in both directions, because `context.state.transform` only
+carries an entry for a prop — so those rows reach the veto and cannot discriminate it. The
+grid therefore measures the veto's reach for one binding kind and is **unmeasured** for the
+others; crossing shadow × write shape with shadow × **binding kind** is what would size it. Same
+lesson as this section's: the thing varied has to be crossed with the thing held fixed, not
+merely adjacent to it. **[D]** for the prop rows, **unmeasured** for the rest.
 
 ### Blind spot 5r — every gate compares rsvelte to ONE pinned oracle, so a defect the oracle shares is invisible everywhere
 
@@ -1994,9 +2119,30 @@ Positive control that a ceiling is the house pattern where someone thought about
 `fmt.mjs:170`. **[S]** `.svelte.js` / `.svelte.ts` files are never formatted or compared here,
 and neither are standalone `.css` / `.scss` / `.less` files.
 
-**Note on exclusions:** `fmt-oracle-excluded.json` holds 29 entries, each with a written
-justification, partitioned by the JSON's own `class` field (16 oracle-bug, 7 engine-divergence,
-4 invalid-input, 2 migrate). This is a *small, justified* set — noted
+### Blind spot 9d — the gate never asks whether rsvelte's own output is still a Svelte document
+
+The unit is byte equality against the oracle (`fmt-verify.mjs:102`), so a mismatch is one
+verdict whether the actual text differs by a two-space indent or is not parseable at all.
+**[D]** Compiling both sides' formatted output with the official compiler across all 788 listed
+entries (2026-08-31) finds **1** whose rsvelte-fmt output `compile()` rejects, against 0 for the
+oracle: `sveltepress/…/icons/SystemDefault.svelte`, where rsvelte-fmt **duplicates a leading
+HTML comment and truncates the copies**, dropping their `-->` and swallowing the rest of the
+markup (`expected_token`). It had been sitting in `fmt-known-failures.json` as one ordinary
+entry since the wave-2 enrolment. The same check over `fmt-oracle-excluded.json` finds 0. The
+reduction and the three jointly-required ingredients are in `fmt-known-failures.md`.
+
+The severity half of the same blind spot: of those 788, **674 are render-neutral** (the compiler
+emits byte-identical JS *and* CSS from either form) and **114 change what the compiler emits**.
+The gate cannot separate them, so 86% taste and 14% semantics ratchet under one key —
+the *ratchet entry suppresses everything its key cannot tell apart* rule, one level up from
+the matrix gate, which solved the same problem by splitting `output-unparseable` and
+`comment-mismatch` out of `js-mismatch` (section 5). **Closing 9d:** run
+`parseable.mjs`-style acceptance on the actual side and emit it as its own verdict. Cost:
+one compile per failing entry, i.e. per ratchet entry, not per corpus component.
+
+**Note on exclusions:** `fmt-oracle-excluded.json` holds 27 entries, each with a written
+justification, partitioned by the JSON's own `class` field (15 oracle-bug, 7 engine-divergence,
+3 invalid-input, 2 migrate). This is a *small, justified* set — noted
 here so it is not mistaken for a blind spot. Its staleness check is `console.warn` only
 (`fmt-verify.mjs:110-126`).
 
@@ -2874,6 +3020,41 @@ hash-ranked sample fills the rest, so the sample goes 1500 → 1637 (+9%) and a 
 repro mutation-tests it. **Still open for the rest of the corpus** — a submodule bump that
 introduces a new real-world file is the same lottery, and there is no cheap fix, because
 "newly added" is a diff against the merge base rather than a property of the manifest.
+
+### Blind spot 20g — `eligible` is drawn from a ratchet whose comparison ignores the one dimension this gate measures [D]
+
+`eligible` is `manifest ∖ (union of the four output ratchets)` (`:145-152`), because a seed that
+diverges *unmutated* cannot attribute a mutant. The intent is right; the source is not. Gate 1
+falls back to `ast_equiv_batch` with **comments ignored** (`verify.mjs:588`, "The empty argv is
+load-bearing"), so a component whose only divergence is a comment scores `match` there and is
+**correctly** unlisted. This gate, however, splits `comment-mismatch` out as its own class. A
+comment-divergent seed is therefore **guaranteed** to pass the eligibility filter and
+**guaranteed** to be unattributable here — systematically, for the whole `comment-mismatch`
+class, not marginally.
+
+**[D]** Measured 2026-08-31 with the gate's own comparison and no comment inserted:
+**116 match / 6 comment-mismatch over the 38 enrolled seeds**, the divergence coming from
+**2 seeds** — `layerchart/…/layers/Canvas.svelte` (all four targets) and
+`open-webui/…/NotebookView.svelte` (client, client-dev). So **6 of the 14 residual
+`comment-mismatch` pairs are not attributable to the mutation at all**; no change to comment
+handling can move them. Running gate 1's own `ast_equiv_batch` over those six pairs plus a third
+file found the same way (`svelthree/…/AmbientLight.svelte`, client) returns **`equivalent` for
+every one** — all three are comment-only, which is exactly why none is listed.
+
+Two things follow. Reducing `Canvas.svelte` gives a 12-line hand-reproducible defect — a
+template-expression function body containing only a comment loses the comment in client output,
+across all seven template slots, with a body containing one statement as the passing control —
+so the seeds are diverging for a real reason that **no output ratchet can express**. And the fix
+for this blind spot is not "the output ratchet's population has a hole": it is that a filter must
+be drawn from a comparison that sees what the gate compares. Run each seed **unmutated** once
+under *this* gate's own comparison and exclude the ones that already diverge; cost is one extra
+compile per seed.
+
+**A note on how this row was nearly written wrong.** The first version claimed the population had
+a hole, on the argument that "oxfmt does not delete comments, so the divergence cannot be a
+normalization artifact". That argument is sound and rules out the *normalizer* — and says nothing
+about the *comparator*, which is a different stage that ignores comments by design. Eliminating
+one candidate is not confirming another.
 
 ---
 
@@ -4549,6 +4730,104 @@ measurement of a configuration in which the changed code does not execute.
 **What is still unmeasured `[U]`:** the rest of the flag surface. `dev` is covered
 (`--dev` exists), but `hmr`, `css`, `discloseVersion` and the `runes` override are set by
 callers and pinned by the runner, and no one has enumerated which of them gate work.
+
+## 41. Signal discipline — `scripts/compat-corpus/signal-discipline-verify.mjs`
+
+**Unit.** One `(corpus entry, client mode)` compile, 34,728 x 2 of them. Like §37, nothing is
+compared against official: the gate asserts a **property of the generated program**. Every
+`$.set` / `$.get` / `$.mutate` / `$.update` / `$.update_pre` / `$.increment` must take a first
+argument the same program did not declare as an ordinary value, and every `name(<assignment>,
+true)` prop write must have a callee initialised from `$.prop` / `$.rest_props`. Violations are
+printed, never panicked — release is `panic = "abort"`. Implemented in
+`3_transform/client/signal_discipline.rs`, run by the `Signal discipline` step of
+`corpus-compat.yml` (and `pnpm run corpus:signal-discipline`). Hard gate, no ratchet.
+
+The harness refuses a verdict three ways, because each failure mode reads exactly like a pass:
+without `RSVELTE_ASSERT_SIGNAL_DISCIPLINE` it exits 2 rather than sweeping a compiler that cannot
+report; below 1000 manifest components it exits 2; and without the compiler's own
+`RSVELTE_SIGNAL_DISCIPLINE_ARMED` line it exits 2, because a binding predating the check prints
+nothing at all.
+
+**Why it exists.** `two-ports-inventory.md` row 21: upstream resolves a write target once through
+`scope.get`, and 32 of rsvelte's 44 `*_ast.rs` passes compare identifier *text* against a
+`Vec<String>`, so each one answers the shadow question separately. Output equality only finds
+such a pass where a collected file happens to carry the shape *and* the file diverges on nothing
+else — and the live instance this gate found,
+`sparrow-app/…/TeamSidePanel.svelte`, is a listed entry on all three output ratchets for two
+unrelated divergences, so no output gate could have reported it.
+
+**[D] and positive control.** Ablating the five shadow guards in
+`{state_member_mutate,state_set_reactive,reactive_update,prop_member_mutate}_ast.rs` and
+recompiling this row's two repros reports all six wrong writes; restoring them (and `touch`ing the
+files, or cargo serves a stale binary) reports none. That control is not decoration — **the first
+formulation of this property passed the ablation while reporting nothing**, because it skipped
+every function parameter as unknown provenance and the defect's own container is a parameter.
+
+| tree | violations |
+|---|---|
+| guards ablated, 2 repro files | 6 |
+| `try_transform_assignment`'s bail ablated, 67,612 corpus units | 2 (1 unit, exit 1) |
+| this tree, 67,612 corpus units | 0 (exit 0) |
+
+The middle row is the harness's own positive control: restoring the guard and `touch`ing the file
+(cargo will otherwise serve a stale binary and the green reads as a pass) returns the run to 0 with
+the source byte-identical.
+
+**What it cannot see `[S]`.**
+
+- **The read side.** A read has no sink. In the same handler as the fixed write,
+  `items.selected = data` emitted `items(items().selected = data(), true)` where official emits
+  `data`, because the RHS is transformed eagerly with an empty `LocalScope`. That instance is
+  fixed; the class is still structurally outside this gate, and it was found by reading the write
+  fix rather than by running the gate.
+- **Server output.** The check runs at the two `client/mod.rs` codegen return sites only, so the
+  server's own ports of the same passes are ungated by it. That is a discriminating case, not an
+  argument: `server/ast/read_wrap.rs` never collected a `catch` clause or a loop head into its
+  shadow frame, so `catch (v) { v.n = 2 }` emitted `v().n = 2` and `for (let v = 0; v < 2; v++)`
+  emitted `for (let v = 0; v() < 2; $.update_derived(v))` — a runtime helper called on a loop
+  counter — while this gate was green on the identical sources, whose client output was correct.
+- **A `const`, and a non-literal initialiser.** Both are excluded because upstream's own output
+  contains them (`const st = 1` beside `$.set(st, …)` in a generated accessor; `let i = $$index_4`
+  receiving a signal through a parameter). A defect that lands on either shape is invisible here.
+- **A parameter of a function passed directly to a runtime helper**, for the same reason: an
+  each-block item and index really are signals.
+- **Everything a name-keyed pass gets wrong that is not a signal write.** The property is about
+  two kinds of call, not about the 32 passes; a pass that mis-claims an identifier in a read, a
+  declaration or a hoist produces no violation.
+
+**What is unmeasured `[U]`.** Whether the two rules above are the only exclusions upstream's
+output forces. They were derived from the 9 violations the first corpus run produced, which is a
+sample of one tree's output, not an enumeration of the shapes upstream emits.
+
+## 42. Deliberate-divergence pinning — `scripts/dev/deliberate-divergences-check.mjs`
+
+**Unit.** One `## ` section of `compatibility/deliberate-divergences.md`, 11 of them. The check is
+that each names at least one repository path that (a) exists on disk and (b) is a test — under a
+`tests/` directory, in `compatibility/pattern-corpus/`, or a `scripts/**/test-*.mjs` harness.
+Run by `ci.yml`'s `Corpus verify baseline-flag contract` job and `pnpm run
+test:deliberate-divergences`; it reads only the document and the filesystem, so it needs no
+corpus, no submodules and no build. Hard gate, no ratchet.
+
+**Why it exists.** A recorded deliberate divergence is a decision *not* to close a difference, and
+`known-failures-md-check.mjs` (C2) never interprets a justification — so until this, a section
+could describe behaviour nothing re-checks, and a later refactor would change the behaviour while
+the document went on asserting the old one. Ratchet entries are attributed *to* this document, so
+an unpinned section makes every entry attributed to it unverifiable too.
+
+**[D] and positive control.** Replacing one section's `**Pinned by** …` citation with prose makes
+the check exit 1 naming that section and its line; restoring it leaves `git diff` empty and the
+check green at 11/11. Its first real run also found the boundary the checker itself had wrong: the
+section pinned by `scripts/dev/test-lint-severity-exit-attribution.mjs` was reported as unpinned,
+because the first pin predicate demanded a `tests/` directory. **A derived classifier needs its own
+control** — the shape had to be read off the tree, not assumed.
+
+**[S] What it does not look at.** Three things, all of them the same shape as C2's. It never runs
+the pin, so a test that no longer exercises the divergence — or one whose assertion was weakened to
+whatever the code now does — passes. It never checks that the pin is *about* the section: any
+existing test path in the section's body satisfies it, including one cited as background. And it
+has no view of the reverse direction, a divergence that is real and **not** recorded here at all;
+that population is bounded only by the ratchets whose `.md` attributes entries to this document,
+and today only 6 of 31 ratchet docs make any such attribution.
 
 ## Adding a gate, or a row here
 

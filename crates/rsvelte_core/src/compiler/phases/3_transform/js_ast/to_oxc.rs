@@ -111,6 +111,33 @@ impl<'a> VisitMut<'a> for SpanEraser {
     }
 }
 
+/// Upstream's legacy dependency thunk is `b.thunk(b.sequence(deps))` and carries
+/// no `loc`, so no comment is ever written into it. rsvelte generates the call
+/// as text and appends it after the rest of the body, so re-parsing gives the
+/// thunk coordinates PAST a script-tail comment run — which then prints inside
+/// it. The effect body keeps its coordinates: it is the half upstream locates.
+fn unlocate_legacy_pre_effect_deps(stmts: &mut [Statement<'_>]) {
+    for stmt in stmts {
+        let Statement::ExpressionStatement(es) = stmt else {
+            continue;
+        };
+        let Expression::CallExpression(call) = &mut es.expression else {
+            continue;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            continue;
+        };
+        if !matches!(&member.object, Expression::Identifier(id) if id.name == "$")
+            || member.property.name != "legacy_pre_effect"
+        {
+            continue;
+        }
+        if let Some(deps) = call.arguments.first_mut() {
+            SpanEraser.visit_argument(deps);
+        }
+    }
+}
+
 /// A retained source program to clone into the final OXC allocator.
 pub struct AstIsland<'source> {
     pub program: &'source RetainedProgram<'source>,
@@ -1831,6 +1858,11 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                     } else {
                         *e.span_mut() = span;
                     }
+                    // esrap brackets a body's comments by the body's own `loc`,
+                    // and `consumed` leaves that `SPAN` for a body that appended
+                    // nothing to the comment buffer — which is every body whose
+                    // only content is a comment.
+                    anchor_empty_body(&mut e, span);
                 }
                 Some(e)
             }
@@ -1995,6 +2027,7 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
         for stmt in &mut stmts {
             shifter.visit_statement(stmt);
         }
+        unlocate_legacy_pre_effect_deps(&mut stmts);
         // The padded re-parse put the chunk one byte in, so its spans sit at
         // `shift + 1` relative to the stripped text.
         seal_removed_inspect_empties(&mut stmts, &text, &sealed_at, shift + 1);
@@ -2917,6 +2950,32 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
             out.push(argument);
         }
         Some(out)
+    }
+}
+
+/// Give a function body claiming no comment-buffer range the anchored span, so
+/// the printer's end-of-body comment flush is reachable.
+fn anchor_empty_body(e: &mut Expression<'_>, span: Span) {
+    match e {
+        Expression::ArrowFunctionExpression(arrow) => {
+            if let ArrowFunctionBody::FunctionBody(body) = &mut arrow.body
+                && body.span == SPAN
+                && body.statements.is_empty()
+                && body.directives.is_empty()
+            {
+                body.span = span;
+            }
+        }
+        Expression::FunctionExpression(func) => {
+            if let Some(body) = &mut func.body
+                && body.span == SPAN
+                && body.statements.is_empty()
+                && body.directives.is_empty()
+            {
+                body.span = span;
+            }
+        }
+        _ => {}
     }
 }
 

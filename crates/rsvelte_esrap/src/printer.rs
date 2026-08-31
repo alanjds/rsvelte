@@ -3528,8 +3528,11 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     #[allow(clippy::too_many_lines)]
     fn print_expression(&mut self, expr: &Expression, ctx: &mut Context<DIRECT>) {
         // esrap's `_` wildcard: emit comments positioned before this node first.
+        // acorn elides parentheses, so the node whose start bounds that flush is
+        // the expression INSIDE them — bounding it at the `(` puts a comment that
+        // precedes the parens on the same line as the operand it opens.
         let span = expr.span();
-        let start = span.start;
+        let start = unparen(expr).span().start;
         self.flush_leading(ctx, start);
         if HAS_COMMENTS
             && DIRECT
@@ -4007,6 +4010,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     fn static_member(&mut self, node: &StaticMemberExpression, ctx: &mut Context<DIRECT>) {
         self.member_object_with_parens(&node.object, ctx);
         ctx.write(if node.optional { "?." } else { "." });
+        // Upstream reaches the property through `context.visit`, which performs
+        // the leading flush; `write_node` only emits locations.
+        self.flush_leading(ctx, node.property.span.start);
         self.write_node(ctx, node.property.span, node.property.name.as_str());
     }
 
@@ -4240,6 +4246,9 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
             },
             |p, el, child| match el {
                 ArrayExpressionElement::SpreadElement(s) => {
+                    // The element is reached by `visit` upstream, so its leading
+                    // comments are flushed before `...`, not before the operand.
+                    p.flush_leading(child, s.span.start);
                     child.write_ascii_bytes(b"...");
                     p.print_expression(&s.argument, child);
                 }
@@ -4421,6 +4430,7 @@ impl<'opt, const HAS_COMMENTS: bool, const DIRECT: bool> Printer<'opt, HAS_COMME
     fn print_argument(&mut self, arg: &Argument, ctx: &mut Context<DIRECT>) {
         match arg {
             Argument::SpreadElement(spread) => {
+                self.flush_leading(ctx, spread.span.start);
                 ctx.write_ascii_bytes(b"...");
                 self.print_expression(&spread.argument, ctx);
             }

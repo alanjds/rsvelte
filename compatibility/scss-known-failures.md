@@ -84,24 +84,83 @@ Each cluster section below closes with the files that carried it **when the ratc
 entries**. Those lists are kept as the worked examples that named the mechanism; they are no
 longer the cluster's membership, which is now the counts in the table above.
 
-## Cluster 1 — colour serialisation
+## What the 315 entries are, measured
+
+The clusters below were written by reading the first differing line of each unit, which is what
+`--list` prints. That answers "what does the text differ in", not "can it change rendering" — and
+the two come apart: a colour printed as `rgba(86, 86, 92, 0.1019607843)` on one side and
+`#56565c1a` on the other is the same colour, while a declaration that merely *moved* is a cascade
+change with no textual smell at all. The split below is computed instead of read:
+
+`scripts/compat-corpus/scss-classify.mjs` parses both CSS outputs and flattens each to a list of
+`(selector chain, property, value)` in document order; values are normalised for whitespace,
+quoting and **colour** (every `#hex` of 3/4/6/8 digits, `rgb()/rgba()`, `hsl()/hsla()` with or
+without `deg`, and the named colours are folded to one `rgba(r,g,b,a)` spelling, RGB channels
+rounded to 8 bits and alpha to four decimals — that rounding is the tolerance, and it is what
+makes dart-sass's `rgb(100%, 41.3333333333%, 20%)` equal to `grass`'s `#ff6933`). Then
+
+- **equal lists** → the divergence cannot change rendering;
+- **equal multisets, different order** → the cascade changes;
+- **different content** → a value differs.
+
+| class | n | meaning |
+|---|---|---|
+| render-neutral | **155** | comments, whitespace, quote style, colour spelling |
+| order-differs | **59** | the `mixed-decls` class — a declaration written after a nested rule |
+| content-differs | **2** | a genuinely different value |
+| `grass` rejects an accepted input | **99** | five causes, each with an `upstream_issues/` report |
+
+Run the same classification with colour folding **off** (drop `CANON_COLORS=1`) and it reads
+111 / 51 / 54: the 44 units that move are all colour spelling, with identical computed colours.
+Both numbers are reported because "cosmetic" is a line someone drew, and this is where it sits.
+
+The flattener is hand-rolled rather than postcss, so the script needs no dependency this
+repository does not already declare. It was written against a postcss implementation and agrees
+with it on **216 of 216** rows under both colour settings; that agreement is the control, since a
+flattener that silently dropped nodes would report everything as render-neutral.
+
+## The two `content-differs` units are real, and one ships broken CSS
+
+```
+musicat/src/App.svelte#style0
+  dart-sass:  grid-row: 2/5   grid-row: 2/5   grid-column: 1/5
+  grass:      grid-row: 0.4   grid-row: 0.4   grid-column: 0.2
+```
+
+`grid-row: 0.4` is not a valid value, so the browser drops the declaration — this is the only
+entry in the ratchet that produces output a browser rejects. **Three** declarations in that file
+are corrupted, not the one the ratchet's first differing line shows.
+
+**The obvious reduction is wrong, and it fails in the direction that reads as a fix.** "`grass`
+evaluates `2/5` as division" describes nothing: the two agree on `a { grid-row: 2/5 }`, on the
+same rule inside `@media`, on `$n/5` (both divide, dart-sass with a `slash-div` warning) and on
+`calc(2/5)` (both fold to `0.4`). The trigger is the Sass **`not` keyword followed by `(`**, in a
+rule **nested inside another rule** — `:nots(`, `:xnot(`, `:is(`, `:and(`, a bare `:not` with no
+paren, and `:not(` at the top level all keep the list. And the corrupted declaration need not be
+the one under `:not` at all: **once triggered, every later slash list in the file divides** —
+a sibling rule, the parent rule, a deeper rule, and a rule after the whole nested block. That is
+why the ratchet's count understates it and why the pin asserts four positions rather than one.
+See
+[`upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md`](../upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md).
+
+The second `content-differs` unit is
+`carbon-components-svelte/.../tabs/_tabs.scss`, where the universal-selector reset rule
+(`.bx--tabs *, .bx--tabs *::before, .bx--tabs *::after { box-sizing: inherit }`) lands in a
+different place.
+
+## Cluster 1 — colour serialisation (part of the 155)
 
 dart-sass ≥ 1.79 serialises a computed colour in the space its channels were computed in, so
 `color.adjust` / `lighten` / `darken` results print as `rgb(92.6666666667%, …)` and
 `rgba(255, 64, 0, 0.6117647059)`. `grass` prints the legacy shortest form — `#ececec`,
 `#ff40009c`, `darkgray`.
 
-**Same colour, different spelling.** These are cosmetic: no rendered pixel changes. They are still
-listed rather than normalised away, because a normaliser that folds every colour form would also
-fold a genuine colour-arithmetic divergence, which is precisely the class this gate exists to
-catch.
+**Same colour, different spelling**, confirmed by folding both to `rgba()` above: no rendered
+pixel changes. They are still listed rather than normalised away in the gate, because a normaliser
+that folds every colour form would also fold a genuine colour-arithmetic divergence, which is
+precisely the class this gate exists to catch.
 
-`attractions/{checkbox/checkbox,chip/checkbox-chip,chip/radio-chip,date-picker/calendar,
-date-picker/date-picker,popover/popover-button,radio-button/radio-button,slider/slider,
-snackbar/snackbar,star-rating/star-rating,tab/tab,time-picker/time-picker}.scss`,
-`svelte-formly/src/lib/components/fields/AutoComplete.svelte#style0`
-
-## Cluster 2 — declarations after nested rules
+## Cluster 2 — declarations after nested rules (the 59)
 
 ```scss
 .btn {
@@ -115,13 +174,15 @@ second `.btn { background: none; … }` block after the nested rules. `grass` st
 the first block.
 
 **This one changes the cascade**, so it is not cosmetic: a hoisted declaration loses to a
-nested-rule declaration it was written to win against. It is the highest-value entry in this
-ratchet and the reason the gate was worth building.
+nested-rule declaration it was written to win against. It is the highest-value cluster in this
+ratchet and the reason the gate was worth building. Reported in
+[`upstream_issues/grass-hoists-a-declaration-written-after-a-nested-rule.md`](../upstream_issues/grass-hoists-a-declaration-written-after-a-nested-rule.md).
 
-`attractions/{autocomplete/autocomplete-field,autocomplete/autocomplete,button/button,
-file-input/file-input,text-field/text-field}.scss`,
-`powertable/app/src/lib/styles/power-table.scss`,
-`svelte-splitpanes/src/lib/Splitpanes.svelte#style0`
+The `.md` used to list seven files here. After the wave-2 enrolment the class is **59** units and
+its centre of mass moved: `carbon-components-svelte` 38, `attractions` 7, `mathesar` 5, `musicat`
+3, `networking-toolbox` 2, and one each from `appwrite-console`, `date-picker-svelte`, `huly` and
+`powertable`. Sizing a cluster from the file list a pre-enrolment run happened to print
+understates it by an order of magnitude.
 
 ## Cluster 3 — `grass` panics on the indented syntax
 
@@ -131,28 +192,37 @@ Every `lang="sass"` block in `date-picker-svelte` aborts `grass` with an asserti
 **A panic, not an error, and `catch_unwind` cannot contain it** — the release profile aborts
 rather than unwinds, so the helper announces each unit's index on stderr and the gate resumes past
 whichever one it died on. The shipped `preprocess_sass` has no such recovery, so an indented-syntax
-block of this shape takes the whole compiler process down. Fixing this belongs upstream in `grass`
-or in a guard on our side; either way it is the entry to burn down first.
+block of this shape takes the whole compiler process down.
 
-`date-picker-svelte/src/lib/{DateInput,DatePicker,TimePicker}.svelte#style0`,
-`date-picker-svelte/src/routes/{+layout,prop,split}.svelte#style0`
-
-## Cluster 4 — comment preservation
+## Cluster 4 — comment preservation (part of the 155)
 
 `grass` drops a trailing `/* … */` that follows a declaration on the same line, and rewrites the
 leading tab of a continuation line inside a preserved multi-line comment to a single space.
 Comments survive into shipped CSS, so this is an output difference a consumer can see, but it
-changes no rule.
+changes no rule — the flattening above ignores comment nodes, and these units land in
+`render-neutral` for that reason.
 
-`svelte-splitpanes/src/routes/examples/styling/{app-layout,splitters}/code.svelte#style0`,
-`svelte-formly/src/routes/__layout.svelte#style0`
-
-## Cluster 5 — multi-line selector indentation inside `@media`
+## Cluster 5 — multi-line selector indentation inside `@media` (part of the 155)
 
 A selector list that wraps across lines inside an `@media` block keeps the block's indentation on
 every line under dart-sass; `grass` indents only the first.
 
-`attractions/attractions/pagination/pagination.scss`
+## The 99 `grass` rejections are five causes, each minimally isolated
+
+| n | cause | report |
+|---|---|---|
+| 35 | the CSS Color 4 `sass:color` API (`color.channel`, `color.space`, `color.to-space`, `color.is-in-gamut`, `color.same`) is missing | [`grass-missing-css-color-4-api.md`](../upstream_issues/grass-missing-css-color-4-api.md) |
+| 32 | a `*.import.scss` file is resolved from `@use` / `@forward`, so the `@import` shim walks back into the module being loaded | [`grass-import-only-file-loaded-by-use.md`](../upstream_issues/grass-import-only-file-loaded-by-use.md) |
+| 28 | a specifier carrying an explicit `.scss` extension does not resolve | [`grass-explicit-extension-specifier.md`](../upstream_issues/grass-explicit-extension-specifier.md) |
+| 3 | CSS Color 4 relative colour syntax is parsed as a Sass `rgb()` call | [`grass-css-color-4-relative-syntax.md`](../upstream_issues/grass-css-color-4-relative-syntax.md) |
+| 1 | Tailwind's `!`-prefixed utility inside `@apply` | [`grass-tailwind-important-apply.md`](../upstream_issues/grass-tailwind-important-apply.md) |
+
+Every one was reduced to a file pair small enough to paste into a report, rather than attributed
+from the error string. That mattered twice. The 28 look like a load-path problem in **our** shim
+until the probe shows `@use "./vars"` succeeding and `@use "./vars.scss"` failing on the same
+directory — the extension is the whole trigger. And the 32 are not a loop in the corpus's
+stylesheets at all: deleting the sibling `_functions.import.scss` turns five otherwise-identical
+cases green and restoring it turns all five red, which is the ablation that names the cause.
 
 ## Running it
 
@@ -166,3 +236,21 @@ node scripts/compat-corpus/scss-verify.mjs --update-baseline
 Both backends are version-pinned so the ratchet is reproducible: `sass` 1.102.0 in the root
 `devDependencies`, `grass` 0.13.4 in `crates/rsvelte_preprocess/Cargo.toml`. Bumping either is
 expected to move entries; re-baseline in the same PR and update the cluster counts above.
+
+## Attribution
+
+Attribution of `scss-known-failures.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 155 | `deliberate-divergences` | render-neutral serialisation — colour spelling, comment placement, wrapped-selector indentation, quote style. Pinned by `crates/rsvelte_preprocess/tests/grass_serialisation.rs`. |
+| 59 | `upstream_issues/grass-hoists-a-declaration-written-after-a-nested-rule.md` | a declaration written after a nested rule is hoisted above it — the `mixed-decls` class, and the only css-mismatch cluster that changes the cascade |
+| 35 | `upstream_issues/grass-missing-css-color-4-api.md` | the CSS Color 4 `sass:color` API is missing, so the input does not compile |
+| 32 | `upstream_issues/grass-import-only-file-loaded-by-use.md` | a `*.import.scss` file is resolved from `@use` / `@forward` |
+| 28 | `upstream_issues/grass-explicit-extension-specifier.md` | a specifier carrying an explicit `.scss` extension does not resolve |
+| 3 | `upstream_issues/grass-css-color-4-relative-syntax.md` | relative colour syntax is parsed as a Sass `rgb()` call |
+| 2 | `upstream_issues/grass-slash-list-divided-inside-a-nested-rule.md` | a slash list divides after a `not(`-shaped pseudo-class in a nested rule; `grid-row: 0.4` is CSS a browser drops |
+| 1 | `upstream_issues/grass-tailwind-important-apply.md` | Tailwind's `!`-prefixed utility inside `@apply` |
+
+The split is the computed classification of § *What the 315 entries are, measured* (155 / 59 / 2)
+plus the five `grass-rejects-accepted` causes (99), not a second reading of the same units.

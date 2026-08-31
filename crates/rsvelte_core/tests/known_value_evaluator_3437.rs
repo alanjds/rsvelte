@@ -115,13 +115,16 @@ fn a_const_tag_over_void_of_an_unknown_operand_is_known() {
 
 /// The template-fold path used to have its own recursive evaluator after the
 /// `{@const}` path had moved to the shared one. A direct read therefore pins
-/// the second caller: `void p` has one result even though `p` is unknown.
+/// the second caller: `void p` has one result even though `p` is unknown, so
+/// the chunk contributes nothing and no `template_effect` is emitted.
 ///
-/// The expectation is upstream 5.56.10's own output for this source. Knowing the
-/// value does not buy the `textContent` shortcut — upstream gates that on
-/// `has_state` / `has_await` / `has_blockers()` alone, and the expression has a
-/// call in its metadata, so the text node stays and is written through
-/// `nodeValue`.
+/// It also pins where that fold is NOT allowed to reach. Upstream decides the
+/// `textContent` shortcut from `metadata.expression.has_state` alone, which
+/// `Identifier.js` sets per IDENTIFIER — `p` is a prop, so the tag has state
+/// however known the whole expression is. Only `build_template_chunk` consults
+/// the fold, and it runs after that decision, so the element keeps its text
+/// node. The `{@const}` case above differs because there the tag is a read of
+/// `c`, and a known `{@const}` initializer makes that one identifier known.
 #[test]
 fn a_direct_void_of_an_unknown_operand_folds_to_undefined() {
     let out = client("<script>\n\tlet { p } = $props();\n</script>\n<b>x{void p}</b>\n");
@@ -131,7 +134,7 @@ fn a_direct_void_of_an_unknown_operand_folds_to_undefined() {
     );
     assert!(
         out.contains("$.from_html(`<b> </b>`)"),
-        "upstream keeps the text node here; got:\n{out}"
+        "a prop-reading tag keeps the text node placeholder; got:\n{out}"
     );
     assert!(
         !out.contains("template_effect"),
