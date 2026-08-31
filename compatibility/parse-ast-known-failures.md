@@ -125,9 +125,13 @@ itself; `ExportNamedDeclaration.attributes` is an extra `[]` that official omits
 `ObjectExpression` node; official emits the evaluated bag, `{ p: { reflect: true } }`. The `#extra`
 and `#missing` keys are the two halves of that one substitution.
 
-**D. `Let.modifiers` is one omitted empty array (1 base, legacy only).** Official emits
-`modifiers: []` on a `let:` attribute; rsvelte omits the field. Reproduced on both
-`<svelte:fragment let:x>` and a component `let:`.
+**D. `Let.modifiers` is one omitted empty array (1 base, legacy only) — FIXED, awaiting a
+re-baseline.** Official emits `modifiers: []` on a `let:` attribute; `convert_let_directive` was
+the one of eight directive converters that omitted it. Reproduced on both `<svelte:fragment
+let:x>` and a component `let:`, and pinned by
+`pattern-corpus/issues/let-directive-carries-an-empty-modifiers-array.svelte`. A 4,898-unit x
+2-axis parse sweep removes exactly this one distinct key and adds none; `compile()` output is
+byte-identical on all four targets, so this base was observable through no other gate.
 
 **E. `ExpressionStatement.directive` — the statement is dropped (1 base).** A `'use strict';`
 directive in an instance script does not appear in `Program.body` at all, so official's body has
