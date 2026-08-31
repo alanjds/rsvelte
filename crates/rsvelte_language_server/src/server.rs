@@ -4413,3 +4413,30 @@ mod start_tag_tests {
         assert!(!at("<Comp a >", "<Comp a"));
     }
 }
+
+#[cfg(test)]
+mod merge_tsgo_result_tests {
+    use super::merge_tsgo_result;
+    use serde_json::json;
+
+    fn merged_is_incomplete(tsgo: bool, ours: bool) -> bool {
+        let mut result = json!({ "isIncomplete": tsgo, "items": [{ "label": "a" }] });
+        merge_tsgo_result(
+            "textDocument/completion",
+            &mut result,
+            json!({ "isIncomplete": ours, "items": [{ "label": "b" }] }),
+        );
+        assert_eq!(result["items"].as_array().unwrap().len(), 2);
+        result["isIncomplete"].as_bool().unwrap()
+    }
+
+    // `PluginHost.ts:278-281` ORs the flag over the contributing plugins, so a
+    // constant — in either direction — is wrong on one of these four rows.
+    #[test]
+    fn is_incomplete_is_ored_over_both_contributors() {
+        assert!(!merged_is_incomplete(false, false));
+        assert!(merged_is_incomplete(true, false));
+        assert!(merged_is_incomplete(false, true));
+        assert!(merged_is_incomplete(true, true));
+    }
+}

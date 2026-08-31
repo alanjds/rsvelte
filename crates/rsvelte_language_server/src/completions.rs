@@ -11,7 +11,7 @@ use lsp_types::{
 use crate::context::{
     EmbeddedRegions, StartTag, attribute_context, is_component_tag, start_tag_context,
 };
-use crate::html_data::{STANDARD_TAGS, TAGS, attributes};
+use crate::html_data::{self, provider};
 use crate::modifiers::MODIFIERS;
 use crate::tags::{SvelteTag, latest_opening_tag};
 use crate::text::LineIndex;
@@ -69,7 +69,12 @@ fn build_completions(
     let before = preceding(text, offset);
 
     if let Some(prefix) = tag_prefix(text, offset) {
-        return Some(html_tag_completions(prefix, markdown_documentation));
+        return Some(html_tag_completions(
+            text,
+            offset,
+            prefix,
+            markdown_documentation,
+        ));
     }
 
     if let Some((element_tag, replace)) = match start_tag_context(text, offset) {
@@ -170,8 +175,13 @@ fn html_attribute_completions(
     strict_mode: bool,
     markdown: bool,
 ) -> CompletionList {
-    // `htmlCompletion.js:205-213` also skips a name the tag already carries;
-    // that dedup is not ported, so a written attribute is still offered.
+    // `seenAttributes` (`htmlCompletion.js:205-213`) is a single map, so it
+    // does two jobs: it skips a name the tag already carries — not ported, so a
+    // written attribute is still offered — and it keeps the FIRST of a repeated
+    // name. The provider repeats ten on `div` (eight `on:pointer*` plus
+    // `on:mouseenter` / `on:mouseleave`, once from the renamed upstream globals
+    // and again from `svelteEvents`) and twelve on `input`.
+    let mut seen = std::collections::HashSet::new();
     let index = LineIndex::new(text);
     let range = lsp_types::Range::new(
         index.position(text, replace.start),
@@ -185,10 +195,15 @@ fn html_attribute_completions(
     };
     CompletionList {
         is_incomplete: false,
-        items: attributes(element)
-            .map(|attribute| {
-                let name = attribute.name;
-                let mut new_text = if assigned {
+        items: provider::attributes(element)
+            .into_iter()
+            .filter(|provided| seen.insert(provided.name.clone()))
+            .map(|provided| {
+                let name = provided.name.as_ref();
+                let attribute = provided.data;
+                // `htmlCompletion.js:227-231`: a valueless attribute takes no
+                // `="$1"`, and one with a value set asks the editor to suggest.
+                let mut new_text = if assigned || attribute.value_set == Some("v") {
                     name.to_string()
                 } else {
                     format!("{name}{ATTRIBUTE_VALUE_PLACEHOLDER}")
@@ -217,19 +232,36 @@ fn html_attribute_completions(
                     label: name.to_string(),
                     kind: Some(if keyword {
                         CompletionItemKind::KEYWORD
+                    } else if attribute.value_set == Some("handler") {
+                        // The vendored data carries none, so this arm is
+                        // unreachable today and is here to survive a bump.
+                        CompletionItemKind::FUNCTION
                     } else {
                         CompletionItemKind::VALUE
                     }),
-                    documentation: Some(html_documentation(
+                    documentation: html_data::documentation::documentation(
+                        &html_data::documentation::Entry {
+                            description: attribute.description,
+                            status: attribute.status.as_ref(),
+                            browsers: attribute.browsers,
+                            references: attribute.references,
+                        },
                         markdown,
-                        attribute.description.to_string(),
-                    )),
+                    )
+                    .map(|value| html_documentation(markdown, value)),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     sort_text,
                     text_edit: Some(lsp_types::CompletionTextEdit::Edit(TextEdit {
                         range,
                         new_text,
                     })),
+                    command: (!assigned && attribute.value_set.is_some_and(|set| set != "v")
+                        || name == "style")
+                        .then(|| lsp_types::Command {
+                            title: "Suggest".to_string(),
+                            command: "editor.action.triggerSuggest".to_string(),
+                            arguments: None,
+                        }),
                     ..CompletionItem::default()
                 }
             })
@@ -247,32 +279,39 @@ fn tag_prefix(text: &str, offset: usize) -> Option<&str> {
     .then_some(prefix)
 }
 
-fn html_tag_completions(prefix: &str, markdown: bool) -> CompletionList {
+fn html_tag_completions(text: &str, offset: usize, prefix: &str, markdown: bool) -> CompletionList {
+    // `collectOpenTagSuggestions` replaces the name already typed, so the
+    // client is free to filter and every item carries the same range.
+    let index = LineIndex::new(text);
+    let range = lsp_types::Range::new(
+        index.position(text, offset - prefix.len()),
+        index.position(text, offset),
+    );
     CompletionList {
         is_incomplete: false,
-        items: TAGS
-            .iter()
+        items: provider::tags()
             .filter(|tag| tag.name.starts_with(prefix))
             .map(|tag| CompletionItem {
                 label: tag.name.to_string(),
-                kind: Some(CompletionItemKind::CLASS),
-                documentation: Some(html_documentation(markdown, tag.description.to_string())),
+                // `collectOpenTagSuggestions` (`htmlCompletion.js:200-212`).
+                kind: Some(CompletionItemKind::PROPERTY),
+                documentation: html_data::documentation::documentation(
+                    &html_data::documentation::Entry {
+                        description: tag.description,
+                        status: tag.status.as_ref(),
+                        browsers: tag.browsers,
+                        references: tag.references,
+                    },
+                    markdown,
+                )
+                .map(|value| html_documentation(markdown, value)),
+                insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+                text_edit: Some(lsp_types::CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: tag.name.to_string(),
+                })),
                 ..CompletionItem::default()
             })
-            .chain(
-                STANDARD_TAGS
-                    .iter()
-                    .filter(|tag| tag.starts_with(prefix))
-                    .map(|tag| CompletionItem {
-                        label: (*tag).to_string(),
-                        kind: Some(CompletionItemKind::CLASS),
-                        documentation: Some(html_documentation(
-                            markdown,
-                            "A standard HTML element.".to_string(),
-                        )),
-                        ..CompletionItem::default()
-                    }),
-            )
             .collect(),
     }
 }
@@ -553,6 +592,29 @@ mod tests {
     fn labels_at(content: &str, offset: usize) -> Option<Vec<String>> {
         completions(content, offset)
             .map(|list| list.items.into_iter().map(|item| item.label).collect())
+    }
+
+    /// `seenAttributes` keeps the first of a repeated name. The provider
+    /// repeats ten on `div` and twelve on `input`, so an unported dedup shows
+    /// up as items upstream does not send.
+    #[test]
+    fn a_repeated_attribute_name_is_offered_once() {
+        for (source, provided) in [("<div ", 258), ("<input ", 298)] {
+            let offered = labels(source).expect("attribute completions");
+            let unique = offered.iter().collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                offered.len(),
+                unique.len(),
+                "{source} offers {} names, {} of them distinct",
+                offered.len(),
+                unique.len()
+            );
+            assert_eq!(
+                crate::html_data::provider::attributes(source[1..].trim()).len(),
+                provided,
+                "the provider itself still repeats them"
+            );
+        }
     }
 
     fn all_modifiers() -> Vec<String> {
