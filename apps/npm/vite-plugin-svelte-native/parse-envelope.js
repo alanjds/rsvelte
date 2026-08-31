@@ -19,7 +19,7 @@ const MAGIC = 0x3156_5052; // "RPV1" little-endian
 // reorder, `typeParameters` on function-like nodes, Identifier `optional`);
 // v4 adds the object-method `typeParameters`-after-`body` flag byte.
 // Keep in lockstep with `napi_raw_parse.rs`'s `VERSION`.
-const VERSION = 6;
+const VERSION = 7;
 const HEADER_LEN = 24;
 
 // Tags — must mirror napi_raw_parse.rs.
@@ -141,6 +141,7 @@ const JS_EMPTY_STATEMENT = 0xb8;
 const JS_DEBUGGER_STATEMENT = 0xb9;
 const JS_IMPORT_DECLARATION = 0xba;
 const JS_IMPORT_ATTRIBUTE = 0xd2;
+const JS_EXPORT_ALL_DECLARATION = 0xd3;
 const JS_IMPORT_SPECIFIER = 0xbb;
 const JS_IMPORT_DEFAULT_SPECIFIER = 0xbc;
 const JS_IMPORT_NAMESPACE_SPECIFIER = 0xbd;
@@ -574,6 +575,8 @@ function readNodeBody(ctx, tag, start, end) {
 			return readJsExportNamedDeclaration(ctx, start, end);
 		case JS_EXPORT_DEFAULT_DECLARATION:
 			return readJsExportDefaultDeclaration(ctx, start, end);
+		case JS_EXPORT_ALL_DECLARATION:
+			return readJsExportAllDeclaration(ctx, start, end);
 		case JS_EXPORT_SPECIFIER:
 			return readJsExportSpecifier(ctx, start, end);
 		case JS_CLASS_BODY:
@@ -1488,6 +1491,22 @@ function readJsExportNamedDeclaration(ctx, start, end) {
 	if (exportKind !== null) node.exportKind = exportKind;
 	// acorn always writes `attributes`; acorn-typescript writes it only where the
 	// source had a `with` clause, and `exportKind` is set for TypeScript alone.
+	if (exportKind === null || attributes.length > 0) node.attributes = attributes;
+	return node;
+}
+
+function readJsExportAllDeclaration(ctx, start, end) {
+	const loc = readTypedLoc(ctx);
+	const exported = readOptNode(ctx);
+	const source = readNode(ctx);
+	const exportKind = readOptStr(ctx);
+	const attributes = readChildArray(ctx);
+	const node = { type: 'ExportAllDeclaration', start, end };
+	if (loc !== null) node.loc = loc;
+	if (exportKind !== null) node.exportKind = exportKind;
+	node.exported = exported;
+	node.source = source;
+	// See `readJsExportNamedDeclaration`.
 	if (exportKind === null || attributes.length > 0) node.attributes = attributes;
 	return node;
 }

@@ -694,6 +694,15 @@ pub enum JsNode {
         export_kind: Option<CompactString>,
         attributes: IdRange,
     },
+    ExportAllDeclaration {
+        start: u32,
+        end: u32,
+        loc: Option<Box<Loc>>,
+        exported: Option<JsNodeId>,
+        source: JsNodeId,
+        export_kind: Option<CompactString>,
+        attributes: IdRange,
+    },
     ExportDefaultDeclaration {
         start: u32,
         end: u32,
@@ -2217,6 +2226,33 @@ impl Serialize for JsNode {
                 ser_comments!(map, "ExportNamedDeclaration", *start, *end);
                 map.end()
             }
+            Self::ExportAllDeclaration {
+                start,
+                end,
+                loc,
+                exported,
+                source,
+                export_kind,
+                attributes,
+            } => {
+                let mut map = serializer.serialize_map(Some(5))?;
+                map.serialize_entry("type", "ExportAllDeclaration")?;
+                map.serialize_entry("start", start)?;
+                map.serialize_entry("end", end)?;
+                ser_loc!(map, loc);
+                if let Some(ek) = export_kind {
+                    map.serialize_entry("exportKind", ek.as_str())?;
+                }
+                ser_opt_node!(map, "exported", exported);
+                ser_node!(map, "source", source);
+                // See `ImportDeclaration`: acorn always writes `attributes`,
+                // acorn-typescript only where a `with` clause exists.
+                if export_kind.is_none() || !attributes.is_empty() {
+                    ser_children!(map, "attributes", attributes);
+                }
+                ser_comments!(map, "ExportAllDeclaration", *start, *end);
+                map.end()
+            }
             Self::ExportDefaultDeclaration {
                 start,
                 end,
@@ -3247,6 +3283,18 @@ impl JsNode {
                             .map(std::convert::Into::into),
                         attributes: convert_array(obj, "attributes"),
                     },
+                    "ExportAllDeclaration" => Self::ExportAllDeclaration {
+                        start,
+                        end,
+                        loc,
+                        exported: convert_optional_child(obj, "exported"),
+                        source: convert_child(obj, "source"),
+                        export_kind: obj
+                            .get("exportKind")
+                            .and_then(|v| v.as_str())
+                            .map(std::convert::Into::into),
+                        attributes: convert_array(obj, "attributes"),
+                    },
                     "ExportDefaultDeclaration" => Self::ExportDefaultDeclaration {
                         start,
                         end,
@@ -3447,6 +3495,7 @@ impl JsNode {
             Self::ImportDefaultSpecifier { .. } => Some("ImportDefaultSpecifier"),
             Self::ImportNamespaceSpecifier { .. } => Some("ImportNamespaceSpecifier"),
             Self::ExportNamedDeclaration { .. } => Some("ExportNamedDeclaration"),
+            Self::ExportAllDeclaration { .. } => Some("ExportAllDeclaration"),
             Self::ExportDefaultDeclaration { .. } => Some("ExportDefaultDeclaration"),
             Self::ExportSpecifier { .. } => Some("ExportSpecifier"),
             Self::ClassBody { .. } => Some("ClassBody"),
@@ -4172,6 +4221,7 @@ impl JsNode {
             | Self::ImportDefaultSpecifier { start, .. }
             | Self::ImportNamespaceSpecifier { start, .. }
             | Self::ExportNamedDeclaration { start, .. }
+            | Self::ExportAllDeclaration { start, .. }
             | Self::ExportDefaultDeclaration { start, .. }
             | Self::ExportSpecifier { start, .. }
             | Self::ClassBody { start, .. }
@@ -4262,6 +4312,7 @@ impl JsNode {
             | Self::ImportDefaultSpecifier { end, .. }
             | Self::ImportNamespaceSpecifier { end, .. }
             | Self::ExportNamedDeclaration { end, .. }
+            | Self::ExportAllDeclaration { end, .. }
             | Self::ExportDefaultDeclaration { end, .. }
             | Self::ExportSpecifier { end, .. }
             | Self::ClassBody { end, .. }
@@ -4355,6 +4406,7 @@ impl JsNode {
             Self::ImportDefaultSpecifier { .. } => "ImportDefaultSpecifier",
             Self::ImportNamespaceSpecifier { .. } => "ImportNamespaceSpecifier",
             Self::ExportNamedDeclaration { .. } => "ExportNamedDeclaration",
+            Self::ExportAllDeclaration { .. } => "ExportAllDeclaration",
             Self::ExportDefaultDeclaration { .. } => "ExportDefaultDeclaration",
             Self::ExportSpecifier { .. } => "ExportSpecifier",
             Self::ClassBody { .. } => "ClassBody",

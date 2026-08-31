@@ -115,11 +115,32 @@ envelope — `type`, `start`, `end`, `loc` — and none of its children:
 `TSModuleBlock` is labelled `BlockStatement`, and a class's `typeParameters` and a
 `PropertyDefinition`'s `typeAnnotation` are absent.
 
-**B. A field with the wrong shape rather than a missing one (4 bases).**
-`ClassDeclaration.implements` is a **boolean `true`** where official has an array of
-`TSExpressionWithTypeArguments`; `ImportExpression.options` is `null` where official has the
-`ObjectExpression`; `Literal.value` is `null` for a bigint, where official carries the `BigInt`
-itself; `ExportNamedDeclaration.attributes` is an extra `[]` that official omits.
+**B. A field with the wrong shape rather than a missing one (4 bases) — and this grouping was
+wrong.** It was cut by the KEY's shape (`#type` / `#extra` rather than `#missing`), and measuring
+the four split them three ways.
+
+*Two are one family with two more bases filed in other clusters, and it is FIXED.*
+`ImportExpression.options#extra` and `ExportNamedDeclaration.attributes#extra` are the same
+mechanism as `ImportDeclaration.attributes#extra` (`estree-fields`) and
+`ImportDeclaration.attributes[]#length` (`child-count`): **acorn and acorn-typescript emit
+different node shapes, and rsvelte emitted acorn's under both.** So one mechanism spanned three
+cluster rows — the partition is by key shape, not by cause. A 41-construct x plain/`lang="ts"` x
+2-axis grid found five such shapes, of which only two had a corpus carrier; the tree went from 32
+cells carrying 20 distinct keys to 8 carrying 4. Pinned by
+`crates/rsvelte_core/tests/import_export_parser_shapes.rs` and two pattern-corpus files.
+
+*One is really cluster A.* `ClassDeclaration.implements` is a boolean `true` where official has an
+array of `TSExpressionWithTypeArguments`, and the node stores a `bool` (`ast/typed_expr.rs:521`)
+because the TypeScript children are not serialized — the same cause as A, reached through a
+different key kind.
+
+*One is not a compiler defect at all.* `Literal.value` for a bigint is `null` because
+`parse()`'s NAPI binding returns a JSON **string**, which cannot express a `BigInt`. Measured on
+one input: official `{"value": 123n, "bigint": "123", "raw": "123n"}`, rsvelte
+`{"value": null, "bigint": "123", "raw": "123n"}` — **`bigint` and `raw` agree exactly, so no
+information is lost.** Matching would mean emitting the gate harness's own `{"__bigint__": …}`
+normalization shape. It cannot be closed without changing the binding's return type, and it
+should not be read as outstanding work.
 
 **C. `Root.options.customElement.props` is raw AST, not a value (2 bases).** rsvelte emits the
 `ObjectExpression` node; official emits the evaluated bag, `{ p: { reflect: true } }`. The `#extra`
@@ -137,6 +158,12 @@ byte-identical on all four targets, so this base was observable through no other
 directive in an instance script does not appear in `Program.body` at all, so official's body has
 one more element and the first statements have different types. AGENTS.md records the same loss
 for a `FunctionBody`'s `directives`.
+
+**E2. `export * from` never reached the program body — FIXED.** `convert_statement_for_program`
+had no `ExportAllDeclaration` arm, so the statement fell through `_ => None` and vanished; it is a
+cause of `{legacy,modern}::Program.body[]#length`, though that key has other causes and no
+`.svelte` in `submodules/svelte` carries the shape, so **how much of that entry it moves is
+unmeasured until a collected-corpus run**. `compile()` kept the statement throughout.
 
 **F. Not reproduced (10 bases)**, listed so the next attempt starts from a smaller set:
 `TSTypeParameterDeclaration.extra`, `Decorator.expression` (the parent's whole `decorators` array

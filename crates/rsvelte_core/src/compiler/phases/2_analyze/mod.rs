@@ -4241,6 +4241,8 @@ pub(crate) fn for_each_js_child(node: &JsNode, arena: &ParseArena, f: &mut impl 
             walk_range!(*attributes);
         }
         JsNode::ExportDefaultDeclaration { declaration, .. } => walk_id!(*declaration),
+        // `exported` and `source` are names in another module, not local references.
+        JsNode::ExportAllDeclaration { attributes, .. } => walk_range!(*attributes),
         JsNode::ExportSpecifier {
             local, exported, ..
         } => {
@@ -6407,6 +6409,17 @@ fn collect_identifier_names_in_node(
             declaration,
             export_kind: _,
         } => walk(*declaration, out),
+
+        // `exported` and `source` are names in another module, not local references.
+        JsNode::ExportAllDeclaration {
+            start: _,
+            end: _,
+            loc: _,
+            exported: _,
+            source: _,
+            export_kind: _,
+            attributes,
+        } => walk_range(*attributes, out),
 
         // `exported` is the name in the importing module, not a local reference.
         JsNode::ExportSpecifier {

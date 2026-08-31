@@ -453,6 +453,25 @@ together and neither checks the other**. And read `321` as `174 bases × axis`: 
 carry a key on both axes and 27 on one, so the defect ceiling is 174, not 321. The collapse is not
 uniform across clusters (2.00x for `estree-fields` and `comment-attachment`, 1.56x for
 `css-shape`), so a per-cluster estimate cannot be had by scaling the total.
+
+**And the clusters partition KEY SHAPES, not causes, so a mechanism can span three rows while
+each row reads as its own backlog.** `lang="ts"` does not merely enable extra syntax — it selects
+`acorn.Parser.extend(tsPlugin())`, and that parser emits **different shapes for the same
+statement**: acorn always writes `attributes` (`[]` when absent) and `options` (null when
+absent), acorn-typescript writes `attributes` only where a `with` clause exists, spells a dynamic
+import's second argument as an `arguments` LIST, and stamps `exportKind` on `export default`.
+rsvelte emitted acorn's shape under both. Its four ratcheted keys sat in `unclustered`,
+`estree-fields` and `child-count`. **The axis that finds this class is one construct hosted in a
+plain `<script>` and in `lang="ts"`, diffed against each other** — 41 constructs found five such
+shapes where only two had a corpus carrier, and the same 164-cell grid re-found a defect this file
+already records (`params.rest` missing on a `function` statement) plus one nothing recorded:
+`export * from` was dropped from `parse()`'s body entirely while `compile()` kept it. Two of the
+five are unreachable from any collected corpus at any size, because `export default` is illegal in
+every script a component can hold — `parse()` accepts it and `compile()` does not, so the only
+gate that can hold them is a unit test. `crates/rsvelte_core/tests/import_export_parser_shapes.rs`
+is that gate. **Do not read a `Literal.value` bigint key as work**: `parse()`'s NAPI binding
+returns a JSON *string*, `bigint` and `raw` agree exactly, and matching would mean emitting the
+harness's own normalization shape.
 ### Generated shape matrix (`scripts/compat-corpus/matrix/`)
 
 A **generated**, not collected, differential corpus (`pnpm run corpus:matrix`, #2281 Gate 2),

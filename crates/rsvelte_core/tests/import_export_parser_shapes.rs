@@ -180,3 +180,38 @@ fn javascript_stamps_no_export_kind_on_a_default_export() {
     assert_eq!(body[0]["type"], "ExportDefaultDeclaration", "{}", body[0]);
     assert!(body[0].get("exportKind").is_none(), "{}", body[0]);
 }
+
+#[test]
+fn an_export_star_reaches_the_program_body() {
+    let body = module_body("<script module>\nexport * from './m.js';\n</script>\n<div></div>\n");
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(body[0]["type"], "ExportAllDeclaration", "{}", body[0]);
+    assert_eq!(body[0]["exported"], Value::Null);
+    assert_eq!(body[0]["source"]["raw"], "'./m.js'");
+    assert_eq!(body[0]["attributes"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn an_export_star_names_its_namespace() {
+    let body =
+        module_body("<script module>\nexport * as ns from './m.js';\n</script>\n<div></div>\n");
+    assert_eq!(body[0]["exported"]["type"], "Identifier", "{}", body[0]);
+    assert_eq!(body[0]["exported"]["name"], "ns");
+}
+
+#[test]
+fn an_export_star_carries_its_attributes() {
+    let body = module_body(
+        "<script module>\nexport * from './m.js' with { type: 'json' };\n</script>\n<div></div>\n",
+    );
+    assert_eq!(body[0]["attributes"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn typescript_stamps_an_export_kind_on_an_export_star() {
+    let body = module_body(
+        "<script module lang=\"ts\">\nexport * from './m.js';\n</script>\n<div></div>\n",
+    );
+    assert_eq!(body[0]["exportKind"], "value", "{}", body[0]);
+    assert!(body[0].get("attributes").is_none(), "{}", body[0]);
+}

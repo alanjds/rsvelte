@@ -1426,6 +1426,41 @@ equality hold for a sibling declaration and not for anything shallower. No probe
 those, so the agreement on `Prop` / `RestProp` (which port 2 excludes and upstream admits) is
 untested rather than correct.
 
+### 26. What ESTree object does the NAPI boundary hand a JS caller? — [D], **closed at degree 2**
+
+**Upstream:** there is no counterpart. Official ships one `parse()`.
+
+**Ports — two, and neither is a rewrite of the other.** `napi_parse` serializes the typed program
+with `serde::Serialize` and returns a JSON **string**; `napi_parse_envelope` walks the same tree
+with a hand-written binary writer (`rsvelte_bindings_support/src/napi_raw_parse.rs`) whose decoder
+is a second hand-written walk in JavaScript
+(`apps/npm/vite-plugin-svelte-native/parse-envelope.js`). Every node type is spelled three times:
+a `Serialize` arm, a `write_*` arm, and a `readJs*` function. **No gate drives the envelope path
+against the JSON path**, and the ~39 corpus gates all consume the JSON one.
+
+**[D] — measured 2026-08-31.** Adding `attributes` to an import and the acorn-typescript omission
+rule to the serializer left the decoder writing `attributes: []` where the JSON side omitted it:
+3 of 8 constructed inputs disagreed between the two surfaces while the JSON side matched official
+on all 8. The ablation is the control — restoring the rule takes it to 0/8, removing it again
+returns exactly those 3.
+
+Two things the measurement itself taught. **A `JSON.stringify` comparison of the two surfaces
+reports 6 of 8 as divergent on an unmodified tree**, and every one of those six is key
+**order** — the decoder assigns `value` before `name_loc` on a `<script>` tag's own `Attribute`
+while the serializer emits it after. Order is invisible to a property access and to `parse()`'s
+consumers, so a port-vs-port probe here has to compare structurally or it drowns its real signal
+in noise it cannot act on. And the envelope carries a `VERSION` that both sides pin
+(`napi_raw_parse.rs:74`, `parse-envelope.js:22`, plus `scripts/dev/test-parse-envelope-validation.mjs`):
+a new node tag is additive for the writer and **fatal** for a decoder that does not know it, so
+the version has to move with the tag or a stale decoder reads a byte it cannot dispatch.
+
+**Closed at degree 2**: `crates/rsvelte_core/tests/import_export_parser_shapes.rs` pins the JSON
+side against independently spelled expectations rather than against the envelope, so both ports
+being broken the same way still fails. The envelope side has no equivalent test; the standing
+probe is the 11-input structural round trip described above, which is not in the tree. **That is
+the open half of this row.**
+
+
 ## Adding a row, and closing one
 
 **Finding a candidate.** Start from *one upstream function*, not from a rsvelte symbol. Grep the

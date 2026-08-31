@@ -8854,6 +8854,45 @@ fn convert_statement_for_program(
                 line_offsets,
             ))
         }
+        oxc_ast::ast::Statement::ExportAllDeclaration(export_decl) => {
+            let start = offset + export_decl.span.start as usize;
+            let end = offset + export_decl.span.end as usize;
+            let source_lit = &export_decl.source;
+            let source_start = offset + source_lit.span.start as usize;
+            let source_end = offset + source_lit.span.end as usize;
+            let raw = source_lit.raw.as_ref().map(|a| a.as_str()).unwrap_or("");
+            let source = expr_to_node(create_string_literal(
+                &source_lit.value,
+                raw,
+                source_start,
+                source_end,
+                line_offsets,
+            ));
+            let exported = export_decl.exported.as_ref().map(|name| {
+                let name_start = offset + name.span().start as usize;
+                let name_end = offset + name.span().end as usize;
+                arena.alloc_js_node(expr_to_node(create_identifier(
+                    name.name().as_str(),
+                    name_start,
+                    name_end,
+                    line_offsets,
+                )))
+            });
+            Some(JsNode::ExportAllDeclaration {
+                start: start as u32,
+                end: end as u32,
+                loc: create_typed_loc(start, end, line_offsets),
+                exported,
+                source: arena.alloc_js_node(source),
+                export_kind: estree_module_kind(arena, export_decl.export_kind),
+                attributes: arena.alloc_js_children(convert_import_attributes(
+                    arena,
+                    export_decl.with_clause.as_deref(),
+                    offset,
+                    line_offsets,
+                )),
+            })
+        }
         oxc_ast::ast::Statement::ExportDefaultDeclaration(export_decl) => {
             let start = offset + export_decl.span.start as usize;
             let end = offset + export_decl.span.end as usize;
@@ -9801,16 +9840,12 @@ fn convert_ts_module_declaration_as_node(
                 {
                     return Some(node);
                 }
-                // The typed program has no variant for these two (issue #3681), so
-                // `convert_statement_for_program` drops them — but upstream's visitor
-                // leaves both in place, which makes the namespace non-type. Only
-                // these two stand in: most of what it drops (a type alias, say) IS
-                // type-only and must keep stripping to empty.
-                if !matches!(
-                    stmt,
-                    oxc_ast::ast::Statement::TSImportEqualsDeclaration(_)
-                        | oxc_ast::ast::Statement::ExportAllDeclaration(_)
-                ) {
+                // The typed program has no variant for this one (issue #3681), so
+                // `convert_statement_for_program` drops it — but upstream's visitor
+                // leaves it in place, which makes the namespace non-type. Only this
+                // stands in: most of what it drops (a type alias, say) IS type-only
+                // and must keep stripping to empty.
+                if !matches!(stmt, oxc_ast::ast::Statement::TSImportEqualsDeclaration(_)) {
                     return None;
                 }
                 let start = offset + stmt.span().start as usize;
