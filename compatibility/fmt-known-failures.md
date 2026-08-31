@@ -1174,3 +1174,28 @@ Those 24 are exactly the residue's `intra-line-ws` × `markup` cell — 23
 `<svelte:fragment slot="…">` and one `<svelte:head>`. Positive control: with the
 seven arms removed, `every_svelte_special_element_drops_it` fails at
 `<svelte:fragment>` and the other eight tests in the file stay green.
+
+### 2026-08-31 — the axis the collected corpus cannot hold: an input where the reorder actually runs
+
+`reorder_sections` hoists a `<script>` / `<style>` that sits between two markup
+runs and rejoins them. The separator was a hardcoded `\n`, so a blank line after
+`</script>` was lost. It is fixed, and the interesting part is the population.
+
+**Published components write `<script>` first**, so on the 33,776 collected
+components the hoist is a no-op or nearly so: the merge branch fires on **2** of
+them and neither has a blank line at that gap. The corpus therefore scored
+33,776 byte-identical outputs before and after the fix — the gate could not see
+the defect at any corpus size, because *the axis is not "which repository" but
+"does the reorder run at all"*. What reached it was a hand-written
+`compatibility/pattern-corpus` file (`d129fd211`'s analyze repro, which happens to
+put `<script>` after the markup) landing in the gate as one NEW entry.
+
+Two consequences worth keeping. The deciding gap is the source's gap **after** the
+section, and it has to be read off the *source*: by the time the reorder pass runs,
+an earlier pass has normalised that gap in `out` to a blank line either way, so
+`out` cannot answer the question. And the hand-written cases in
+`blank_lines.rs` all opened their trailing markup run with an element — the corpus
+entry opens it with a **comment**, which is why that exact input is now pinned as
+`the_corpus_repro_leads_the_hoisted_script_with_a_comment`. Positive control:
+hardcoding the separator back to `\n` turns that test red along with the six
+others covering the same join.

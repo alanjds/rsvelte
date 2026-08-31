@@ -102,6 +102,17 @@ fn hoisted_script_carries_the_blank_line_that_followed_it() {
 }
 
 #[test]
+fn the_corpus_repro_leads_the_hoisted_script_with_a_comment() {
+    // The id the corpus gate scored NEW:
+    // `pattern/issues/leading-comment-ignore-stops-at-a-non-comment-sibling.svelte`.
+    // Same firing shape as the test above, but the markup run it leaves behind
+    // opens with a comment — the one form the hand-written cases did not carry.
+    let src = "<!-- svelte-ignore non_reactive_update -->\n<div></div>\n<script>\n\tlet runes = $state(0);\n\tlet noisy;\n\tnoisy = 0;\n</script>\n\n<button onclick={() => (runes = noisy += 1)}>{noisy}</button>\n";
+    let want = "<script>\n  let runes = $state(0);\n  let noisy;\n  noisy = 0;\n</script>\n\n<!-- svelte-ignore non_reactive_update -->\n<div></div>\n\n<button onclick={() => (runes = noisy += 1)}>{noisy}</button>\n";
+    assert_eq!(fmt(src), want);
+}
+
+#[test]
 fn hoisted_script_with_no_blank_after_it_rejoins_on_one_newline() {
     // The control for the test above: same shape, blank line removed.
     let src = "<div></div>\n<script>\n\tlet a = 1;\n</script>\n<button>x</button>\n";
