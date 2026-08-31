@@ -283,7 +283,7 @@ pub enum StartTag<'a> {
 
 /// `getNodeIfIsInComponentStartTag` (`lib/documents/utils.ts:342-356`): a first
 /// character with no lowercase form, or — this server is always Svelte 5 — a
-/// dotted name. Wider than [`possibly_component`], which upstream spells with a
+/// dotted name. Wider than `possibly_component`, which upstream spells with a
 /// separate helper.
 #[must_use]
 pub fn is_component_tag(tag: &str) -> bool {
