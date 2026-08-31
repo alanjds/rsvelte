@@ -154,3 +154,34 @@ Known upstream svelte2tsx bug classes (reference, should any resurface):
   (`createElement("}tr", …)`).
 - **Malformed migrate output** — Svelte-4 migrate inputs produce unparseable TSX
   (e.g. `const st x = …`, inconsistent `props: {  }` spacing).
+
+### 2026-08-31 — one space, 90 files, and a gate that cannot see any of them
+
+`ExportedNames.ts:476` writes the combined SvelteKit block as
+`` `${kitType};${name} = __sveltets_2_any(${name});` `` — `kitType` already carries
+its leading `: `, so the separator between the annotation and the widener is a
+bare `;`. rsvelte spelled the same string as one format literal and put a space
+after that `;`. Fixed.
+
+The measurement is the point. Over all 33,776 corpus components, comparing the
+**raw** `svelte2tsx` text of three implementations:
+
+| | ids |
+|---|---|
+| output changed | 96 |
+| …now byte-identical to official | **90** |
+| …**regressed** | **0** |
+| …differ from official before and after | 6 |
+
+**86 of those 90 were not in this ratchet**, which is the finding: the gate
+normalizes both trees with `oxfmt` before comparing (`svelte2tsx-verify.mjs:218`),
+and oxfmt reprints `; data` and `;data` identically. So this divergence was
+present in 90 real files and *structurally invisible* to the gate — no corpus size
+reaches it, because the normalizer, not the population, is what hides it. The
+other 6 carry a further raw difference that normalization also absorbs, and
+re-running the gate's own normalization over all 96 confirms 0 gate-visible
+regressions.
+
+Recorded so the next person does not read a green gate as "the text agrees":
+what this gate compares is the text *after* oxfmt, and whitespace inside a
+statement is below its resolution.
