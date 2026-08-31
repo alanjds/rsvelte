@@ -6,7 +6,8 @@
 use lsp_types::{Hover, HoverContents, MarkedString, MarkupContent, MarkupKind};
 
 use crate::context::{EmbeddedRegions, attribute_context};
-use crate::html_data::attribute as html_attribute;
+use crate::html_data::documentation::{Entry, documentation};
+use crate::html_data::provider;
 use crate::modifiers::MODIFIERS;
 use crate::tags::{SvelteTag, latest_opening_tag};
 
@@ -60,9 +61,20 @@ pub fn hover(text: &str, offset: usize) -> Option<Hover> {
     // attributes get no HTML description.
     if !attribute.in_value
         && !attribute.on_a_component()
-        && let Some(data) = html_attribute(attribute.element_tag, attribute.name)
+        && let Some(provided) = provider::attributes(attribute.element_tag)
+            .into_iter()
+            .find(|provided| provided.name == attribute.name)
+        && let Some(value) = documentation(
+            &Entry {
+                description: provided.data.description,
+                status: provided.data.status.as_ref(),
+                browsers: provided.data.browsers,
+                references: provided.data.references,
+            },
+            true,
+        )
     {
-        return Some(markdown(data.description.to_string()));
+        return Some(markdown(value));
     }
     if !attribute.can_have_event_modifier() {
         return None;
@@ -289,11 +301,12 @@ mod tests {
         assert!(hovered.starts_with("`once` event modifier"));
     }
 
+    /// The prose is the vendored data's, not this crate's.
     #[test]
     fn a_plain_event_directive_has_no_modifier_hover() {
         assert_eq!(
             hovered_tag("<div on:click />", 12).as_deref(),
-            Some("Listens for the `click` event.")
+            Some("A pointing device button has been pressed and released on an element.")
         );
     }
 
@@ -301,11 +314,13 @@ mod tests {
     fn native_directives_and_bindings_hover() {
         assert_eq!(
             hovered_tag("<div transition: />", 8).as_deref(),
-            Some("Runs a transition when the element enters or leaves.")
+            Some(
+                "A transition is triggered by an element entering or leaving the DOM as a result of a state change.\n\n[Svelte.dev Reference](https://svelte.dev/docs/svelte/transition)"
+            )
         );
         assert_eq!(
             hovered_tag("<input bind:checked />", 13).as_deref(),
-            Some("Binds a checkbox's checked state.")
+            Some("Available for type=\"checkbox\"")
         );
     }
 
