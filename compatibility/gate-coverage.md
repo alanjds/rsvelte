@@ -4447,6 +4447,32 @@ too, or a `steps.<id>.conclusion` predicate, which none of them has today.
 fuzz fails again, `Verify CSS-prune sweep` must report something other than `skipped`. Until
 that run, this row's fix is asserted, not measured.
 
+### C4b. `comment-slot` cannot inject into a template expression — **[D]**
+
+`matrix/mutate.mjs`'s `insertionSlots()` restricts every insertion to the byte ranges
+`scriptRanges()` returns — a component's `<script>` bodies, or the whole file for a module.
+A template line is in no range, so **the family has never once put a comment inside a template
+expression**, and the shape is not reachable by adding seeds: the restriction is in the slot
+scanner, not in the seed set.
+
+Measured on the corpus at `4a07d06be` (32,620 components, client): 30,612 files agree
+completely, **232 have their comments in the wrong place** and 698 differ in set; the server
+loses comments in 389 files through one mechanism. The `comment-slot` family was green
+throughout.
+
+Two things this row is really about. **A multiset comparison and an order comparison are both
+blind to placement**: a lone comment that moves leaves the sequence identical, so `order-only`
+measured 4 while keying on the preceding code token measured 232 — the comparison key was the
+whole finding. And **a seed added to a family with an inert scanner measures nothing while
+printing a green verdict**: a run of 688 cases / 2,752 comparisons came back
+`js-mismatch 0` on a staged binding that predated the fixes under test, and only
+`ls -la` + `cmp` separated "green" from "never executed".
+
+Extending `insertionSlots` to template regions is the fix and it is deferred, not rejected:
+`matrix-known-failures.json` is at **0**, so exposing the class takes a shrink-only ratchet
+above zero, which the DoD requires to be empty, attributed or deliberate. The order is fix the
+class, then widen the scanner.
+
 ### C5. `compatibility/pattern-corpus` records history; it cannot surface a live bug
 
 102 tracked files: ~32 hand-written `issues/<n>-<slug>.svelte` repros plus feature matrices. It
