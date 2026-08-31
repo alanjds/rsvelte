@@ -105,6 +105,8 @@
 		"corpus:parse-ast:update": "node scripts/compat-corpus/parse-ast-verify.mjs --update-baseline",
 		"corpus:matrix": "node scripts/compat-corpus/matrix/run.mjs",
 		"corpus:matrix:update": "node scripts/compat-corpus/matrix/run.mjs --update-baseline",
+		"corpus:output-diff": "node scripts/dev/corpus-output-diff.mjs",
+		"corpus:partition": "node scripts/dev/partition-known-failures.mjs",
 		"corpus:idempotency": "RSVELTE_ASSERT_TRANSFORM_IDEMPOTENT=1 node scripts/compat-corpus/idempotency-verify.mjs",
 		"corpus:signal-discipline": "RSVELTE_ASSERT_SIGNAL_DISCIPLINE=1 node scripts/compat-corpus/signal-discipline-verify.mjs",
 		"corpus:mutate": "node scripts/compat-corpus/mutate-corpus.mjs",

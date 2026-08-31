@@ -1836,6 +1836,34 @@ What this row does **not** establish: rsvelte has phase-1, phase-2 and phase-3 c
 decisions, and only phase 2 has been measured this way. Whether a phase-3 per-visitor rule
 drifts on the same axis is **unmeasured**. **[S]**
 
+### Blind spot 5u — a construct that works as a SINK has no cell, so removing it scores as a repair [D]
+
+Every cell is a source shape the author wrote, so what a cell can express is what that shape
+*emits*. A construct whose whole effect is that some **other** code path stops firing has no
+cell at all, and the grid then scores its removal as an improvement.
+
+Measured on the dev event-handler anchor (`3_transform/client/visitors/attribute.rs`). It exists
+so that upstream's builder-made `function click(e) {…}` wrapper — which the comment cursor never
+reaches — does not let the handler's own anchor place the body's comments a second time. In
+every grid cell its own copy lands somewhere visible (inside the wrapper's parameter list), so
+the grid reads it as a redundant anchor rather than as a claim. Ablating it:
+
+| instrument | verdict |
+|---|---|
+| 336-cell comment × host × target grid | 121 → 112: **9 repaired, 0 regressed** |
+| every corpus `.svelte` on `client-dev`, byte-compared to official | **2 files LOST byte equality**, one of them `compatibility/pattern-corpus/issues/4046-dev-event-handler-comment.svelte` |
+
+The two files are an expression-bodied arrow (`onclick={() => /* c */ v++}`), which has no
+statement list and therefore no chunk, leaving the anchor the only thing that can place the
+comment. The grid has no such cell because its slots all put the comment inside a **block** body.
+
+This is the same shape as #2535's css-prune grid (green on all 1,955 rows while three real
+`svelte.dev` components reproduced an over-prune), one level more specific: there the missing
+axis value was an input shape, here it is the *direction* of the construct's effect. When a
+change **deletes** a construct and the grid improves, the grid is the wrong instrument —
+`scripts/dev/corpus-output-diff.mjs` is the one that can see it, and it reports byte-equality
+movement per file with the denominator printed.
+
 ## 6. svelte2tsx TSX text parity
 
 **Unit.** `expected-s2t/<id>/index.tsx` vs `actual-s2t/<id>/index.tsx`, both oxfmt-normalized
