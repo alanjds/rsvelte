@@ -185,3 +185,22 @@ regressions.
 Recorded so the next person does not read a green gate as "the text agrees":
 what this gate compares is the text *after* oxfmt, and whitespace inside a
 statement is below its resolution.
+
+### 2026-08-31 — a `lang="ts"` script never reads the JSDoc above its `$props()`
+
+Upstream reaches its whole JSDoc scan under `if (!this.isTsFile)`
+(`ExportedNames.ts:242`), so in a TS file the `/** @type {Props} */` above a
+`$props()` destructuring is never consulted and `createPropsStr` runs, emitting
+`;type $$ComponentProps = { … };`. rsvelte read `jsdoc_type` regardless of the
+language, took the JS branch, and emitted **nothing** — so the props return type
+loses the author's shape entirely.
+
+Corpus differential over all 33,776 components: **4 outputs change, 4 become
+byte-identical to official, 0 regress**, and all four are ratchet entries.
+Re-running the gate's own normalization over the 70 ratchet ids moves the
+already-matching count 30 → 34 with 0 gate-visible regressions.
+
+The control is the same source as JavaScript: it must keep the JSDoc and emit no
+alias. Both arms are pinned in
+`crates/rsvelte_projection/tests/svelte2tsx_ts_props_ignores_jsdoc.rs`; dropping
+the `!is_ts` guard turns the TS arm red and leaves the JS arm green.
