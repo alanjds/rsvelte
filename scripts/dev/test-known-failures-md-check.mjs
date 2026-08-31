@@ -33,9 +33,34 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 const CHECKER = path.join(ROOT, 'scripts/compat-corpus/known-failures-md-check.mjs');
 const CORPUS = path.join(ROOT, 'compatibility');
-const MATRIX_FAMILY_PARTITION = fs
-	.readFileSync(path.join(CORPUS, 'matrix-known-failures.md'), 'utf8')
-	.match(/^Partition of `matrix-known-failures\.json` by family: `[^`]+`$/m)?.[0];
+// The docs consolidate into two files (P2), so a per-ratchet `.md` is not a
+// path this harness may hold: resolve a doc by the text it contains instead.
+const docText = (dir, file) => {
+	const direct = path.join(dir, file);
+	if (fs.existsSync(direct)) return { p: direct, text: fs.readFileSync(direct, 'utf8') };
+	return null;
+};
+const findDoc = (dir, file, needle) => {
+	const direct = docText(dir, file);
+	if (direct && direct.text.includes(needle)) return direct;
+	for (const f of fs.readdirSync(dir)) {
+		if (!f.endsWith('.md')) continue;
+		const q = path.join(dir, f);
+		const text = fs.readFileSync(q, 'utf8');
+		if (text.includes(needle)) return { p: q, text };
+	}
+	return null;
+};
+
+const MATRIX_FAMILY_PARTITION_RE = /^Partition of `matrix-known-failures\.json` by family: `[^`]+`$/m;
+const MATRIX_FAMILY_PARTITION = (() => {
+	for (const f of fs.readdirSync(CORPUS)) {
+		if (!f.endsWith('.md')) continue;
+		const m = fs.readFileSync(path.join(CORPUS, f), 'utf8').match(MATRIX_FAMILY_PARTITION_RE);
+		if (m) return m[0];
+	}
+	return undefined;
+})();
 
 let failed = 0;
 const check = (name, got, want) => {
@@ -168,10 +193,9 @@ const withCorpus = (mutate, fn) => {
 };
 
 const edit = (dir, file, from, to) => {
-	const p = path.join(dir, file);
-	const before = fs.readFileSync(p, 'utf8');
-	if (!before.includes(from)) throw new Error(`self-test is stale: ${file} no longer contains ${JSON.stringify(from)}`);
-	fs.writeFileSync(p, before.replace(from, to));
+	const found = findDoc(dir, file, from);
+	if (!found) throw new Error(`self-test is stale: no doc holds ${JSON.stringify(from)} (looked for ${file} first)`);
+	fs.writeFileSync(found.p, found.text.replace(from, to));
 };
 
 // The control. Without it, every mutation below "passing" would also be
