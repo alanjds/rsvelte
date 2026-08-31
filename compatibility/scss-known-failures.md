@@ -134,7 +134,9 @@ than a ratcheted one. It went in because this gate was red for an unrelated reas
 the comparison never ran, and the PR merged with nine jobs red. A gate that is red for a reason
 unrelated to what it measures stops being read, and a real NEW arrives under cover of that noise;
 this is the failure mode one step earlier than #2405's "a skipped gate reads as a passing one",
-because nothing was skipped.
+because nothing was skipped. It needs no entry here: the indented-Sass base removal that landed
+after #3967 makes the unit compile, so the gate reports it as a match rather than a divergence —
+which is why the count above is unchanged by it.
 
 **There is no upstream fix to take for any of them.** crates.io's newest `grass` is 0.13.4
 (2024-08-04), which is what this repository locks; `master` has two commits since, one of them
