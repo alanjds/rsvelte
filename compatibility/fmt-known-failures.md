@@ -1290,3 +1290,47 @@ that motivated the measurement reaches **1** entry, against 11 for `<div`, 36 fo
 mentions `svelte:`" — returned 13, and inspecting them showed the string was in the
 surrounding *context* line in 12 of the 13. A substring hit near a divergence is not
 a reach measurement.
+
+### 2026-08-31 — the 260 partitioned, and the largest decision point in it is 54
+
+Bucketed by the shape of the first over-width line rsvelte emits that the oracle
+does not (`instruments/overwidth260.mjs`; the list is
+`agent-c/overwidth260.json`):
+
+| n | the over-width line starts with |
+|---|---|
+| 67 | script / style / prose text |
+| 66 | a block header `{#…}` |
+| 30 | an attribute |
+| 28 | a hugged `>` line |
+| 21 | an HTML open tag |
+| 20 | an expression `{…}` |
+| 15 | other |
+| 6 | a component open tag |
+| 5 | `{@…}` / `{:…}` / `{/…}` |
+| 2 | a close tag |
+
+The block-header bucket splits again by where the width goes: **9** where the
+header expression itself is over width and the oracle breaks the expression, and
+**54** where the header fits and the one-line *body* overflows. That 54 is the
+largest single decision point found in the residue so far, and it reproduces in
+three cells with two controls (oracle = oxfmt(`svelte: true`), `printWidth: 80`):
+
+```
+B1 {#if isSub}<div class="header-row"><slot … /></div>{/if}   DIVERGE
+B3 {#each xs as x}…{/each}                                     DIVERGE   same shape
+B4 {#key k}…{/key}                                             DIVERGE   same shape
+B2 the same body, short enough to fit                          MATCH     control
+B6 the same body, already broken in the source                 MATCH     control
+```
+
+The oracle keeps the block tags glued and breaks the *element's* content
+(`{#if isSub}<div class="header-row">⏎    <slot … />⏎  </div>{/if}`); rsvelte
+leaves the whole line flat. B6 matching is what rules out a source-layout
+explanation.
+
+**B5 is the discriminating cell.** With two arms
+(`{#if a}<div …>…</div>{:else}<div …>…</div>{/if}`) rsvelte leaves the *first*
+arm flat and breaks the *second* one's open tag — so a pass that can break this
+shape exists and reaches one arm and not the other. Whatever gates it is a
+position test, not a missing capability.
