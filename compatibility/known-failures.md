@@ -27,17 +27,17 @@ checked-in pattern corpus (#2019) surfaced are gone too: the two SSR
 destructuring ones (#2033, #2034) were fixed by #2036, and the block-local
 snippet render tag (#2031) by #2057.
 
-## Client (`known-failures.client.json`, 224 entries)
+## Client (`known-failures.client.json`, 77 entries)
 
-Partition of `known-failures.client.json` by verdict: `188 + 4 + 3 + 29 + 0`
+Partition of `known-failures.client.json` by verdict: `76 + 1`
 
-- **188 — the generated JS differs** (`js` / `code-differs`).
-- **4 — both compilers reject the entry with a different error code.**
-- **3 — one compiler rejects and the other compiles.**
-- **29 — the generated CSS differs.**
-- **0 — rsvelte's output is not JavaScript**, ratcheted in full in
-  [`parse-known-failures.md`](parse-known-failures.md) and listed here too
-  because unparseable output is necessarily byte-different.
+- **76 — the generated JS differs** (`js` / `code-differs`).
+- **1 — the generated CSS differs.**
+
+The error classes this section used to carry are gone: the run behind this
+baseline reports `error-mismatch: 0` and `js-unparseable: 0` on every target, so
+no entry here is "both compilers reject with a different code", "one compiler
+rejects and the other compiles", or "rsvelte's output is not JavaScript".
 
 Every one of the remaining 224 arrived with the wave-2 enrolment (#3130) and is described
 in § *Wave-2 enrolment*. The list was **0** before it, and the one entry it ever
@@ -64,13 +64,11 @@ everywhere". Divergences this target keeps on purpose — because reproducing
 upstream's bytes would emit invalid JavaScript — are recorded in
 [`deliberate-divergences.md`](deliberate-divergences.md), each pinned by a test.
 
-## Server (`known-failures.server.json`, 71 entries)
+## Server (`known-failures.server.json`, 31 entries)
 
-Partition of `known-failures.server.json` by verdict: `60 + 4 + 5 + 2`
+Partition of `known-failures.server.json` by verdict: `29 + 2`
 
-- **60 — the generated JS differs.**
-- **4 — both compilers reject with a different error code.**
-- **5 — one compiler rejects and the other compiles.**
+- **29 — the generated JS differs.**
 - **2 — a recorded deliberate divergence, not a burndown target.**
   `pattern/issues/dollar-function-parameter.svelte` and
   `threlte/packages/extras/src/lib/hooks/useViewport.svelte.ts`. A `$`-prefixed
@@ -103,21 +101,20 @@ quoted key dropped in a destructured `$derived`) and #2034 (`$.to_array` arity
 with a rest element) — were resolved by #2036, which mirrored #2010's client
 destructuring fixes onto the server target.
 
-## Server dev (`known-failures.server-dev.json`, 71 entries)
+## Server dev (`known-failures.server-dev.json`, 31 entries)
 
 The `server-dev` target is the server transform with `dev: true`. It separately
 ratchets server-only development instrumentation: component metadata, element
 locations, dynamic-element validation, snippet validation, and injected CSS.
 
-Partition of `known-failures.server-dev.json` by verdict: `60 + 4 + 5 + 2`
+Partition of `known-failures.server-dev.json` by verdict: `29 + 2`
 
 The trailing **2** is the same deliberate divergence as on `server` — the
 `$`-prefixed function parameter — carried on both targets because the server
 transform runs on both.
 
-- **60 — the generated JS differs.**
-- **4 — both compilers reject with a different error code.**
-- **5 — one compiler rejects and the other compiles.**
+- **29 — the generated JS differs.**
+- **2 — the same recorded deliberate divergence as on `server`.**
 
 All 69 arrived with the wave-2 enrolment (#3130); this target was at 0 before
 it. Its counts now match `server`. The one extra entry was SoftShadows output
@@ -125,15 +122,13 @@ that became unparseable only with `dev: true`; #3877 corrected the component
 callback tail-comment insertion point, so both its parse and output entries have
 been retired.
 
-## Client dev (`known-failures.client-dev.json`, 247 entries)
+## Client dev (`known-failures.client-dev.json`, 92 entries)
 
-Partition of `known-failures.client-dev.json` by verdict: `214 + 4 + 3 + 26 + 0`
+Partition of `known-failures.client-dev.json` by verdict: `92`
 
-- **214 — the generated JS differs.**
-- **4 — both compilers reject with a different error code.**
-- **3 — one compiler rejects and the other compiles.**
-- **26 — the generated CSS differs** (three fewer than `client`).
-- **0 — rsvelte's output is not JavaScript.**
+- **92 — the generated JS differs.**
+
+Unlike `client`, no CSS entry survives on this target.
 
 All remaining 247 arrived with the wave-2 enrolment (#3130); this target was at 0 before
 it, and it is the largest of the four — 40 JS entries that `client` does not

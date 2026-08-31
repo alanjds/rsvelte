@@ -4,11 +4,11 @@ The svelte2tsx output-parity corpus (`scripts/compat-corpus/svelte2tsx-*`) compa
 rsvelte's svelte2tsx port against **official `svelte2tsx`** byte-for-byte (after
 oxfmt normalization). The ratchet may only shrink.
 
-**Current baseline: `svelte2tsx-known-failures.json`, 123 entries.**
+**Current baseline: `svelte2tsx-known-failures.json`, 70 entries.**
 
-Partition of `svelte2tsx-known-failures.json` by verdict: `121 + 2`
+Partition of `svelte2tsx-known-failures.json` by verdict: `68 + 2`
 
-- **121 — the emitted TSX differs** (`ts-mismatch`).
+- **68 — the emitted TSX differs** (`ts-mismatch`).
 - **2 — one side rejects and the other compiles** (`error-mismatch`).
 
 ## Wave-2 enrolment (#3130)

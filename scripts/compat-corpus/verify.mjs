@@ -231,21 +231,14 @@ if (UPDATE_BASELINE) {
   ]);
 }
 
-// --from-report reconstructs only the output ratchets, so pairing it with a
-// diagnostic flag would write half of what was asked for.
-if (
-  FROM_REPORT &&
-  (UPDATE_WARNING_BASELINE ||
-    UPDATE_MESSAGE_BASELINE ||
-    UPDATE_ERROR_BASELINE ||
-    UPDATE_PARSE_BASELINE)
-) {
-  console.error(
-    "[verify] --from-report cannot rewrite diagnostic ratchets (it derives output failures only)",
-  );
-  console.error("  fix: drop the diagnostic update flags, then re-run a full verify with it");
-  process.exit(2);
-}
+// A report written before a family existed carries no array for it, and an
+// absent array is indistinguishable from "everything passes" once written.
+const REPORT_FAMILY_FIELD = {
+  warning: "warningFailures",
+  "warning message": "warningFailures",
+  error: "errorFailures",
+  parse: "parseFailures",
+};
 
 // --baseline-client <path> / --baseline-server <path> select alternate ratchet
 // files (defaults come from targets.mjs). The corpus is a single unified set,
@@ -307,13 +300,82 @@ function writeBaselines(byTarget) {
   }
 }
 
+// Ratchets are partitioned by detail kind so a position divergence never lands
+// in the semantic baseline (and vice versa).
+function partitionDetails(failureList, kind) {
+  const byTarget = new Map(TARGET_KEYS.map((key) => [key, new Set()]));
+  for (const f of failureList) {
+    for (const d of f.details) {
+      if (d.kind !== kind) continue;
+      const set = byTarget.get(d.target);
+      if (set) set.add(f.id);
+    }
+  }
+  return byTarget;
+}
+
+const WARNING_RATCHETS = [
+  { kind: "warning-code", label: "warning codes", file: (t) => t.warningBaseline },
+  { kind: "warning-position", label: "warning positions", file: (t) => t.warningPositionBaseline },
+  { kind: "warning-message", label: "warning messages", file: (t) => t.warningMessageBaseline },
+];
+
+const ERROR_RATCHETS = [
+  { kind: "error-message", label: "error messages", file: (t) => t.errorMessageBaseline },
+  { kind: "error-position", label: "error positions", file: (t) => t.errorPositionBaseline },
+  { kind: "error-end", label: "error end positions", file: (t) => t.errorEndBaseline },
+  { kind: "error-frame", label: "error frames", file: (t) => t.errorFrameBaseline },
+];
+
+const PARSE_RATCHETS = [
+  { kind: "output-parse", label: "output parseability", file: (t) => t.parseBaseline },
+];
+
 if (FROM_REPORT) {
   const report = JSON.parse(fs.readFileSync(FROM_REPORT, "utf8"));
   console.log(
     `[verify] deriving baselines from ${path.relative(ROOT, FROM_REPORT)} (${report.failures.length} failures)`,
   );
   requireFullCorpus(report.total ?? 0, "entries in the report");
-  writeBaselines(partitionFailures(report.failures));
+  const families = [
+    { family: "warning", update: UPDATE_WARNING_BASELINE, ratchets: WARNING_RATCHETS.filter((r) => r.kind !== "warning-message") },
+    { family: "warning message", update: UPDATE_MESSAGE_BASELINE, ratchets: WARNING_RATCHETS.filter((r) => r.kind === "warning-message") },
+    { family: "error", update: UPDATE_ERROR_BASELINE, ratchets: ERROR_RATCHETS, population: report.errorComparedPairs, populationLabel: "both-reject (id, target) pairs" },
+    { family: "parse", update: UPDATE_PARSE_BASELINE, ratchets: PARSE_RATCHETS },
+  ].filter((spec) => spec.update);
+  // Same rule as a full run: asking for output and a diagnostic family rewrites
+  // both, and `--from-report` on its own still means the output ratchets.
+  if (UPDATE_BASELINE || families.length === 0) {
+    writeBaselines(partitionFailures(report.failures));
+  }
+  for (const spec of families) {
+    const field = REPORT_FAMILY_FIELD[spec.family];
+    if (!Array.isArray(report[field])) {
+      console.error(
+        `[verify] the report carries no \`${field}\` array, so the ${spec.family} ratchets cannot be derived from it — re-run the gate on a tree that emits one`,
+      );
+      process.exit(2);
+    }
+    refuseUnrepresentativeBaseline(
+      "verify",
+      [
+        spec.population === 0 &&
+          `the report records 0 ${spec.populationLabel}, so every entry scored parity — it was written by a run that measured nothing`,
+      ],
+      `--from-report + ${spec.family}`,
+    );
+    for (const ratchet of spec.ratchets) {
+      const byTarget = partitionDetails(report[field], ratchet.kind);
+      for (const target of TARGETS) {
+        const file = path.resolve(CORPUS, ratchet.file(target));
+        const ids = byTarget.get(target.key);
+        fs.writeFileSync(file, JSON.stringify([...ids].sort(), null, "\t") + "\n");
+        console.log(
+          `[verify] ${ratchet.label} baseline updated: ${ids.size} known failures -> ${path.relative(ROOT, file)}`,
+        );
+      }
+    }
+  }
   process.exit(0);
 }
 
@@ -762,26 +824,6 @@ if (warningsSeen > 0 && warningsWithMessage < warningsSeen) {
   process.exit(2);
 }
 
-// Ratchets are partitioned by detail kind so a position divergence never lands
-// in the semantic baseline (and vice versa).
-function partitionDetails(failureList, kind) {
-  const byTarget = new Map(TARGET_KEYS.map((key) => [key, new Set()]));
-  for (const f of failureList) {
-    for (const d of f.details) {
-      if (d.kind !== kind) continue;
-      const set = byTarget.get(d.target);
-      if (set) set.add(f.id);
-    }
-  }
-  return byTarget;
-}
-
-const WARNING_RATCHETS = [
-  { kind: "warning-code", label: "warning codes", file: (t) => t.warningBaseline },
-  { kind: "warning-position", label: "warning positions", file: (t) => t.warningPositionBaseline },
-  { kind: "warning-message", label: "warning messages", file: (t) => t.warningMessageBaseline },
-];
-
 // ---- error parity ----------------------------------------------------------
 //
 // Independent of the output verdicts above, exactly like warning parity. The
@@ -885,17 +927,6 @@ for (const { id } of manifest) {
   errorCounts[`${verdict}-mismatch`]++;
   errorFailures.push({ id, verdict: `${verdict}-mismatch`, details });
 }
-
-const ERROR_RATCHETS = [
-  { kind: "error-message", label: "error messages", file: (t) => t.errorMessageBaseline },
-  { kind: "error-position", label: "error positions", file: (t) => t.errorPositionBaseline },
-  { kind: "error-end", label: "error end positions", file: (t) => t.errorEndBaseline },
-  { kind: "error-frame", label: "error frames", file: (t) => t.errorFrameBaseline },
-];
-
-const PARSE_RATCHETS = [
-  { kind: "output-parse", label: "output parseability", file: (t) => t.parseBaseline },
-];
 
 // Before any verdict is written or any ratchet rewritten: the corpus these
 // results describe must still be the corpus on disk.
