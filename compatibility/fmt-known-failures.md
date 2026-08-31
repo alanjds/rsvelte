@@ -1548,3 +1548,38 @@ operator is `?`/`:`, so the test is never re-measured — which is exactly the d
 oracle instead formats the expression at the width actually left at its start column, and at a
 start column past 80 that breaks the test too. Changing this is a change to that policy, not a
 missing case, so it needs its own before/after id set.
+
+### 2026-08-31 — a display:block body is the other half of the block-body rule, and one predicate hid it
+
+`{#if a}<div class="…"><slot name="a" /></div>{/if}` stayed flat at 81 columns while the oracle
+put the content on its own indented line. The `<span>` twin — identical position, identical
+content, identical width — was already correct after the hug fix, which is the control that makes
+this about **display** rather than about width; and with the class long enough that the open tag
+itself breaks (60 columns) both sides agree, so the gap is exactly the interval where the open tag
+fits and the whole line does not.
+
+The reason nothing reached the decision is worth recording, because the first fix for it measured
+**zero**. `element_hug_parts` guarded on
+`is_block_display(tag) || is_inline_block(tag) || trims_edge_whitespace(tag)` — and
+`trims_edge_whitespace` is *defined* as `is_block_display(tag) || matches!(tag, "slot" | "title" |
+"svelte:boundary")`, so the first disjunct is redundant and bypassing it alone leaves the element
+rejected by the third. Both binaries were built and run: the half-bypass is byte-identical to no
+bypass at all on the whole grid. **A guard written as a disjunction can have one term subsume
+another, and negating the term you were thinking of is then a no-op** — the two arms have to be
+measured, not read.
+
+Measured: the display × width grid goes 4 diverging cells → 0 with 14 controls unchanged, the
+33,776-file corpus differential moves **5 files, all 5 to byte equality, 0 regressions**, and the
+ablation moves exactly one of the three new tests.
+
+The quoted-interpolation cluster is pinned before any fix touches it, so the count that moves
+afterwards is the number of decision points rather than a guess. Classifying all 549 by whether
+the first divergence sits at an interpolation **inside a quoted attribute value** — anchored on
+the enclosing open tag so the quote parity does not depend on where the walk starts — gives
+**104: 87 later and 17 earlier**, against 304 with no interpolation at the divergence at all, 132
+with an interpolation outside a quoted value, and 7 with no anchor within 40 lines. A first,
+deliberately cruder predicate (a fixed 12-line window) answered 106, so the number is not an
+artefact of how the walk is anchored. **Both signs are in one cluster**: `{step.requires_id &&
+!location.id` is the same budget with rsvelte breaking too early, so a fix measured only against
+the `later` half would report half its own effect — and could move the `earlier` half the wrong
+way without anyone seeing it.
