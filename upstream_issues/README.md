@@ -111,9 +111,10 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte-server-treats-a-dollar-parameter-as-a-store.md` | sveltejs/svelte | #4048 | unrecorded |
 | `svelte-snippet-name-colliding-with-an-import.md` | sveltejs/svelte | #3567 | unrecorded |
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
+| `svelte2tsx-transposes-an-unclosed-start-tag.md` | sveltejs/language-tools (svelte2tsx) | — | unrecorded |
 | `tsgo-lsp-completion-item-omits-the-typescript-kind.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 
-Twenty reports carry no rsvelte issue number, because they came out of a campaign rather than
+Twenty-one reports carry no rsvelte issue number, because they came out of a campaign rather than
 from a single issue and none of them names one internally — `—` records that, rather than
 inventing a number. They come from the lint-parity campaign, the `two-ports-inventory.md` row 21
 shadow probes, the SCSS-backend burndown (covering every unit `scss-known-failures.json` lists as
