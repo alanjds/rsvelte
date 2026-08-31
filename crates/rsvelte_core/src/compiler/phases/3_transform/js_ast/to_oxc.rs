@@ -2100,6 +2100,21 @@ impl<'a, 'arena, 'source> Cx<'a, 'arena, 'source> {
                 copied_spans,
             } => {
                 let mut stmts = self.parse_raw_statements(code, false, &[])?;
+                // The block conversion copies an own-line source comment into a
+                // chunk of its own, which carries it into the buffer verbatim.
+                // An enclosing `JsSourceAnchor` covers the same source range, so
+                // claim the range here — `source_comments` is the existing
+                // "this comment is already in the buffer" set, and the anchor
+                // consults it before adding one.
+                if stmts.is_empty()
+                    && (code.starts_with("//") || code.starts_with("/*"))
+                    && let Ok(len) = u32::try_from(code.trim_end().len())
+                {
+                    self.synth
+                        .borrow_mut()
+                        .source_comments
+                        .insert((*source_offset, *source_offset + len));
+                }
                 let region = self.take_chunk_region(Some(*source_offset), copied_spans);
                 if let Some((region_start, _)) = region {
                     unlocate_prop_declarations_after_erased_comments(
