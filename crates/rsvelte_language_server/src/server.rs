@@ -2174,15 +2174,25 @@ impl Server {
             );
         }
         let before = text.get(..offset)?;
+        // `CompletionProvider.ts:204-214` tests the WORD at the cursor, which
+        // `getWordAtPosition` grows left while the character is neither
+        // whitespace nor `.` — so `{#i` is a block marker and `{#if cond` is
+        // not, because its word is `cond`.
+        let word_start = before
+            .char_indices()
+            .rev()
+            .find(|(_, character)| character.is_whitespace() || *character == '.')
+            .map_or(0, |(index, character)| index + character.len_utf8());
+        let word = before.get(word_start..)?;
+        if let Some(rest) = word.strip_prefix('{')
+            && rest.starts_with(['#', '@', ':', '/'])
+        {
+            return Some(CompletionSite::BlockMarker);
+        }
         let brace = before.rfind('{');
         let close = before.rfind('}');
         if brace > close {
-            let marker = before.get(brace? + 1..)?.trim_start();
-            return Some(if marker.starts_with(['#', ':', '/']) {
-                CompletionSite::BlockMarker
-            } else {
-                CompletionSite::TemplateExpression
-            });
+            return Some(CompletionSite::TemplateExpression);
         }
         Some(CompletionSite::RawTemplateText)
     }
