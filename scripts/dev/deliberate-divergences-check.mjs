@@ -46,7 +46,10 @@ const PIN = /`((?:crates|compatibility|apps|packages|scripts)\/[A-Za-z0-9._@/-]+
 const isPin = (p) =>
   /(^|\/)tests\//.test(p) ||
   p.startsWith('compatibility/pattern-corpus/') ||
-  /(^|\/)test-[A-Za-z0-9._-]+\.mjs$/.test(p);
+  /(^|\/)test-[A-Za-z0-9._-]+\.mjs$/.test(p) ||
+  // `node --test scripts/compat-lsp/*.test.mjs` is how those harnesses run, so
+  // renaming one to `test-*.mjs` to satisfy this predicate would drop it from CI.
+  /\.test\.mjs$/.test(p);
 
 const lines = text.split('\n');
 const sections = [];
@@ -92,7 +95,8 @@ if (problems.length) {
   console.error(
     `\n[deliberate-divergences-check] ${problems.length} problem(s) across ${sections.length} recorded divergence(s).\n` +
       'Every recorded divergence needs a test that fails if the behaviour changes; cite it as a\n' +
-      'backticked repository path under a `tests/` directory or in `compatibility/pattern-corpus/`.',
+      'backticked repository path under a `tests/` directory, in `compatibility/pattern-corpus/`,\n' +
+      'or a `test-*.mjs` / `*.test.mjs` harness under `scripts/`.',
   );
   process.exit(1);
 }
