@@ -7,8 +7,8 @@ Svelte structure, oxc for embedded JS, and PostCSS for embedded CSS) and require
 embedded CSS by default, so the ratchet intentionally includes CSS-engine parity
 as well as Svelte-structure parity. The ratchet may only shrink.
 
-**Current baseline: `fmt-known-failures.json`, 788 entries** — 22 from before the
-wave-2 corpus enrolment, 765 in the current expanded-corpus population, and 1
+**Current baseline: `fmt-known-failures.json`, 789 entries** — 22 from before the
+wave-2 corpus enrolment, 766 in the current expanded-corpus population, and 1
 from a pattern-corpus repro added during the campaign (Cluster 12).
 Oracle-bug / invalid-input / migrate cases are NOT here — those are permanently
 excluded in `fmt-oracle-excluded.json` (see `fmt-oracle-excluded.md`).
@@ -29,13 +29,15 @@ An id that carries two clusters' divergences at once is filed under its dominant
 one (see *Multiple clusters per id*), so the per-cluster counts below remain a
 partition of the ratchet rather than an over-count:
 
-Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 1 + 2 + 385 + 239 + 85 + 38 + 14 + 1 + 2 + 1`
+Partition of `fmt-known-failures.json` by cluster: `3 + 8 + 6 + 1 + 1 + 1 + 1 + 2 + 386 + 239 + 85 + 38 + 14 + 1 + 2 + 1`
 
 ## Wave-2 enrolment (#3130) — Clusters 20-27
 
 The corpus went from 37 to 104 corpus sources, and the formatter-parity set
 with it. The current run has **33,483 included components, 32,667 matched, 787
-failing** (29 excluded, 239 skipped). The original enrolment added 764 entries
+failing** (29 excluded, 239 skipped) — those five numbers are the CI report as it
+stood *before* the 2026-08-31 reclassification below, which moves one id out of
+`excluded` and into this ratchet without changing what the two formatters emit. The original enrolment added 764 entries
 from the 67 new repositories; later submodule and pattern-corpus updates moved
 that expanded-population residue to 765. At enrolment time 51 repositories
 contributed at least one; sparrow-app
@@ -76,7 +78,7 @@ whitespace → **intra-line-ws**; anything else → **other**.
 
 | n | cluster | what the first differing line looks like |
 |---|---|---|
-| 385 | **20 — breaks-later** | rsvelte keeps on one line what the oracle has already broken (`{#each …sort( (a,b) => {` vs a wrapped form) |
+| 386 | **20 — breaks-later** | rsvelte keeps on one line what the oracle has already broken (`{#each …sort( (a,b) => {` vs a wrapped form) |
 | 239 | **21 — breaks-earlier** | the mirror image: rsvelte breaks where the oracle keeps going (`selected_category.id ===` vs `… === category.id}`) |
 | 38 | **23 — indent-only** | same trimmed text at a different indent, typically a member-chain continuation inside `<script>` or a nested element's body |
 | 85 | **22 — intra-line-ws** | same tokens, different interior spacing — most of it a sole arrow argument the oracle hugs (`sort((a, b) =>`) and rsvelte pads (`sort( (a, b) =>`) |
@@ -991,3 +993,27 @@ Linux `corpus-compat.yml` run (macOS `--update-baseline` drops
 loose-declaration-tag entries Linux includes and breaks CI): read the
 Formatter-parity job log for the "N known failures now PASS" count and per-id
 NOTICEs, then remove exactly the confirmed-fixed ids.
+
+### 2026-08-31 — one entry arrived by reclassification, not by regression
+
+`shadcn-svelte/docs/src/lib/components/theme-customizer-code.svelte` (Cluster 20,
+breaks-later) is the 789th entry, and it did not start failing: it had been
+**excluded** from the comparison set since it was enrolled, so no run ever
+compared it. Its exclusion reason claimed the oracle was platform-dependent
+("collapsed on macOS, attribute-wrapped on Linux, so byte-parity is undefined").
+Measured with the pinned oracle on macOS (`oxfmt@0.64.0`,
+`fmt-corpus.oxfmtrc.json`, five consecutive runs, byte-identical) the oracle
+emits the attribute-wrapped form at all 20 `<ColorIndicator>` sites — the form
+the reason ascribes to Linux — so the two platform descriptions coincide and
+nothing supports the claim. What is left is an ordinary line-break divergence
+inside `<pre>`: the oracle wraps the component's attribute, rsvelte-fmt keeps
+`<ColorIndicator color={value} />` on the line and breaks before `{value};`
+instead. Full outputs and the controls are in `fmt-oracle-excluded.md`.
+
+**Growing a shrink-only ratchet is legitimate here only because the pair was
+never in the compared population.** The *Cross-platform baseline rule* above
+governs shrinking, and it still does; this addition changes neither formatter,
+and the accompanying commit touches no formatter code. The claim that the entry
+fails on Linux is inferred from the oracle agreeing across the two platform
+descriptions, not measured there — if the Formatter-parity job reports this id
+as already passing, delete it from this ratchet rather than re-excluding it.

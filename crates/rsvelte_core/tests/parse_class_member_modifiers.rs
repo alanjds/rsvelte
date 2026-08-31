@@ -178,3 +178,50 @@ fn the_unconditional_fields_are_untouched() {
     assert_eq!(field(&method, "static"), Some(Value::Bool(true)));
     assert_eq!(field(&method, "kind"), Some(Value::String("method".into())));
 }
+
+/// The same rule at the OTHER entry point. A class body can also be reached
+/// through a TEMPLATE expression (`<svelte:options customElement={{ extend: c =>
+/// class extends c { … } }} />`), which is a third converter — and it emitted no
+/// modifier at all while the script paths emitted every one. Upstream has one
+/// parser and one answer, so the grid has to cross the entry point.
+///
+/// Expectations measured on the official compiler for this exact source.
+#[test]
+fn a_template_expressions_class_body_answers_the_same() {
+    let src = "<svelte:options customElement={{\n\ttag: \"custom-element\",\n\textend: (c) => {\n\t\treturn class extends c {\n\t\t\tpublic test: string = \"test\";\n\t\t\tprotected readonly n = 1;\n\t\t\tdeclare d: number;\n\t\t\toverride m() {}\n\t\t}\n\t},\n}}/>\n\n<script lang=\"ts\">\n\tlet { name } = $props();\n</script>\n\n<p>{name}</p>";
+    let tree = ast(src);
+    let mut raw = Vec::new();
+    nodes_of(&tree, "PropertyDefinition", &mut raw);
+    nodes_of(&tree, "MethodDefinition", &mut raw);
+    // `<svelte:options>` keeps its attribute value in two places, so every
+    // member is reached twice; the members themselves are the unique starts.
+    let mut found: Vec<Value> = Vec::new();
+    for node in raw {
+        if !found.iter().any(|seen| seen["start"] == node["start"]) {
+            found.push(node.clone());
+        }
+    }
+    assert_eq!(found.len(), 4, "class members reached: {found:#?}");
+
+    let by_key = |name: &str| -> Value {
+        found
+            .iter()
+            .find(|node| node["key"]["name"] == Value::String(name.into()))
+            .unwrap_or_else(|| panic!("no member `{name}`"))
+            .clone()
+    };
+    assert_eq!(
+        field(&by_key("test"), "accessibility"),
+        Some(Value::String("public".into()))
+    );
+    assert_eq!(
+        field(&by_key("n"), "accessibility"),
+        Some(Value::String("protected".into()))
+    );
+    assert_eq!(field(&by_key("n"), "readonly"), Some(Value::Bool(true)));
+    assert_eq!(field(&by_key("d"), "declare"), Some(Value::Bool(true)));
+    assert_eq!(field(&by_key("m"), "override"), Some(Value::Bool(true)));
+    // CONTROL — still written-only at this entry point too.
+    assert_eq!(field(&by_key("n"), "declare"), None);
+    assert_eq!(field(&by_key("m"), "accessibility"), None);
+}

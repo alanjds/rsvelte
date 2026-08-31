@@ -797,3 +797,70 @@ repairs a class of output cannot then be used as evidence about that class. List
 The pin records dart-sass's output beside each assertion, so a `grass` release that converges
 turns the test red and this entry gets deleted rather than quietly becoming false. It also
 carries the two non-neutral classes, for the same reason.
+
+---
+
+## `abstract` on a class property (and therefore in the `parse()` AST)
+
+**Pinned by** `crates/rsvelte_core/tests/parse_abstract_class_member.rs`
+(`an_abstract_property_is_still_dropped`).
+**Reported upstream** in `upstream_issues/3082-svelte-abstract-property-not-erased.md`.
+
+### Input
+
+`A.svelte`, `generate: 'server'` (the target makes no difference):
+
+```svelte
+<script lang="ts">
+	abstract class B {
+		abstract kind: string;
+	}
+	const b = 1;
+</script>
+
+<p>{b}</p>
+```
+
+### Output
+
+Official (`submodules/svelte/packages/svelte/src/compiler/index.js`) erases the accessibility
+modifier and the type annotation but leaves the `abstract` keyword, so the class body carries two
+adjacent identifiers:
+
+```js
+	class B {
+		abstract kind;
+	}
+```
+
+rsvelte erases the member:
+
+```js
+	class B {}
+```
+
+`acorn.parse(…, { ecmaVersion: 'latest', sourceType: 'module' })` on the two outputs:
+
+```
+official: acorn REJECTS — Unexpected token (5:11)
+rsvelte: acorn ACCEPTS
+```
+
+### Why the divergence extends to `parse()`
+
+Official keeps the abstract `PropertyDefinition` in the AST, which is where the un-erased keyword
+comes from. rsvelte drops it at parse, so `parse()` diverges too — its `ClassBody.body` is one
+member shorter. Matching the AST alone would leave the erased output diverging on purpose while
+the tree agreed, which is the state hardest to explain to the next reader; the two halves are one
+decision. An abstract **method** is a different case and rsvelte does match it: official drops
+that member from the compiled output, so emitting it in the AST costs nothing downstream.
+
+No gate observes either half. There is no abstract property in any of the 33,776 `.svelte` files
+of the collected corpus (measured — `ClassBody.body[]#length` went stale on the run that emitted
+abstract methods), and the one real-world carrier,
+`bits-ui/packages/bits-ui/src/lib/bits/accordion/accordion.svelte.ts:97`
+(`abstract readonly isMulti: boolean;`), is a `.svelte.ts` module that `scripts/compat-corpus/compile.mjs`
+strips with esbuild before either compiler sees it. So the shape reaches no population, on either
+gate, today.
+
+Delete this entry when upstream erases the keyword.
