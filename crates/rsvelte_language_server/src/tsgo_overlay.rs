@@ -16,7 +16,7 @@ use lsp_types::{Position, Range, Uri};
 use rsvelte_check::overlay::{SHIM_FILES, global_type_files};
 use rsvelte_projection::{
     ProjectionEngine, ProjectionMap, RewriteExternalImportsOptions, Svelte2TsxMode,
-    Svelte2TsxNamespace, Svelte2TsxOptions, SvelteVersion,
+    Svelte2TsxNamespace, Svelte2TsxOptions, SvelteVersion, is_typescript_component,
 };
 use serde_json::json;
 use sourcemap::{SourceMap, SourceMapBuilder};
@@ -854,7 +854,7 @@ impl TsgoOverlay {
     ) -> Svelte2TsxOptions {
         Svelte2TsxOptions {
             filename: source_path.display().to_string(),
-            is_ts_file: looks_like_typescript(source),
+            is_ts_file: is_typescript_component(source),
             mode: Svelte2TsxMode::Ts,
             accessors: self.accessors,
             namespace: self.namespace,
@@ -1706,11 +1706,6 @@ fn ordered_range(start: Position, end: Position) -> Range {
     } else {
         Range::new(end, start)
     }
-}
-
-fn looks_like_typescript(source: &str) -> bool {
-    let lower = source.to_ascii_lowercase();
-    lower.contains("lang=\"ts\"") || lower.contains("lang='ts'") || lower.contains("lang=ts")
 }
 
 fn utf8_position(text: &str, offset: usize) -> Position {

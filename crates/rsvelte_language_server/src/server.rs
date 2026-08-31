@@ -34,6 +34,8 @@ use lsp_types::{
     TypeDefinitionProviderCapability, Uri, WorkspaceFoldersServerCapabilities,
 };
 
+use rsvelte_projection::is_typescript_component;
+
 use crate::client::ClientState;
 use crate::completions::TRIGGER_CHARACTERS;
 use crate::document::{Document, DocumentStore};
@@ -3473,11 +3475,7 @@ impl Server {
         {
             return false;
         }
-        let lower = document.text().to_ascii_lowercase();
-        let language = if lower.contains("lang=\"ts\"")
-            || lower.contains("lang='ts'")
-            || lower.contains("lang=ts")
-        {
+        let language = if is_typescript_component(document.text()) {
             &self.typescript_settings
         } else {
             &self.javascript_settings
