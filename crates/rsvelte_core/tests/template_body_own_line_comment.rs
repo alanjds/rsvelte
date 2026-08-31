@@ -157,3 +157,23 @@ fn control_comment_in_a_dev_expression_bodied_handler_is_kept() {
         "official puts it before the wrapper:\n{output}"
     );
 }
+
+/// A comment above an `if` is that `if`'s leading trivia, but the backward line
+/// scan the enclosing block uses to find it also runs for the `if`'s own
+/// consequent block, whose first statement sits below the same comment — so it
+/// was copied twice. Official emits it once. Placing it correctly (official puts
+/// it above `if`, rsvelte still emits it after the test) is a separate defect;
+/// this pins the multiplicity only.
+#[test]
+fn a_comment_above_an_if_is_not_copied_into_the_if_body() {
+    for source in [
+        format!("{HEAD}<div use:act={{() => {{\n\t/* C */\n\tif (v) {{ z(); }}\n}}}}></div>\n"),
+        format!(
+            "{HEAD}<div use:act={{() => {{\n\tz();\n\t/* C */\n\tif (v) {{ z(); }}\n}}}}></div>\n"
+        ),
+    ] {
+        let output = client(&source);
+        let count = output.matches("/* C */").count();
+        assert_eq!(count, 1, "official emits it once, got {count}:\n{output}");
+    }
+}
