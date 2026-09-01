@@ -112,12 +112,14 @@ for (const key of list) {
 	counts.set(match ? match[1] : '(no mech= segment)', (counts.get(match ? match[1] : '(no mech= segment)') ?? 0) + 1);
 }
 
-// The ratchet is re-keyed by a baseline run, not by this branch, so until the
-// next `lsp-corpus` dispatch every entry lands in one bucket and the table is
-// empty by construction rather than by a missing target.
+// `ratchet.mjs` builds the key without `mech=`, so every entry lands in one
+// bucket and the table is empty by construction rather than by a missing
+// target. A baseline run alone does not populate it: the key change and its
+// re-baseline are one commit, because a key format with no baseline behind it
+// makes every committed entry stale at once.
 if (counts.size === 1 && counts.has('(no mech= segment)')) {
 	console.log(
-		`This ratchet predates the \`mech=\` re-keying: ${counts.get('(no mech= segment)')} entries carry no label, and the table below populates only after the next \`lsp-corpus\` baseline.\n`,
+		`This ratchet predates the \`mech=\` re-keying: ${counts.get('(no mech= segment)')} entries carry no label. The table below populates when the key gains its \`mech=\` segment AND the ratchet is re-baselined in the same commit — a baseline run against the current key produces no labels.\n`,
 	);
 }
 
