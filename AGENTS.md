@@ -965,6 +965,15 @@ control on a string you know is there.
 | `git show rev:file \| grep X` finds nothing | the wrapper's `-I` discards binary-looking **stdin** | `git grep X rev -- file` |
 | later matches missing | `\| head -N` (or `\| tail -N`) truncates with no error | state the denominator, or drop the cap — see the section below, this is the narrow case of a general hazard |
 
+A fifth shape is not `grep` lying but the question being wrong: the string is
+genuinely absent and the inference from it is still false. A test invoked
+through a glob — `node --test scripts/compat-lsp/*.test.mjs` — is named
+nowhere, so `grep <basename> package.json .github/workflows` returns a clean
+empty and "nothing runs this file" reads as measured. Before believing a
+negative, ask what would have to be written down for it to mean anything; when
+the answer is "nothing", expand the glob and look for the file in its output
+instead of grepping for its name.
+
 ### A truncating or discarding stage turns a failure into a green
 
 `grep` is one instance; the class is **any stage between a command and your
