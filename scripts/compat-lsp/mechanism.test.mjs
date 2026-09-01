@@ -12,8 +12,8 @@ const CSS_DOC = plain(
 const HTML_DOC = plain(
   "The div element ...\n\nMDN Reference: https://developer.mozilla.org/docs/Web/HTML/Reference/Elements/div",
 );
-const classify = (method, left, right, difference = "/contents:value-mismatch") =>
-  classifyDivergence(method, left, right, difference);
+const classify = (method, left, right, difference = "/contents:value-mismatch", context) =>
+  classifyDivergence(method, left, right, difference, context);
 
 test("every label the classifier can emit is declared", () => {
   assert.equal(new Set(MECHANISMS).size, MECHANISMS.length);
@@ -336,23 +336,36 @@ test("completion: a label on both sides with a differing pairing-key field is it
   const pointer = "/items:missing-rsvelte-element[count=1,hash=x]";
   // `diff.mjs` never pairs these two, so the arrays differ while the label sets
   // agree -- and none of the item's other fields is ever compared.
+  // The provider is part of the key: a TypeScript item's `kind` is the recorded
+  // tsgo divergence and an HTML tag's `kind` is rsvelte's own defect, and one
+  // label cannot carry both terminals.
   assert.equal(
     classify(
       "textDocument/completion",
-      { items: [{ label: "name", kind: 21, sortText: "16" }] },
-      { items: [{ label: "name", kind: 6, sortText: "16" }] },
+      { items: [{ label: "name", kind: 21, sortText: "16", data: { name: "name" } }] },
+      { items: [{ label: "name", kind: 6, sortText: "16", data: { name: "name" } }] },
       pointer,
     ),
-    "completion-item-pairing-key-kind",
+    "completion-item-pairing-key-kind-ts",
   );
   assert.equal(
     classify(
       "textDocument/completion",
-      { items: [{ label: "name", kind: 21, sortText: "z16" }] },
-      { items: [{ label: "name", kind: 6, sortText: "16" }] },
+      { items: [{ label: "hr", kind: 6 }] },
+      { items: [{ label: "hr", kind: 10 }] },
+      pointer,
+      { text: "<div></div>", position: { line: 0, character: 5 } },
+    ),
+    "completion-item-pairing-key-kind-html",
+  );
+  assert.equal(
+    classify(
+      "textDocument/completion",
+      { items: [{ label: "name", kind: 21, sortText: "z16", data: { name: "name" } }] },
+      { items: [{ label: "name", kind: 6, sortText: "16", data: { name: "name" } }] },
       pointer,
     ),
-    "completion-item-pairing-key-kind+sort-text",
+    "completion-item-pairing-key-kind+sort-text-ts",
   );
   // Same key on every shared label: the arrays can then only differ by how many
   // times a label appears.

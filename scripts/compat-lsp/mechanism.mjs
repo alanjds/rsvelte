@@ -9,6 +9,7 @@
 import { identity } from "./diff.mjs";
 const PAIRING_KEY_FIELDS = ["kind", "sortText", "filterText"];
 const PAIRING_KEY_SLUG = { kind: "kind", sortText: "sort-text", filterText: "filter-text" };
+const COMPLETION_PROVIDERS = ["ts", "html", "html-close-tag", "css", "svg", "other", "mixed"];
 function pairingKeyLabelSpace() {
   const space = [];
   for (let mask = 1; mask < 1 << PAIRING_KEY_FIELDS.length; mask += 1)
@@ -70,7 +71,13 @@ export const MECHANISMS = [
   // so an item whose label matches and whose pairing-key field does not is
   // unpaired in BOTH directions while the label sets agree. Which fields
   // disagree is the mechanism; it says nothing about which side is right.
-  ...pairingKeyLabelSpace().map((suffix) => `completion-item-pairing-key-${suffix}`),
+  // Crossed with the provider, because the same differing FIELD carries two
+  // different terminals: a TypeScript item's `kind` is the recorded tsgo
+  // divergence, and an HTML tag's `kind` is rsvelte's own completion falling
+  // through. One label cannot take both.
+  ...pairingKeyLabelSpace().flatMap((suffix) =>
+    COMPLETION_PROVIDERS.map((provider) => `completion-item-pairing-key-${suffix}-${provider}`),
+  ),
   "completion-item-duplicate-label",
   "completion-commit-characters-value-extra-paren",
   "completion-commit-characters-value-other",
@@ -378,37 +385,46 @@ function classifyCompletionItemSet(official, rsvelte, difference, region) {
   );
   // No label is missing: the arrays differ because an item is unpaired on a
   // pairing-key field, and then NONE of that item's other fields is compared.
-  if (differing.length === 0) return classifyPairingKey(officialItems, rsvelteItems);
-  const providers = new Set(differing.map((item) => completionProvider(item, region)));
-  const provider =
-    providers.size === 1 ? [...providers][0] : providers.size === 0 ? "other" : "mixed";
-  return `completion-item-set-${direction}-${provider}`;
+  if (differing.length === 0)
+    return classifyPairingKey(officialItems, rsvelteItems, region);
+  return `completion-item-set-${direction}-${providerOf(differing, region)}`;
 }
 
 // Direction is deliberately absent: one unpaired item produces a `missing` and
 // an `extra` pointer from the same cause, so a directional label would count
 // one mechanism twice under two names.
-function classifyPairingKey(officialItems, rsvelteItems) {
+function providerOf(items, region) {
+  const providers = new Set(items.map((item) => completionProvider(item, region)));
+  return providers.size === 1 ? [...providers][0] : providers.size === 0 ? "other" : "mixed";
+}
+
+function classifyPairingKey(officialItems, rsvelteItems, region) {
   const byLabel = new Map();
   for (const item of officialItems)
     if (item?.label !== undefined && !byLabel.has(item.label))
       byLabel.set(item.label, item);
   const fields = new Set();
+  const differing = [];
   for (const item of rsvelteItems) {
     const match = byLabel.get(item?.label);
     if (!match) continue;
+    let differs = false;
     for (const field of PAIRING_KEY_FIELDS)
       if (
         JSON.stringify(match[field] ?? null) !== JSON.stringify(item[field] ?? null)
-      )
+      ) {
         fields.add(field);
+        differs = true;
+      }
+    // The OFFICIAL item, because `completionProvider` reads `data` and the
+    // language-data prose, and rsvelte is the side that may have dropped them.
+    if (differs) differing.push(match);
   }
   if (fields.size === 0) return "completion-item-duplicate-label";
-  return `completion-item-pairing-key-${PAIRING_KEY_FIELDS.filter((field) =>
-    fields.has(field),
-  )
+  const suffix = PAIRING_KEY_FIELDS.filter((field) => fields.has(field))
     .map((field) => PAIRING_KEY_SLUG[field])
-    .join("+")}`;
+    .join("+");
+  return `completion-item-pairing-key-${suffix}-${providerOf(differing, region)}`;
 }
 
 // The `@`-segment of a pointer is `identity()` of the item, so the item it

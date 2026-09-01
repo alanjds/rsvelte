@@ -4528,6 +4528,33 @@ control (official must resolve into the `typescript` package) caught both fixtur
 probe position that landed inside `local` instead of `toUpperCase`, and macOS's `/var` symlink
 making the control compare an echoed URI against a resolved one.
 
+**The field a divergence sits on is not always the axis that separates its terminals, and
+`completion-item-pairing-key-kind` is where that cost showed.** At
+`radio-group-demo-disabled.svelte:1:2` (2,281 official items, 2,349 rsvelte, 1,559 labels on both
+sides) the `kind` disagreements are four different things: `21 -> 6` on every `const`
+(`name`, `VERSION`, `prefersReducedMotion`) is `Constant` vs `Variable`, which
+`GATES.md#deliberate-divergences` already records as tsgo omitting the TypeScript kind and pins
+against tsgo's own response; `6 -> 10` on `h4`, `hr`, `blockquote` is an HTML tag from rsvelte's
+own provider, which that same entry says explicitly must NOT be widened to. One label was holding
+a `deliberate` and an rsvelte defect, and **no amount of field-level splitting reaches it** — the
+discriminator is the item's PROVIDER, which the classifier already computes for the item-set
+labels. Crossing the pairing-key labels with `completionProvider` (the existing function, not a
+second coarser notion of the same thing) makes `completion-item-pairing-key-kind-ts` attributable
+to the filed report while the HTML arm stays an rsvelte defect.
+
+**Read that split's cost on units, not on entries.** Over the same two shards the pairing-key
+entries go 58 -> 78 and 136 -> 178 while the unit counts hold at exactly 60 and 156: a cell that
+carried one pairing-key label now carries two or three. Entry growth is what a finer vocabulary
+always does here, and unit conservation is the invariant that says the split moved no divergence.
+
+**Two unions remain inside these labels and neither is attributable yet.** The field set and the
+provider are both computed over a whole response, so `completion-item-pairing-key-kind+sort-text`
+means "some item differed on `kind` and some on `sortText`", and `-mixed` means the differing items
+came from more than one provider. On the measured population 58 of 78 pairing-key entries resolve
+to a single provider and 20 do not. Only the single-field, single-provider cell can take a
+terminal; the combinations stay unsigned, which is the same rule as everywhere else here and not a
+backlog.
+
 **The number of entries a label can remove is measurable, and for 47 of 48 labels it is zero.**
 `verify.mjs --write-current` already emits the `mech=` keys, so no instrument is needed: group the
 emitted keys of a run by `(file, method, phase)` and count how many units carry one label alone.
