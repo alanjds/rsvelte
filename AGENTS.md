@@ -237,6 +237,30 @@ citation. Exactly one place in the tree defends against it
 pins the expected answer *independently* — a port-vs-port test whose oracle is the other port
 passes when both are broken the same way.
 
+**A comment that COUNTS its siblings is the same hazard with a number in it, and the number is
+the part nobody re-derives.** `reactive_transforms.rs` lowers a `$:` body by branching on the
+shape of its left-hand side, and the pass that wraps a state member write in `$.mutate` was
+missing from one of them. The fix landed with a note saying the keyword branch "was missing this
+pass that **both sibling branches** have" — accurate about the two it names, and there are
+**eight**. Measured one cell per branch against upstream, **five** were missing it, so a mutation
+nested in a `$:` right-hand side (an arrow body, say) was emitted as a plain write on a prop, a
+state, a member, a computed-member and a non-reactive left-hand side alike, and the read pass then
+rewrote its root to `$.get(o)` — a write that parses, runs and never invalidates. The comment did
+not merely fail to prevent the next instance; **it argued the enumeration was closed**, in a file
+where the branches are 150 lines apart and nothing lists them. Two rules: when a note names a
+count, the count is a claim to check, not context; and when a defect is "a pass is missing from a
+branch", the repro is one cell per branch, because a fix that reaches the reported branch and one
+neighbour looks exactly like a fix that reaches all of them.
+
+The other half of the same day's work is the ordinary two-ports shape wearing a host: upstream
+stops an assignment target's root walk at anything that is not a `MemberExpression`
+(`AssignmentExpression.js:104-112`), so `stage.container().style.cursor = 'grab'` has no root
+binding and is not a mutation. rsvelte's `get_base_object` walked *through* a `Call` via its
+callee and wrapped it. Only the **template-expression** port did — an arrow declared in
+`<script>` reaches a different implementation and was already right — so the axis that separates
+them is the host the arrow is written in, not the binding or the expression. That is the
+`write-host` lesson (binding × host) arriving at a second site.
+
 **The `JsNode` → `serde_json::Value` cost is one site, and it is not the lazy cache.**
 `to_value` has 54 call sites; every materialization figure this project has quoted (27,488 →
 12,089 → 3,649) counts only the cached one. Of the bypassing population, 98% is
