@@ -4241,6 +4241,27 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`completion-is-incomplete` is 16/16 one direction and still not signed, because the association
+that explains it is a confound.** Official says `isIncomplete: true` and rsvelte says `false` on
+every sampled row, and every one of those rows also carries emmet items — which reads as "emmet
+marks the list incomplete". Official's own source refuses that reading: `PluginHost.ts:278-281`
+ORs the flag across plugins, and `CSSPlugin.ts:288` and `HTMLPlugin.ts:152` both hardcode `false`,
+so **only the TypeScript plugin can make it true** (`TypeScriptPlugin.ts:404` passes tsc's value
+through). The emmet items are on those units for a different reason.
+
+The same function carries a second consequence: at `:286-296`, when the flag is true and
+`filterIncompleteCompletions` is on — and it defaults to `true` at `:63` — official filters the
+item list itself, keeping only labels containing the typed prefix. So on exactly these units the
+item set is *expected* to diverge as well, which 16/16 do.
+
+What is **not** measured is why tsc reports it. A plain-TypeScript probe at a partial identifier
+with `includeCompletionsForModuleExports` and `allowIncompleteCompletions` on returned
+`isIncomplete: undefined` from tsc on both of two passes (1070 entries) against `false` from
+tsgo (1072 items) — the probe does not reach the condition, which is a fact about the probe. The
+label stays listed: neither ONE nor MANY has been established, and the direction of the item-count
+difference (official 13/8/8/2/1 against rsvelte 0 on five of six sampled units) is not what
+"official filtered its own list" predicts on its own.
+
 **`official-empty` splits without a vocabulary, and its residue names three words the reserved-word
 enumeration could not have reached.** Sixteen sampled definition rows have rsvelte answering where
 official answers nothing, and all sixteen target the **same file on the same line** — but only
