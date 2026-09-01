@@ -4966,6 +4966,24 @@ declares it has rsvelte answering `(alias) const Child: any` — not empty at al
 this label. The label stays unsigned. Two probe shapes disagreeing is weak evidence for two
 mechanisms and conclusive evidence that `n=23` over a four-valued key was not measuring it.
 
+**The larger half of that label is a different METHOD, and there the split is arithmetic rather
+than a probe.** The earlier sample was hover-heavy; over 931 records from 52 bits-ui components
+`rsvelte-empty` is 31 rows, **26 of them `textDocument/definition`** and 5 hover, all in the opened
+phase. Reading official's single returned link partitions the 26 exactly, with no residue:
+
+| n | official's answer | shape |
+|---|---|---|
+| 21 | a target inside the requesting file at a non-zero line | a component tag in markup resolving to the `import` binding that declares it |
+| 4 | another `.svelte` file, `targetRange` at line 0 | an import specifier resolving to the component file |
+| 1 | a zero-width origin whose target is itself | the degenerate `0:1` self-link, which is the shape `official-empty-target-is-the-request` was named for |
+
+Three shapes, so `MANY`, and the third may not be an rsvelte defect at all — an answer that points
+at the request with a zero-width range is the thing that label already declines to treat as an
+answer. **The partition sums to 26 of 26 and was computed, not read off the examples**: an earlier
+pass of the same question reported "26 of 26 target another file" from a substring test comparing
+a `corpus/`-relative site path against an absolute `file://` URI, which is a comparison that can
+only come out one way. The corrected test compares basenames and reports 22 same / 4 other.
+
 **The field a divergence sits on is not always the axis that separates its terminals, and
 `completion-item-pairing-key-kind` is where that cost showed.** At
 `radio-group-demo-disabled.svelte:1:2` (2,281 official items, 2,349 rsvelte, 1,559 labels on both
