@@ -4324,6 +4324,23 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`projection-origin-range` stays unsplit, and measuring it shows why the label boundary is not
+the defect boundary.** Its 21 sampled rows are all `textDocument/definition`, and the shift from
+official's origin range to rsvelte's is: `0:-5` twelve times, `-1:-1` three times, `0:-6` three
+times, `0:-9` twice, `-1:13` once. Read against the sources those constants are tag names —
+`<div ` is five characters, `<Example ` is nine, `<span ` is six, and the `-1` rows open their tag
+on the previous line. **Eighteen of twenty-one are rsvelte's origin range covering the enclosing
+element's start tag where official's covers the attribute name**, which is the same mechanism
+already signed under `projection-target-position-workspace`. Two are an `{#each … as plan
+(plan.id)}` key expression and one is unexplained.
+
+That makes three separate axes along which one defect has been found wearing several labels: the
+*field* it lands on (the two `CompletionProvider` blocks above), the *response shape* it produces
+(`rsvelte-empty` versus `ts-render-import-line`), and now the *pointer granularity* — an
+element-level `:extra-rsvelte-element` and a field-level `/originSelectionRange` pointer for the
+same wrong range. A label is a key into the ratchet, not a partition of the defects, and the three
+axes are all reasons the two counts cannot be converted into each other.
+
 **And a second block with three assignments produces a second three-label defect.**
 `CompletionProvider.ts:894-899` is one `if` body that writes `textEdit.newText` (trimmed to the
 part after the word range), `textEdit.range.start` (moved to the word start) and
