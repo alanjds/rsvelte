@@ -1036,6 +1036,24 @@ Nothing here is an oracle bug: the
 `oracle-invalid` classification already carries those and is a pass, not a ratchet
 entry.
 
+**And 398 of those 472 are inside the TEMPLATE, not inside embedded JS or CSS
+(2026-09-01).** The cluster table names the *shape* of the first differing line and
+never says which printer produced it, which reads as a line-breaking backlog in the
+embedded-JS formatter. Locating each entry’s first differing line back in its **source**
+— by a token needle, reporting `unlocated` rather than guessing — partitions the 549 as
+`template 438 | unlocated 48 | script 41 | style 22`, and crossed with the shape rule:
+`breaks-later|template 215`, `breaks-earlier|template 183`, `indent-only|template 31`,
+`breaks-later|script 19`, `indent-only|script 14`, `intra-line-ws|style 9`, the rest in
+single digits. So **72.5% of this ratchet is one question about Svelte markup**, and the
+embedded-JS and embedded-CSS engines together carry 63 entries.
+
+The positive control is that the same local harness reproduces the CI gate’s own
+partition on **five of its seven buckets exactly** (`breaks-later 258`,
+`breaks-earlier 214`, `intra-line-ws 15`, `extra-line 1`, `missing-line 1`), differing by
+two entries that move between `indent-only` and `other`. A region split measured by a
+harness that did not reproduce the shape split would be describing a different
+population.
+
 ### Three axes the cluster table does not carry (2026-08-31)
 
 The table above keys on the **first differing line**, which answers *what the
