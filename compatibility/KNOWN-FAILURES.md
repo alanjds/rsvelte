@@ -4984,6 +4984,21 @@ pass of the same question reported "26 of 26 target another file" from a substri
 a `corpus/`-relative site path against an absolute `file://` URI, which is a comparison that can
 only come out one way. The corrected test compares basenames and reports 22 same / 4 other.
 
+**Its mirror partitions too, and the first partition of it was wrong for a reason worth naming.**
+`official-empty` is 20 rows over 20 files and 20 lines in the same sample — 13 `definition`,
+7 `hover` — and splits `8 / 5 / 5 / 1 / 1`: eight definitions where **rsvelte** returns a link
+whose `originSelectionRange` is zero-width, five non-degenerate links, five TypeScript hovers, one
+HTML-data hover (`pre`) and one CSS-data hover (`animation-duration`). The eight are the same
+degenerate shape `official-empty-target-is-the-request` is named for, with the sides swapped — an
+answer that points at nothing is what official declines to produce there. So this label is `MANY`
+as well.
+
+The first attempt read `contents.value` and bucketed five of the seven hovers as "other prose".
+**A hover's `contents` is a bare string on some responses and a `{kind, value}` object on others**,
+so the accessor returned `undefined` and the fallback regex named the bucket. The shape assumption
+was in the *instrument*, and its symptom was a plausible partition with a residue bucket rather
+than an error — which is why the residue bucket is the first thing to open, not the last.
+
 **The field a divergence sits on is not always the axis that separates its terminals, and
 `completion-item-pairing-key-kind` is where that cost showed.** At
 `radio-group-demo-disabled.svelte:1:2` (2,281 official items, 2,349 rsvelte, 1,559 labels on both
