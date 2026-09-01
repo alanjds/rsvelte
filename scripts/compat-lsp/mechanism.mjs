@@ -111,9 +111,12 @@ export const MECHANISMS = [
     "range-start",
     "range-end",
     "range-other",
-    "new-text",
     "other",
   ].map((suffix) => `completion-text-edit-${suffix}`),
+  // `new-text` carries the provider, because the two arms measured on it are an
+  // HTML attribute snippet (`accesskey="$1"`) and a module specifier trimmed to
+  // the part after the word range -- two builders, not two spellings.
+  ...COMPLETION_PROVIDERS.map((provider) => `completion-text-edit-new-text-${provider}`),
   ...["presence-rsvelte-only", "presence-official-only", "other"].map(
     (suffix) => `completion-additional-text-edits-${suffix}`,
   ),
@@ -600,14 +603,30 @@ function completionItemDetailLabel(difference) {
 // `textEdit` and `additionalTextEdits` are separate fields with separate
 // producers, and a range's two endpoints move independently -- a shift and a
 // length change are one key only while both endpoints share a label.
-function completionTextEditLabel(difference) {
+// The `@completion-<hash>` segment names one item; `diff.mjs` exports the digest
+// so the provider can be read off the item itself rather than off the region,
+// which is only a proxy -- a TypeScript completion inside a `{...}` expression
+// sits in markup.
+function itemForPointer(difference, official, rsvelte) {
+  const named = /\/items\/@(completion-[0-9a-f]+)(\/|:|$)/.exec(difference);
+  if (!named) return null;
+  for (const side of [rsvelte, official])
+    for (const item of completionItems(side))
+      if (identity("textDocument/completion", "/items", item) === named[1]) return item;
+  return null;
+}
+
+function completionTextEditLabel(difference, official, rsvelte, region) {
   const additional = /\/additionalTextEdits(\/|:|$)/.test(difference);
   if (/\/(textEdit|additionalTextEdits):(extra|missing)-rsvelte-field/.test(difference))
     return additional
       ? `completion-additional-text-edits-presence${directionSuffix(difference)}`
       : `completion-text-edit-presence${directionSuffix(difference)}`;
   if (additional) return "completion-additional-text-edits-other";
-  if (/\/newText(:|$)/.test(difference)) return "completion-text-edit-new-text";
+  if (/\/newText(:|$)/.test(difference)) {
+    const item = itemForPointer(difference, official, rsvelte);
+    return `completion-text-edit-new-text-${item ? completionProvider(item, region) : "other"}`;
+  }
   if (/\/(range|insert|replace)\/start(\/|:|$)/.test(difference))
     return "completion-text-edit-range-start";
   if (/\/(range|insert|replace)\/end(\/|:|$)/.test(difference))
@@ -636,7 +655,9 @@ function completionItemDataLabel(difference) {
 function classifyCompletion(official, rsvelte, difference, region) {
   for (const [pattern, label] of COMPLETION_POINTERS)
     if (pattern.test(difference))
-      return typeof label === "function" ? label(difference, official, rsvelte) : label;
+      return typeof label === "function"
+        ? label(difference, official, rsvelte, region)
+        : label;
   if (/^\/items:(extra|missing)-rsvelte/.test(difference))
     return classifyCompletionItemSet(official, rsvelte, difference, region);
   if (isEmptyResult(official?.items) && !isEmptyResult(rsvelte?.items))

@@ -173,9 +173,10 @@ test("completion: the field the pointer names decides the label", () => {
     classify("textDocument/completion", both, both, "/items/@x/command:missing-rsvelte-field[hash=x]"),
     "completion-command-presence-official-only",
   );
+  // `@x` names no item, so the provider cannot be read and must not be guessed.
   assert.equal(
     classify("textDocument/completion", both, both, "/items/@x/textEdit/newText:value-mismatch"),
-    "completion-text-edit-new-text",
+    "completion-text-edit-new-text-other",
   );
   assert.equal(
     classify("textDocument/completion", both, both, "/items/@x/textEdit:extra-rsvelte-field[hash=x]"),
@@ -347,6 +348,43 @@ test("definition: an empty official answer splits on whether rsvelte pointed at 
 	assert.equal(
 		classifyDivergence("textDocument/definition", [], link(14, 5, 14, 14), ":extra-rsvelte-element[count=1,hash=x]", { text: "" }),
 		"official-empty",
+	);
+});
+
+test("completion new text: the provider comes from the item the pointer names", () => {
+	const mdn = (area, name) => ({
+		kind: "plaintext",
+		value: `MDN Reference: https://developer.mozilla.org/docs/Web/${area}/Reference/Global_attributes/${name}`,
+	});
+	// The two arms measured on this label: an HTML attribute whose official
+	// `newText` carries the `="$1"` snippet, and a module specifier official
+	// trims to the part after the word range.
+	const attribute = { label: "accesskey", kind: 12, documentation: mdn("HTML", "accesskey") };
+	const specifier = { label: "components", kind: 9, data: { name: "components" } };
+	const pointerFor = (item) =>
+		`/items/@${identity("textDocument/completion", "/items", item)}/textEdit/newText:value-mismatch`;
+	const list = (...items) => ({ items });
+	assert.equal(
+		classifyDivergence(
+			"textDocument/completion",
+			list(attribute),
+			list(attribute),
+			pointerFor(attribute),
+			{ text: "<div a></div>\n", position: { line: 0, character: 5 } },
+		),
+		"completion-text-edit-new-text-html",
+	);
+	// The same request position, a different item: the region is markup for both,
+	// so a region-based split would call this one html too.
+	assert.equal(
+		classifyDivergence(
+			"textDocument/completion",
+			list(specifier),
+			list(specifier),
+			pointerFor(specifier),
+			{ text: "<div a></div>\n", position: { line: 0, character: 5 } },
+		),
+		"completion-text-edit-new-text-ts",
 	);
 });
 

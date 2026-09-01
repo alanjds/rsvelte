@@ -4324,6 +4324,28 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`completion-text-edit-new-text` is two builders, and the split is read off the item rather than
+off the region.** Five sampled rows are an HTML attribute where official's `newText` is
+`accesskey="$1"` and rsvelte's is `accesskey`; three are a module specifier where official's is the
+*remainder* (`""`, `"s"`, `"nts"`) and rsvelte's is the whole label `components`. Both have a
+citation: `htmlCompletion.js:216-217` appends the `="$1"` value snippet unless the attribute is
+already followed by `=`, and `CompletionProvider.ts:894` trims `newText` to the part after the word
+range. Both are `R`.
+
+Region separates the eight 8/8, and region is nonetheless the wrong key: a TypeScript completion
+inside a `{…}` template expression sits in markup, so the proxy would call it html. `diff.mjs`
+exports the digest behind the `@completion-<hash>` pointer segment, so the classifier resolves the
+segment back to the item and reads `completionProvider` off it — the same rule the item-set family
+uses, applied where the pointer names exactly one item. The unit tests pin both arms with real
+digests; the **offline artifact cannot check them**, because the sampler stores only each item's
+*differing* fields and the digest is over `label`, `kind`, `sortText`, `filterText`. An instrument
+that reduces its records cannot re-run a rule that keys on what it dropped.
+
+One thing that fix surfaced: `htmlCompletion.js:216-220` is a single guard with **two** outputs —
+`codeSnippet = codeSnippet + value` and the `editor.action.triggerSuggest` command. The `style`
+fix earlier in this branch ported the second and left the first, so the same three lines are the
+origin of two separate divergences.
+
 **A third field official's completion path never sets, and the limit of that argument.**
 `completion-item-pairing-key-filter-text-ts` is 9 rows, 9 files, 9 positions, and all nine are the
 identical item: the `Symbol` bracket-accessor completion, same `label`, same
