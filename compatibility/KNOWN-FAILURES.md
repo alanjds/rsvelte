@@ -4528,6 +4528,29 @@ control (official must resolve into the `typescript` package) caught both fixtur
 probe position that landed inside `local` instead of `toUpperCase`, and macOS's `/var` symlink
 making the control compare an echoed URI against a resolved one.
 
+**`projection-response-range` can be signed without deciding which side is right, because the
+range has a property that does not reference official at all: it must cover the position the
+request asked about.** Over 11 samples official's range contains the requested column **11 times**
+and rsvelte's fails to **10 times**, with 6 collapsing to zero width. The hover TEXT is identical
+on both sides in every one, so the symbol is the same and only the span moved. It is signed as an
+rsvelte defect on that property, not on a comparison.
+
+It holds at least two mechanisms that happen to share the terminal: a constant column shift with
+the width preserved (`37..46` becomes `26..35`, `28..32` becomes `22..26`, `25..29` becomes
+`19..23` — 11, 6 and 6 columns early) and a collapse to a zero-width range at an unrelated column
+(`12..20` becomes `2..2`). Both are rsvelte-side, so the label takes a terminal even though it is
+not one mechanism — **the "one mechanism first" rule exists because two mechanisms may have two
+terminals, and where they demonstrably do not, the multiplicity is worth recording rather than
+splitting for.**
+
+**`completion-is-incomplete` is mostly a CONSEQUENCE of another label in the same cell, which is
+why it stays unsigned.** In 15 of 16 samples official answers `isIncomplete: true` with 8-13 items
+while rsvelte answers `false` with **zero** items — the flag disagreement is downstream of rsvelte
+having no completions at that position, and its terminal is whatever the empty list's is. The
+16th sample has items on both sides and still diverges on the flag, so the label is not purely a
+consequence either. A label whose cause is another label in the same cell is a shape to watch for:
+the entry partition still holds, but the row would double-count a cause.
+
 **`completion-command-presence-rsvelte-only` (52 entries) narrowed to one item and one operator.**
 Of 1,817 labels present on both sides at the probed position, exactly one — `style` — has rsvelte
 attaching `{"title":"Suggest","command":"editor.action.triggerSuggest"}` where official attaches
