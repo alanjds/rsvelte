@@ -311,13 +311,27 @@ fn tag_prefix(text: &str, offset: usize) -> Option<&str> {
     .then_some(prefix)
 }
 
+/// The end of the tag-name token `offset` sits inside — upstream's scanner reads
+/// `[_:\w][_:\w\-.\d]*`, and the replace range covers the whole name.
+fn tag_name_end(text: &str, offset: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut end = offset;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'_' | b':' | b'-' | b'.'))
+    {
+        end += 1;
+    }
+    end
+}
+
 fn html_tag_completions(text: &str, offset: usize, prefix: &str, markdown: bool) -> CompletionList {
-    // `collectOpenTagSuggestions` replaces the name already typed, so the
-    // client is free to filter and every item carries the same range.
+    // `collectOpenTagSuggestions` replaces the whole name token, not the part
+    // before the cursor, so the client is free to filter and every item carries
+    // the same range.
     let index = LineIndex::new(text);
     let range = lsp_types::Range::new(
         index.position(text, offset - prefix.len()),
-        index.position(text, offset),
+        index.position(text, tag_name_end(text, offset)),
     );
     CompletionList {
         is_incomplete: false,
@@ -650,6 +664,21 @@ mod tests {
 
     fn all_modifiers() -> Vec<String> {
         MODIFIERS.iter().map(|m| m.name.to_string()).collect()
+    }
+
+    #[test]
+    fn tag_completion_replaces_the_whole_name_token() {
+        // `<div>\n  <tex|tarea\n` -- the cursor is inside the name, and upstream's
+        // range still ends at the token's end, not at the cursor.
+        let text = "<div>\n  <textarea\n</div>\n";
+        let offset = text.find("textarea").unwrap() + 3;
+        let list = super::html_tag_completions(text, offset, "tex", false);
+        let range = match list.items[0].text_edit.as_ref().unwrap() {
+            lsp_types::CompletionTextEdit::Edit(edit) => edit.range,
+            _ => panic!("expected a plain edit"),
+        };
+        assert_eq!(range.start.character, 3);
+        assert_eq!(range.end.character, 11);
     }
 
     #[test]

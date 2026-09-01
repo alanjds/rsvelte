@@ -4187,6 +4187,296 @@ fix/regression swap are all invisible here. Count growth and shrinkage still cha
 directly, and the fixture and upstream suites keep per-field keys, so the loss is confined to the
 corpus aggregate.
 
+### The corpus key carries a mechanism, and that is why the entry count grows
+
+That aggregate recorded WHICH file's WHICH method diverged and nothing about why, so not one of the
+21,630 corpus entries could name where it is answered — which is what `scripts/ci/attribution-check.mjs`
+asks of every ratchet, and it reports this one as wholly unattributed. The key is now
+`aggregate:<file>|<method>|mech=<label>[|phase=edit]`, with `<label>` drawn from a closed vocabulary
+in `scripts/compat-lsp/mechanism.mjs` and derived from the observed pair alone. It is deliberately
+**not** a digest of the difference: that changes the moment a mechanism is partly fixed, and CI
+reads the new key as a NEW failure instead of as progress.
+
+**The file id stays in the key.** Dropping it makes one mechanism one entry, which reads as a 95%
+shrink and then does not move again until the last file carrying that mechanism is fixed.
+
+Three controls run on every sweep rather than being asserted once. The label count must equal the
+divergent-field count `verify.mjs` measured, or it throws — 2,042,624 against 2,042,624 on melt-ui
+and 1,135,808 against 1,135,808 on the bits-ui shard. `unclassified` is printed as its own row
+(0.0% on both), so a classifier that stops recognising a shape says so instead of absorbing it. And
+each label carries a discriminating unit test in `mechanism.test.mjs`.
+
+**The re-key multiplies the entry count, and the multiplier is measured on 18% of the corpus.**
+melt-ui goes 258 → 1,316 (5.10×, 30.6 entries per file) and the bits-ui shard 0/16 goes 266 → 1,030
+(3.87×, 22.9 per file). flowbite-svelte and shadcn-svelte — the other 82% — are extrapolation.
+
+**A label-to-label comparison has a resolution of 1, not 0.** Three sweeps of one binary over
+melt-ui produced the identical total of 2,042,624 divergent fields while one field moved between
+`ts-render` (1532 / 1531) and `completion-item-set` (22,752 / 22,753). For a two-digit label that is
+noise; for a single-digit label, quote the position-set difference rather than the count.
+
+**`projection-response-range` will GROW as other labels are fixed**, and that is unmasking rather
+than a regression: it is the label for "both sides answered the same payload at different ranges",
+which is only reachable once the payloads agree. The set difference against the previous baseline
+is what separates the two; the count cannot.
+
+### Splitting the catch-all labels, and what the split conserves
+
+Three labels named a symptom rather than a mechanism. `ts-render` meant "same symbol, different
+text", `completion-item-set` meant "the item arrays differ", and `target-file-mismatch` meant "the
+definitions are in different files" — each an aggregate over providers that fail for unrelated
+reasons.
+
+**All three splits conserve exactly**, measured on melt-ui at 2,108,087 divergent fields with
+`unclassified` at 0.0%: `target-file-mismatch` 156 = 132 + 20 + 4, the hover pair
+(`ts-render` + `ts-symbol-kind`) 1,761 = 1,703 + 58, and `completion-item-set` 22,844 = the ten
+populated provider labels.
+
+`ts-render` splits by asking which rewrite makes the two texts equal, in a fixed order, and the
+rewrite decides the **label** only — `diff.mjs` has already decided that the entry diverges, so no
+rewrite can hide a difference. Four of them are `tsgo --lsp` renderings that `tsc`'s quick info
+spells differently, with both sides' output at one probe position each in
+[`upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md`](../upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md):
+a union's members sorted, a dynamic import's quote spelling echoed from source rather than
+normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body.
+
+**The split moved 172 fields out of `ts-symbol-kind`, and that number is the check on it.**
+`(local function) f()` against `function f()` reads as a KIND disagreement to a classifier that
+compares declaration heads, so the renderer difference was being counted as a symbol-kind defect.
+Replaying melt-ui's dumped responses through the new classifier takes `ts-symbol-kind` from 230 to
+58 — a movement of exactly 172, which is exactly `ts-render-local-modifier`'s population. Every
+other hover label is unmoved to the unit (`css-data` 3082, `rsvelte-empty` 1144, `ts-symbol-name`
+362, `official-empty` 280, `provider-routing` 40, `projection-response-range` 30, `html-data` 26).
+
+`target-file-mismatch` splits by the pair of URI shapes and its residual drops from 156 to 4:
+132 are a component import resolving to the import specifier in the requesting document rather than
+to the component (an rsvelte defect), and 16 are official landing in a package's `.d.ts` where
+rsvelte lands in its source. The replay reads 4 fewer than the sweep on that label and fewer on
+three others (`projection-origin-range` 906 → 904, `rsvelte-empty` 734 → 720, `ts-lib-copy` 732 →
+720) — every deviation in the same direction, which is what a dump truncated at 6,000 characters
+predicts and what an arithmetic error would not.
+
+**Fixing the item set makes the ITEM's other fields comparable, and that is a growth, not a
+regression.** `diff.mjs` pairs array entries by a digest of `(label, kind, sortText, filterText)`,
+so an item one side never emits has no counterpart and none of its fields is compared. rsvelte
+filtered open-tag completions by the name already typed where upstream pushes every tag; removing
+that filter took exactly 124 labels out of the `only-official` half on melt-ui and added none —
+and took the sweep from 2,042,624 divergent fields to 2,108,087, with **+65,372 of the +65,463 in
+`completion-text-edit`** and every other label unmoved. The newly paired tag items were carrying a
+second defect: upstream's `collectOpenTagSuggestions(scanner.getTokenOffset(),
+scanner.getTokenEnd())` replaces the whole name **token**, and rsvelte's range ended at the cursor.
+Driving both servers at one position where the cursor sits at the name's end produces byte-equal
+`textEdit`s, which is what rules out "the tag range was always wrong" — the corpus position
+generator asks at each identifier's **second** character, so its cursor is always mid-token.
+
+`completion-item-set` splits by the provider that produced the differing items, read off the item
+itself: the TypeScript server is the only one that attaches `data`, the language-data providers cite
+an MDN reference whose path names HTML, CSS or SVG, and a close tag is separated from an open tag by
+the `/` its label starts with. Direction is part of the label because an item rsvelte fails to emit
+and one it emits in excess are opposite defects. A difference whose items span two providers is
+`-mixed`, and **a large `-mixed` would mean the split failed**.
+
+**Measured, the split succeeds on `-mixed` and fails on `-other`.** `-mixed` is 2,578 of 22,844
+(11.3%); `-other` is 13,580 (59.4%), which is the dumping ground this vocabulary forbids. The cause
+is that an MDN reference is attached only to entries the language-data sets register as standard:
+driving both servers at a `<style>` position prints `-webkit-column-gap` with the documentation
+"Sets the gap between columns." and `:hover` with "Applies while the user designates an element…",
+neither carrying a URL, and official's `data-` attribute item carries no documentation at all.
+
+**The obvious second axis was measured and lost, which is worth more than an axis nobody tried.**
+This section previously said the split needed an axis read off the item — the label's leading `:`
+or `-`, and the item kind where no documentation exists. Both were measured and both are unsound: a
+first-character rule decides 43.0% of the `other` bucket and the item kind 57.8%, because **an LSP
+`CompletionItemKind` is reused across languages and so is not a proxy for the provider**. Kind 14
+carries CSS type and class selectors (`a`, `abbr`, `blockquote`, `.focus-ring`) *and* Svelte's
+directive namespaces (`use:`, `transition:`, `in:`, `out:`, `animate:`, `style:`); kind 12 carries
+CSS global values (`initial`, `inherit`, `unset`) *and* HTML attributes (`data-`, `aria-label`,
+`bind:this`); an item with no kind at all carries CSS declaration snippets (`top: ;`) *and* HTML tag
+names (`section`, `samp`). Anyone splitting an LSP completion population will reach for kind first.
+
+**Those two percentages are over a different denominator than this ratchet, and that is why they
+also mispredicted the fix.** They count item *occurrences* (523,728 on melt-ui); the mechanism table
+and the ratchet count divergent *fields*. One request that drops 700 CSS properties is ~1 field and
+700 occurrences, so the clusters that dominated the diagnostic denominator carry almost no weight in
+the one that matters. Which denominator to measure on follows from what you want to predict, and
+matching them is not a bookkeeping nicety — a share measured on the wrong one is not a weak
+predictor, it is not a predictor.
+
+The axis that does work is not on the item at all: it is **the embedded region the request position
+sits in**. It is a function of the input, so it cannot encode which side is correct — an axis read
+off the responses would move whenever the ratchet shrinks, and the tables either side of a fix would
+not be comparable. `regionAt` walks the `<style>` / `<script>` tags before the offset, taking the
+boundary as the outside edge of both tags, and it refines only what the MDN rule left as `other`, so
+every previously assigned label is untouched. Measured as its own arm with the binary unchanged, it
+moved 4,720 fields — `-other` 13,580 → 10,464 and `-mixed` 2,578 → 974 against `-css` +3,064 and
+`-html` +1,656, conserving exactly — and left 31 of the other 40 labels byte-identical.
+
+**The residual was not a provider class, and the instrument that said so had to evaluate two
+predicates instead of following the classifier's branch.** All 10,464 remaining fields have an
+*empty* differing-label set: the item denominator is 0. `diff.mjs` pairs items by a digest of
+`(label, kind, sortText, filterText)`, so an item whose label matches and whose pairing-key field
+does not is unpaired in **both** directions while the label sets agree — and then none of that
+item's other fields is ever compared. Driving both servers at one melt-ui position prints the two
+sides:
+
+```
+official kind=21          rsvelte kind=6      name, Motion, previewCtx, VERSION
+official kind=6           rsvelte kind=7      Accordion, Avatar, Collapsible, Combobox
+official kind=14          rsvelte kind=3      unique
+official sortText="z16"   rsvelte "16"        afterUpdate, beforeUpdate, createEventDispatcher
+official sortText="-1"    rsvelte "16"        Accordion, Avatar, Collapsible, Combobox
+official sortText="16"    rsvelte "z15"       blur
+```
+
+The first probe of this residual counted only the classifier's `else` branch and never reached the
+empty case at all, because it skipped an empty differing list before measuring it. Rebuilt to
+evaluate *region* and *empty* independently, the 2×2 came back 10,464 / 0 on the second column.
+`completion-item-pairing-key-<fields>` names it, direction deliberately absent because one unpaired
+item raises a `missing` and an `extra` pointer from one cause. Predicted before the run and then
+measured: `-other` to 0, the new labels to exactly 10,464, the remaining `completion-item-set-*` to
+exactly 12,380, `unclassified` to 0 — all four hold, with `completion-item-duplicate-label` at 0, so
+every one of the 10,464 is a field disagreement and none is a repeated label.
+
+**A finer vocabulary makes this ratchet longer without fixing anything, and that is a precondition
+rather than a cost.** A key is `aggregate:<file>|<method>|mech=<label>`, so a label's entry count is
+the number of `(file, method, phase)` cells it appears in — bounded by 258 on melt-ui whether the
+label carries 1,390,854 divergent fields or 40. Splitting one cell's `-other` into `-css` and
+`-html` makes that cell two entries: melt-ui's NEW count went 1,998 → 2,134 → 2,200 across the
+region and pairing-key arms with no defect fixed. The alternative is a key that cannot name a
+mechanism, and an attribution table whose only possible row covers everything and explains nothing.
+
+**Two more labels were split for the same reason, and the sieve that found them reports
+`not-MANY`, never `ONE`.** A label's samples are reduced to the SET of difference-pointer shapes
+they carry, digests and array keys erased; a label whose samples disagree on that set is an
+aggregate. Ten samples over shadcn-svelte and bits-ui put 3 of 41 observed labels in that state:
+`completion-item-data` carried `/data/source:missing-rsvelte-field` and `/data/uri:value-mismatch`,
+`completion-text-edit` carried `textEdit:extra-rsvelte-field` and `textEdit/newText:value-mismatch`,
+and `projection-origin-range` carried the `start` and the `end` of one `originSelectionRange`.
+The first two are split on the pointer's sub-key (`-source`/`-uri`/`-position`/`-name`/`-other` and
+`-presence`/`-range`/`-new-text`/`-other`).
+
+**The third was going to be dismissed as the diff's granularity, and a per-request tally said
+otherwise.** The reading was that a range is one value `diff.mjs` reports at two pointers, so
+splitting it would add an attribution row where no second mechanism had been shown. Tallying, per
+REQUEST, the set of endpoints that actually diverge gives **52 requests moving `start.character`
+alone, 34 moving `start.character` and `start.line`, and 2 moving both ends' columns** — the
+endpoints do not move together, and `end` alone never occurs. The label stays unsplit because the
+axis that separates those three is a property of the request rather than of the difference the
+classifier is handed, but it stays **unsigned** with that distribution recorded, rather than signed
+on a reading the measurement contradicts.
+
+**`completion-commit-characters-value` was the fourth, and the sieve could not see it because both
+mechanisms write the identical pointer.** Upstream appends `(` at a new-identifier location and
+otherwise passes TypeScript's own list through; rsvelte synthesizes `['.', ',', ';', '(']` for every
+item. Tallying the two arrays, paired on `label`, gives three shapes: official `['.', ',', ';']`
+against rsvelte's four (the extra `(`), official absent entirely (which was already its own
+`-presence` label), and official `['.', ';']` — a **different base set**, which no amount of
+appending explains. It splits into `-value-extra-paren` and `-value-other`, decided by resolving
+the pointer's `@` segment back to the item through `diff.mjs`'s own exported `identity()` rather
+than through a second copy of that digest. The vocabulary is 58.
+
+**All three splits conserve exactly**, measured on bits-ui shard 3/64 at 186,638 divergent fields
+with the same run reporting `10 cases; 13926/13926 compared, 2362 divergent requests` before and
+after: `completion-commit-characters-value` 116,176 = 105,572 `-extra-paren` + 10,604 `-other`,
+`completion-text-edit` 3,958 = 2,006 `-range` + 1,894 `-new-text` + 58 `-presence`, and
+`completion-item-data` 10,634 = 10,628 `-uri` + 6 `-source`. `-other` is empty on both of the
+labels that have one, which is what a closed vocabulary's catch-all should look like: present so
+an unseen shape has somewhere to land, and not a residue.
+
+**The split reordered the work, which is the point of doing it before signing anything.**
+`completion-item-data` looked like the auto-import defect; it is 6 fields of that and 10,628 of
+something else. Both sides' `data.uri` at
+`bits-ui/docs/src/routes/stackblitz/+page.svelte:1:2`, against a client that sent
+`file:///…/stackblitz/+page.svelte`:
+
+```
+official   2271/2271 items   file:///…/stackblitz/%2Bpage.svelte
+rsvelte    2340/2340 items   file:///…/stackblitz/+page.svelte
+```
+
+Upstream re-serializes the URI through `vscode-uri`, which percent-encodes `+`; rsvelte echoes the
+string the client sent. Both name the same file and both resolve, so nothing a user does is broken
+— but the field is compared, and **every SvelteKit route file is named `+page.svelte` or
+`+layout.svelte`**, so the population is not a corner case. It is an rsvelte-side normalization and
+its end state is zero.
+
+**And the `-source` half is not one field, which one sample said it was.** Reading the item that
+reproduces the defect gives official `{name, source, uri, position}` against rsvelte
+`{name, uri, position}`, and the obvious reading is that one key is missing. Tallying the `data`
+key SET over every item of one response instead gives official **two** shapes — 1,196 items at
+`{data, name, position, source, uri}` and 1,075 at `{name, position, uri}` — against rsvelte's
+2,340 items at `{name, position, uri}` and nothing else. The auto-import items carry a **nested
+`data`** as well as a `source`, and `adopt_upstream_item_data` builds `{name, uri, position}`
+unconditionally, so both are dropped. A key set is a population question and a sample cannot
+answer it; the sample says which keys ONE item had, not which keys the label is about.
+
+**The sieve has no resolution on two of the three methods, and its `not-MANY` there is close to
+vacuous.** It reduces a sample to the SHAPE of the difference pointer, and measured over the same
+ten samples per label, `textDocument/hover` produces **4 distinct shapes across all of its labels
+combined** and `textDocument/definition` 4, against 11 for `textDocument/completion`. A hover
+divergence is `/contents:value-mismatch` or `/:value-mismatch` and nothing else, so every hover
+label's samples agree by construction. It shows: `ts-symbol-name` reads `not-MANY(n=10)` while one
+sample is `import UseClipboard` against `any` — a lost type — and another is upstream's rendered
+JSDoc against a **truncated fragment** of it beginning mid-sentence with a `lib.es5.d.ts` URI.
+Those are two mechanisms one pointer cannot separate. `provider-routing` was signed and then
+withdrawn on exactly this ground: its three samples disagree on direction (upstream answers from
+HTML data where rsvelte answers from TypeScript, and from TypeScript where rsvelte answers from
+CSS data), which one pointer shape reports as agreement.
+
+**Giving the sieve a second axis found four more aggregates without adding an input.** The axis is
+the PAYLOAD reduced to a closed set of classes — for hover, whether each side's `contents` is a
+```` ```typescript ```` block, MDN prose, a one-line CSS-property stub, other plain text, or
+nothing; for definition, the set of classes its `targetUri`s fall into (`typescript-lib`,
+`tsgo-lib`, a `.d.ts` declaration, a workspace file, empty). Both are read off the observed pair
+and neither says which side is right. On the same ten samples per label the count goes **3 MANY to
+7**: `provider-routing` (`plain→ts-block`, `ts-block→css-stub`, `ts-block→plain`), `ts-symbol-name`
+(`ts-block→ts-block` and `ts-block→plain`), `target-declaration-vs-source`
+(`declaration→other` and `declaration→workspace`) and `projection-target-position`
+(`declaration→declaration` and `workspace→workspace`) join the three the pointer axis found. It is
+the `fold-value-type` lesson one gate over: **the family already reached every one of these labels
+on every run — what was missing was an axis, not an input.**
+
+**A sieve reduces a sample to a key, and where the key's range is smaller than the sample's,
+agreement is a property of the key rather than of the population.** That is what the two numbers
+above mean: hover's divergences can only be `/contents:value-mismatch` or `/:value-mismatch`, so a
+hover label's samples agree by construction and `not-MANY(n=10)` there is not a measurement at all.
+Report the key's own cardinality beside any uniformity verdict — a verdict drawn from a two-valued
+key over ten samples has measured almost nothing. It is the discriminating-power question one level
+up from a non-discriminating test: not "do the samples share a property" but "**can this key hold
+the property that would separate them**".
+
+**The direction is one of those properties, and three keys did not carry it.** A presence
+divergence has a free direction and its pointer names only the field, so
+`commitCharacters:extra-rsvelte-field` and `commitCharacters:missing-rsvelte-field` reached one
+label — "rsvelte writes a field upstream omits" and its exact opposite, under one entry that would
+suppress both. `completion-commit-characters-presence`, `completion-text-edit-presence` and
+`completion-item-data-source` now each carry `-rsvelte-only` / `-official-only`, taking the
+vocabulary to 61. Direction is already in `completion-item-set-{missing,extra}-*` by name, and a
+`value-mismatch` has no free direction because both sides wrote the field.
+
+**Both directions occur, so the split was not hypothetical.** The same shard reports
+`completion-text-edit-presence-official-only` at 54 and `-presence-rsvelte-only` at 4 — under one
+label those 58 fields were one entry per `(file, method, phase)` covering a field upstream writes
+and rsvelte does not AND a field rsvelte writes and upstream does not. The other two are
+direction-pure on this shard (`completion-commit-characters-presence-rsvelte-only` 51,404 with no
+`-official-only`, `completion-item-data-source-official-only` 6 with no `-rsvelte-only`), which is
+a measurement rather than a reason to fold the key back.
+
+Re-running the de-instrumented tree reproduces the run exactly — `10 cases; 13926/13926 compared,
+2362 divergent requests / 186638 divergent fields`, `186638 labelled, 0 unclassified (0.0%),
+vocabulary 61` — and **the 14 labels signed so far cover 178,486 of those 186,638 divergent
+fields, 95.6%**. Read that share in its own unit: the ratchet counts `(file, method, phase)`
+ENTRIES, and a label with six divergent fields can hold as many entries as one with fifty
+thousand, so a field share is not an entry share and neither is a defect count.
+
+**`n` is not the sample size that matters — the number of distinct positions is.** The sampler
+took one site per label per FILE, and five files supply the same syntactic position: `0:2`, `0:9`
+and `0:15` recur across unrelated components because `suites.mjs` walks each file's identifiers in
+order. Five of the 41 labels reduced to a single position at `n=10`, which discriminates as `n=1`;
+they are reported as `insufficient(pos=1)` rather than `not-MANY`, because a measurement that did
+not happen must not share a column with one that did. The sampler now requires a distinct file
+**and** a distinct line.
+
 Every unit is compared twice. The harness sends `didOpen`, runs the request set, then applies a
 deterministic `didChange` script derived from the source and runs the **same** request set again.
 The script inserts an `import` at the end of the first `<script>`, a rule at the end of the first

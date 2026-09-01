@@ -4,9 +4,35 @@
 // pair alone and must not encode the measured content: a key carrying a digest
 // of the difference changes the moment a mechanism is partly fixed, and CI
 // reads the new key as a NEW failure instead of as progress.
+// The pairing key `diff.mjs` uses, minus `label` (a differing label is a real
+// set difference and is classified as one).
+import { identity } from "./diff.mjs";
+const PAIRING_KEY_FIELDS = ["kind", "sortText", "filterText"];
+const PAIRING_KEY_SLUG = { kind: "kind", sortText: "sort-text", filterText: "filter-text" };
+function pairingKeyLabelSpace() {
+  const space = [];
+  for (let mask = 1; mask < 1 << PAIRING_KEY_FIELDS.length; mask += 1)
+    space.push(
+      PAIRING_KEY_FIELDS.filter((_, index) => mask & (1 << index))
+        .map((field) => PAIRING_KEY_SLUG[field])
+        .join("+"),
+    );
+  return space;
+}
+
 export const MECHANISMS = [
   // Architectural: rsvelte proxies tsgo, official bundles `typescript`.
   "ts-lib-copy",
+  // The four renderings a `tsgo --lsp` hover spells differently from `tsc`'s
+  // quick info, each pinned by one probe position in
+  // `upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md`.
+  "ts-render-union-order",
+  "ts-render-quote-style",
+  "ts-render-local-modifier",
+  "ts-render-jsdoc-tag",
+  // The residual: a hover text none of those four rules explains. It is NOT
+  // attributed to tsgo -- the same probe shows `tsc` and `tsgo` agreeing on the
+  // shapes this bucket holds, so which side is wrong is unmeasured.
   "ts-render",
   "ts-symbol-kind",
   "ts-symbol-name",
@@ -23,17 +49,52 @@ export const MECHANISMS = [
   "projection-origin-range",
   "projection-target-position",
   "projection-response-range",
+  // official resolves an imported component to its file; rsvelte stops at the
+  // import specifier in the requesting document.
+  "target-component-vs-import",
+  // official lands in a package's `.d.ts`, rsvelte in the package source.
+  "target-declaration-vs-source",
   "target-file-mismatch",
-  // completion payload fields.
-  "completion-item-set",
+  // completion payload fields. The item set splits by the PROVIDER the differing
+  // items come from, because one `/items` difference hid TypeScript, HTML tag,
+  // HTML attribute and CSS data gaps under one name.
+  ...["missing", "extra"].flatMap((direction) =>
+    ["ts", "html", "html-close-tag", "css", "svg", "other", "mixed"].map(
+      (provider) => `completion-item-set-${direction}-${provider}`,
+    ),
+  ),
   // Measured on melt-ui: the arrays differ (18.9% of label-paired items, upstream
   // omits the `(` at a new-identifier location) and upstream omits the field
   // outright (8.1%) are two mechanisms one label hid.
-  "completion-commit-characters-value",
-  "completion-commit-characters-presence",
+  // `diff.mjs` pairs items by a digest of (label, kind, sortText, filterText),
+  // so an item whose label matches and whose pairing-key field does not is
+  // unpaired in BOTH directions while the label sets agree. Which fields
+  // disagree is the mechanism; it says nothing about which side is right.
+  ...pairingKeyLabelSpace().map((suffix) => `completion-item-pairing-key-${suffix}`),
+  "completion-item-duplicate-label",
+  "completion-commit-characters-value-extra-paren",
+  "completion-commit-characters-value-other",
+  "completion-commit-characters-presence-rsvelte-only",
+  "completion-commit-characters-presence-official-only",
   "completion-command",
-  "completion-text-edit",
-  "completion-item-data",
+  // Two labels each hid two mechanisms: a field one side never writes, and a
+  // value both sides write and compute differently. The sub-key is read off
+  // the difference pointer, so it names what diverged and not who is right.
+  ...[
+    "presence-rsvelte-only",
+    "presence-official-only",
+    "range",
+    "new-text",
+    "other",
+  ].map((suffix) => `completion-text-edit-${suffix}`),
+  ...[
+    "source-rsvelte-only",
+    "source-official-only",
+    "uri",
+    "position",
+    "name",
+    "other",
+  ].map((suffix) => `completion-item-data-${suffix}`),
   "completion-is-incomplete",
   "completion-item-detail",
   "unclassified",
@@ -102,6 +163,46 @@ function declarationHead(text) {
   return { kind: "?", name: first.slice(0, 32) };
 }
 
+// The four `tsgo` renderings `upstream_issues/tsgo-lsp-hover-renders-four-
+// things-differently-from-tsc.md` reproduces, each written as the rewrite that
+// makes the two texts equal. The rewrite decides the LABEL only -- it never
+// decides whether the entry diverges -- so it cannot hide a difference.
+const sortUnions = (text) =>
+  text.replace(/(?:"[^"]*"|'[^']*'|[\w.$<>[\]]+)(?:\s*\|\s*(?:"[^"]*"|'[^']*'|[\w.$<>[\]]+))+/g, (run) =>
+    run
+      .split("|")
+      .map((part) => part.trim())
+      .sort()
+      .join(" | "),
+  );
+const normalizeImportQuotes = (text) =>
+  text.replace(/import\('([^']*)'\)/g, 'import("$1")');
+// `(local function) f()` against `function f()`: the qualifier is dropped, the
+// kind word is not.
+const dropLocalModifier = (text) =>
+  text.replace(/\(local (function|var|let|const|class|method|property)\)/g, "$1");
+const dropJsdocTags = (text) =>
+  text
+    .split("\n")
+    .filter((line) => !/^\s*\*@[A-Za-z]+\*/.test(line))
+    .join("\n")
+    .trimEnd();
+
+// Applied in a fixed order so one input cannot land on two labels; the first
+// rewrite that makes the two texts equal names the mechanism.
+const TS_RENDER_RULES = [
+  ["ts-render-union-order", sortUnions],
+  ["ts-render-quote-style", normalizeImportQuotes],
+  ["ts-render-local-modifier", dropLocalModifier],
+  ["ts-render-jsdoc-tag", dropJsdocTags],
+];
+
+function classifyTsRender(left, right) {
+  for (const [label, rewrite] of TS_RENDER_RULES)
+    if (rewrite(left) === rewrite(right)) return label;
+  return "ts-render";
+}
+
 function classifyHover(official, rsvelte) {
   if (isEmptyResult(official) && !isEmptyResult(rsvelte)) return "official-empty";
   if (!isEmptyResult(official) && isEmptyResult(rsvelte)) {
@@ -124,6 +225,12 @@ function classifyHover(official, rsvelte) {
     return "unclassified";
   }
   if (typeof left !== "string" || typeof right !== "string") return "unclassified";
+  // Ahead of the head comparison, because `(local function) f()` vs `function
+  // f()` reads as a KIND disagreement and is one of the four renderer rules.
+  // Each rule demands full equality after its rewrite, so a genuinely different
+  // symbol cannot match one.
+  const rendered = classifyTsRender(left, right);
+  if (rendered !== "ts-render") return rendered;
   const leftHead = declarationHead(left);
   const rightHead = declarationHead(right);
   if (leftHead.name !== rightHead.name) return "ts-symbol-name";
@@ -154,23 +261,218 @@ function classifyDefinition(official, rsvelte, difference) {
   if (onlyLeft.some((key) => isSvelteShadow(uriOf(key))))
     return "official-defect-svelte-ts-shadow";
   if (new Set(all.map(uriOf)).size === 1) return "projection-target-position";
+  const isComponent = (uri) => /\.svelte$/.test(uri);
+  if (onlyLeft.every((key) => isComponent(uriOf(key))) &&
+      onlyRight.every((key) => isComponent(uriOf(key))))
+    return "target-component-vs-import";
+  if (onlyLeft.every((key) => /\.d\.ts$/.test(uriOf(key))) &&
+      onlyRight.every((key) => !/\.d\.ts$/.test(uriOf(key))))
+    return "target-declaration-vs-source";
   return "target-file-mismatch";
 }
 
+// Which embedded region an offset sits in. A completion item that cites no MDN
+// page cannot be attributed from its own fields, and WHERE the request was made
+// is an input property, so it cannot encode which side is correct.
+const REGION_TAG = /<(style|script)\b[^>]*>|<\/(style|script)\s*>/gi;
+export function regionAt(text, offset) {
+  let region = "markup";
+  let open = null;
+  REGION_TAG.lastIndex = 0;
+  for (let match; (match = REGION_TAG.exec(text)); ) {
+    // The boundary is the outside edge of both tags: an offset inside `<style>`
+    // has not entered the region and one inside `</style>` has not left it.
+    if (match.index + match[0].length > offset) break;
+    if (match[1]) {
+      open = match[1].toLowerCase();
+      region = open;
+    } else if (match[2] && match[2].toLowerCase() === open) {
+      open = null;
+      region = "markup";
+    }
+  }
+  return region;
+}
+
+export function offsetAt(text, position) {
+  const lines = text.split("\n");
+  let offset = 0;
+  for (let line = 0; line < position.line && line < lines.length; line += 1)
+    offset += lines[line].length + 1;
+  return offset + position.character;
+}
+
+export function requestRegion(context) {
+  if (!context?.text || !context?.position) return "unknown";
+  return regionAt(context.text, offsetAt(context.text, context.position));
+}
+
 const COMPLETION_POINTERS = [
-  [/\/commitCharacters:(extra|missing)-rsvelte-field/, "completion-commit-characters-presence"],
-  [/\/commitCharacters(:|$)/, "completion-commit-characters-value"],
+  [
+    /\/commitCharacters:(extra|missing)-rsvelte-field/,
+    (difference) => `completion-commit-characters-presence${directionSuffix(difference)}`,
+  ],
+  [/\/commitCharacters(:|$)/, commitCharacterValueLabel],
   [/\/command(:|$)/, "completion-command"],
-  [/\/(textEdit|additionalTextEdits)(\/|:|$)/, "completion-text-edit"],
-  [/\/data(\/|:|$)/, "completion-item-data"],
+  [/\/(textEdit|additionalTextEdits)(\/|:|$)/, completionTextEditLabel],
+  [/\/data(\/|:|$)/, completionItemDataLabel],
   [/^\/isIncomplete:/, "completion-is-incomplete"],
   [/\/(detail|documentation|labelDetails)(\/|:|$)/, "completion-item-detail"],
-  [/^\/items:(extra|missing)-rsvelte/, "completion-item-set"],
 ];
 
-function classifyCompletion(official, rsvelte, difference) {
+// Which provider produced a completion item, read off the item itself: the TS
+// server is the only one that attaches `data`, and the language-data providers
+// cite MDN. A close tag is its own mechanism (rsvelte has no `</` path at all),
+// and its label spelling is the one thing that separates it from an open tag.
+function completionProvider(item, region) {
+  if (item?.data !== undefined) return "ts";
+  if (typeof item?.label === "string" && item.label.startsWith("/"))
+    return "html-close-tag";
+  const documentation =
+    typeof item?.documentation === "string"
+      ? item.documentation
+      : (item?.documentation?.value ?? "");
+  // Only the `MDN Reference:` line names the item's own area. The HTML `class`
+  // attribute's prose links to `/docs/Web/CSS/Class_selectors`, so a bare
+  // substring test reads it as CSS.
+  const reference = /^MDN Reference: https:\/\/developer\.mozilla\.org\/docs\/Web\/(CSS|HTML|SVG)\//m.exec(
+    documentation,
+  );
+  if (reference) return reference[1].toLowerCase();
+  if (region === "style") return "css";
+  if (region === "markup") return "html";
+  return "other";
+}
+
+const completionItems = (value) =>
+  Array.isArray(value?.items) ? value.items : Array.isArray(value) ? value : [];
+
+function classifyCompletionItemSet(official, rsvelte, difference, region) {
+  const direction = difference.includes(":missing-rsvelte") ? "missing" : "extra";
+  const officialItems = completionItems(official);
+  const rsvelteItems = completionItems(rsvelte);
+  const otherSide = new Set(
+    (direction === "missing" ? rsvelteItems : officialItems).map((item) => item?.label),
+  );
+  const differing = (direction === "missing" ? officialItems : rsvelteItems).filter(
+    (item) => !otherSide.has(item?.label),
+  );
+  // No label is missing: the arrays differ because an item is unpaired on a
+  // pairing-key field, and then NONE of that item's other fields is compared.
+  if (differing.length === 0) return classifyPairingKey(officialItems, rsvelteItems);
+  const providers = new Set(differing.map((item) => completionProvider(item, region)));
+  const provider =
+    providers.size === 1 ? [...providers][0] : providers.size === 0 ? "other" : "mixed";
+  return `completion-item-set-${direction}-${provider}`;
+}
+
+// Direction is deliberately absent: one unpaired item produces a `missing` and
+// an `extra` pointer from the same cause, so a directional label would count
+// one mechanism twice under two names.
+function classifyPairingKey(officialItems, rsvelteItems) {
+  const byLabel = new Map();
+  for (const item of officialItems)
+    if (item?.label !== undefined && !byLabel.has(item.label))
+      byLabel.set(item.label, item);
+  const fields = new Set();
+  for (const item of rsvelteItems) {
+    const match = byLabel.get(item?.label);
+    if (!match) continue;
+    for (const field of PAIRING_KEY_FIELDS)
+      if (
+        JSON.stringify(match[field] ?? null) !== JSON.stringify(item[field] ?? null)
+      )
+        fields.add(field);
+  }
+  if (fields.size === 0) return "completion-item-duplicate-label";
+  return `completion-item-pairing-key-${PAIRING_KEY_FIELDS.filter((field) =>
+    fields.has(field),
+  )
+    .map((field) => PAIRING_KEY_SLUG[field])
+    .join("+")}`;
+}
+
+// The `@`-segment of a pointer is `identity()` of the item, so the item it
+// names can be recovered on both sides rather than guessed from the response.
+// The index is memoised per payload: one response carries thousands of items
+// and thousands of differences, and hashing the items per difference is
+// quadratic in a place where the run never finishes.
+const itemIndex = new WeakMap();
+function itemsByIdentity(payload) {
+  if (payload === null || typeof payload !== "object") return undefined;
+  let index = itemIndex.get(payload);
+  if (index) return index;
+  index = new Map();
+  for (const item of completionItems(payload)) {
+    const key = identity("textDocument/completion", "/items", item);
+    if (!index.has(key)) index.set(key, item);
+  }
+  itemIndex.set(payload, index);
+  return index;
+}
+
+function itemAtPointer(payload, difference) {
+  const match = /\/items\/@([^/:]+)/.exec(difference);
+  if (!match) return undefined;
+  return itemsByIdentity(payload)?.get(match[1]);
+}
+
+// Upstream appends `(` only at a call location and otherwise passes TypeScript's
+// list through; rsvelte synthesizes one list for every item. The two failures
+// look the same in the pointer and are different mechanisms: one adds a
+// character to the same base, the other has a different base.
+function commitCharacterValueLabel(difference, official, rsvelte) {
+  const left = itemAtPointer(official, difference)?.commitCharacters;
+  const right = itemAtPointer(rsvelte, difference)?.commitCharacters;
+  if (!Array.isArray(left) || !Array.isArray(right))
+    return "completion-commit-characters-value-other";
+  const extra = right.filter((character) => !left.includes(character));
+  const missing = left.filter((character) => !right.includes(character));
+  return missing.length === 0 && extra.length === 1 && extra[0] === "("
+    ? "completion-commit-characters-value-extra-paren"
+    : "completion-commit-characters-value-other";
+}
+
+// A presence divergence has a free direction and the pointer does not carry it,
+// so one label would cover "rsvelte writes a field upstream omits" and its
+// opposite. A ratchet entry suppresses everything its key cannot tell apart.
+function directionSuffix(difference) {
+  if (/:extra-rsvelte-field/.test(difference)) return "-rsvelte-only";
+  if (/:missing-rsvelte-field/.test(difference)) return "-official-only";
+  return "-rsvelte-only";
+}
+
+function completionTextEditLabel(difference) {
+  if (/\/(textEdit|additionalTextEdits):(extra|missing)-rsvelte-field/.test(difference))
+    return `completion-text-edit-presence${directionSuffix(difference)}`;
+  if (/\/newText(:|$)/.test(difference)) return "completion-text-edit-new-text";
+  if (/\/(range|insert|replace)(\/|:|$)/.test(difference))
+    return "completion-text-edit-range";
+  return "completion-text-edit-other";
+}
+
+function completionItemDataLabel(difference) {
+  const match = /\/data\/([^/:[]+)/.exec(difference);
+  switch (match?.[1]) {
+    case "source":
+      return `completion-item-data-source${directionSuffix(difference)}`;
+    case "uri":
+      return "completion-item-data-uri";
+    case "position":
+      return "completion-item-data-position";
+    case "name":
+      return "completion-item-data-name";
+    default:
+      return "completion-item-data-other";
+  }
+}
+
+function classifyCompletion(official, rsvelte, difference, region) {
   for (const [pattern, label] of COMPLETION_POINTERS)
-    if (pattern.test(difference)) return label;
+    if (pattern.test(difference))
+      return typeof label === "function" ? label(difference, official, rsvelte) : label;
+  if (/^\/items:(extra|missing)-rsvelte/.test(difference))
+    return classifyCompletionItemSet(official, rsvelte, difference, region);
   if (isEmptyResult(official?.items) && !isEmptyResult(rsvelte?.items))
     return "official-empty";
   if (!isEmptyResult(official?.items) && isEmptyResult(rsvelte?.items))
@@ -178,13 +480,13 @@ function classifyCompletion(official, rsvelte, difference) {
   return "unclassified";
 }
 
-export function classifyDivergence(method, official, rsvelte, difference) {
+export function classifyDivergence(method, official, rsvelte, difference, context) {
   let label;
   if (method === "textDocument/hover") label = classifyHover(official, rsvelte);
   else if (method === "textDocument/definition")
     label = classifyDefinition(official, rsvelte, difference);
   else if (method === "textDocument/completion")
-    label = classifyCompletion(official, rsvelte, difference);
+    label = classifyCompletion(official, rsvelte, difference, requestRegion(context));
   else label = "unclassified";
   // A label outside the vocabulary would silently create ratchet keys nobody
   // can enumerate, so it is a defect in this module rather than a new class.
@@ -193,9 +495,9 @@ export function classifyDivergence(method, official, rsvelte, difference) {
   return label;
 }
 
-export function classifyDivergences(method, official, rsvelte, differences) {
+export function classifyDivergences(method, official, rsvelte, differences, context) {
   const labels = new Set();
   for (const difference of differences)
-    labels.add(classifyDivergence(method, official, rsvelte, difference));
+    labels.add(classifyDivergence(method, official, rsvelte, difference, context));
   return [...labels].sort();
 }

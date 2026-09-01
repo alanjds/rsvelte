@@ -5,7 +5,9 @@ const digest = (value) =>
 const pointerPart = (value) =>
   String(value).replaceAll("~", "~0").replaceAll("/", "~1");
 
-function identity(method, pointer, value) {
+// Exported so a classifier can resolve a `@`-segment back to the item it names
+// without a second copy of this digest.
+export function identity(method, pointer, value) {
   if (value === null || typeof value !== "object") {
     const readable = pointerPart(String(value))
       .replace(/[^\w.~+-]/g, "_")

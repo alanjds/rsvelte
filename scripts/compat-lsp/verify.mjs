@@ -395,6 +395,15 @@ let completedRequests = 0;
 let progressStarted = 0;
 let lastProgressAt = 0;
 
+// One read per file: the completion classifier needs the region a request sits
+// in, and re-reading per request would be 72k reads.
+const sourceTexts = new WeakMap();
+function sourceOf(entry) {
+  if (!sourceTexts.has(entry))
+    sourceTexts.set(entry, entry.text ?? entry.loadText());
+  return sourceTexts.get(entry);
+}
+
 function record(
   kind,
   entry,
@@ -421,6 +430,7 @@ function record(
           left,
           right,
           difference,
+          { text: sourceOf(entry), position: request.params?.position },
         );
         countMechanism(request.method, mechanism);
         mechanisms.add(mechanism);

@@ -811,6 +811,88 @@ about the **projection's error recovery**, whose population is a document being 
 half-written expression is the normal case rather than an adversarial one. The two rules point
 opposite ways on the same-looking input, and only the population separates them.
 
+### Blind spot 27o — an item one side never emits has none of its other fields compared [D]
+
+`diff.mjs` buckets array entries by `identity()` — for a completion item, a digest of
+`(label, kind, sortText, filterText)` — and walks only the pairs. An entry with no counterpart
+becomes one `missing-rsvelte-element` / `extra-rsvelte-element` verdict for the whole array, and
+**every field inside it is unexamined**. So a divergence that rides on the pairing key hides
+everything about the items it excludes, and the exclusion looks exactly like agreement.
+
+**Evidence [D].** rsvelte filtered open-tag completions by the name already typed, where upstream
+pushes every tag its data providers declare. Removing that filter took exactly **124 labels** out
+of the `only-official` half on melt-ui and added none — and took the sweep from **2,042,624 to
+2,108,087** divergent fields, **+65,372 of the +65,463 in `completion-text-edit`**, with every
+other label unmoved. The newly paired tag items were carrying a second, independent defect:
+upstream's `collectOpenTagSuggestions(scanner.getTokenOffset(), scanner.getTokenEnd())` replaces
+the whole name **token** and rsvelte's range ended at the cursor. The arithmetic closes from two
+directions — 65,372 / 124 tags ≈ 527 requests against 582 open-tag positions.
+
+**Half of that defect was in the instrument, and only a hand probe separated the halves.** Driving
+both servers at a position where the cursor sits at the name's *end* produces byte-equal
+`textEdit`s. It is visible at all because `suites.mjs`'s position iterator asks at each
+identifier's **second** character, so its cursor is always mid-token. "The tag range is wrong" and
+"the tag range is wrong where this gate asks" are different claims, and the fix is the same only
+because upstream's rule is the more general one.
+
+The general form: **a shrink in one label can raise the total**, and reading that as a regression
+is the mistake this row exists to prevent. It is the pairing-key twin of #3175 — removing an
+over-rejection makes what was behind it reachable — one level down, at the array entry rather than
+at the compile.
+
+**And the exclusion accumulates in the classifier's `other` bucket, where it reads as work nobody
+has started.** This gate's mechanism vocabulary had `completion-item-set-{missing,extra}-other` at
+13,580 divergent fields, which every reader — including the two people who wrote the label — took
+for "items whose provider the discriminator cannot name". Measured, **10,464 of them have an empty
+differing-label set**: the item denominator is 0, the label sets agree exactly, and the arrays
+differ only because an item is unpaired on `kind` or `sortText`. There was nothing unattributable
+in that bucket at all; the classifier was comparing labels while the diff was bucketing on four
+fields. **An `other` or `unclustered` bucket is not a residue — it is the set on which the
+classifier does not look at the axis that separates its members**, and the first question to ask
+of one is which axis its own discriminator reads. Finding it needed an instrument that evaluated
+the two candidate causes as *independent* predicates: the first version followed the classifier's
+`if`/`else` and skipped the empty case before measuring it, so it could only ever have attributed
+everything to the other cause.
+
+**Nothing here is specific to the LSP gate.** Every gate that compares two arrays by bucketing
+their entries on a derived key has the same question to answer: which fields are in that key, and
+what does a divergence on one of them exclude from comparison? Whether any other gate in this
+document is affected is **unmeasured** — this row is one gate's instance of a shape, not a survey
+of the others.
+
+### Blind spot 27p — the URI normalizer collapses the dependency's version out of every target [S]
+
+`normalize.mjs:15` rewrites a path by taking `lastIndexOf("/node_modules/")` and replacing
+everything before it with `<node_modules>`. The normalization is necessary — an absolute path is
+machine-specific — but under pnpm's layout the version lives *before* the last `node_modules`:
+
+```
+…/node_modules/.pnpm/svelte@5.56.10/node_modules/svelte/types/index.d.ts
+…/submodules/language-tools/node_modules/.pnpm/svelte@4.2.20/node_modules/svelte/types/index.d.ts
+```
+
+Both become `<node_modules>/svelte/types/index.d.ts`. **A `textDocument/definition` that lands in
+two different versions of one package therefore compares as the same file at a different line** —
+which is indistinguishable from a position defect, and this gate has a 1,028-field label
+(`projection-target-position`) whose name asserts exactly that reading.
+
+**Evidence: structural argument from code (`scripts/compat-lsp/normalize.mjs:15`); discriminating
+case unmeasured.** The tree does hold two svelte copies — 5.56.10 at the root, 4.2.20 under
+`submodules/language-tools` — which makes the collapse reachable rather than hypothetical. But the
+one sample examined is **not** an instance: replaying `projection-target-position`'s representative
+request with the normalizer off shows both servers resolving the same 5.56.10 copy, and the
+divergence there is a real 8-line difference in which official points inside a JSDoc comment and
+rsvelte at the `declare function $state` the request asks about. Whether any ratchet entry is an
+instance of the collapse is **unmeasured**. What is established is that the gate could not tell you
+if one were — a blind spot existing and something having walked into it are two claims, and only
+the first is supported here.
+
+The general form is the one 27o states at the field level, one level up: **a normalization that
+makes two runs comparable also decides what a divergence is allowed to mean**, and a label named
+after the surviving difference inherits the normalizer's assumption without restating it.
+
+---
+
 ---
 
 ## 1. Compiler output parity — `scripts/compat-corpus/verify.mjs`
