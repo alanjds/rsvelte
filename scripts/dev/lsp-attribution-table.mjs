@@ -25,6 +25,7 @@ const TARGETS = {
 	// and the provider are both unions over one response, so `kind+sort-text` and
 	// `-mixed` each still hold two mechanisms.
 	'completion-item-pairing-key-kind-ts': ['U', 'upstream_issues/tsgo-lsp-completion-item-omits-the-typescript-kind.md'],
+	'completion-command-presence-rsvelte-only': ['R', null],
 	'completion-item-set-missing-html-close-tag': ['R', null],
 	'target-component-vs-import': ['R', null],
 	'completion-item-data-source-official-only': ['R', null],
@@ -45,6 +46,7 @@ const CLUSTERS = {
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
+	'completion-command-presence-rsvelte-only': 'the `style` arm of the trigger-suggest condition escaped upstream’s outer guard (`&&` binds tighter than `||`)',
 	'completion-item-set-missing-html-close-tag': 'rsvelte has no `collectCloseTagSuggestions` path at all',
 	'target-component-vs-import': 'a component import resolves to the import specifier, not the component',
 	'completion-item-data-source-official-only': 'tsgo sends `data.source`; `adopt_upstream_item_data` rebuilds `data` without it',

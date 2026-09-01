@@ -287,8 +287,11 @@ fn html_attribute_completions(
                         range,
                         new_text,
                     })),
-                    command: (!assigned && attribute.value_set.is_some_and(|set| set != "v")
-                        || name == "style")
+                    // `htmlCompletion.js:204-211`: the `style` name is the INNER
+                    // test, so it is still subject to the outer guard.
+                    command: (!assigned
+                        && attribute.value_set != Some("v")
+                        && (attribute.value_set.is_some() || name == "style"))
                         .then(|| lsp_types::Command {
                             title: "Suggest".to_string(),
                             command: "editor.action.triggerSuggest".to_string(),
@@ -679,6 +682,25 @@ mod tests {
         };
         assert_eq!(range.start.character, 3);
         assert_eq!(range.end.character, 11);
+    }
+
+    #[test]
+    fn an_assigned_style_attribute_asks_for_no_suggestion() {
+        // `htmlCompletion.js:204-211` guards the `style` name behind
+        // `attr.valueSet !== 'v' && value.length`, so an attribute that already
+        // carries a value gets no `editor.action.triggerSuggest`.
+        let command_of = |text: &str, replace: std::ops::Range<usize>| {
+            super::html_attribute_completions(text, "div", replace, false, true)
+                .items
+                .into_iter()
+                .find(|item| item.label == "style")
+                .expect("`style` is offered on a div")
+                .command
+        };
+        let unassigned = "<div sty>";
+        assert!(command_of(unassigned, 5..8).is_some());
+        let assigned = "<div sty=\"a\">";
+        assert!(command_of(assigned, 5..8).is_none());
     }
 
     #[test]

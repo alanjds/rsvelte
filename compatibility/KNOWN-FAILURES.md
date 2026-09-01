@@ -4528,6 +4528,28 @@ control (official must resolve into the `typescript` package) caught both fixtur
 probe position that landed inside `local` instead of `toUpperCase`, and macOS's `/var` symlink
 making the control compare an echoed URI against a resolved one.
 
+**`completion-command-presence-rsvelte-only` (52 entries) narrowed to one item and one operator.**
+Of 1,817 labels present on both sides at the probed position, exactly one — `style` — has rsvelte
+attaching `{"title":"Suggest","command":"editor.action.triggerSuggest"}` where official attaches
+nothing. Upstream (`vscode-html-languageservice@5.4.0`, `htmlCompletion.js:204-211`) guards the
+name behind an outer test and only then considers it:
+
+```js
+if (attr.valueSet !== 'v' && value.length) {        // outer guard
+    if (attr.valueSet || attr.name === 'style') {   // inner test
+        command = { title: 'Suggest', command: 'editor.action.triggerSuggest' };
+    }
+}
+```
+
+rsvelte spelled the inner test as a top-level alternative — `(!assigned && … || name == "style")` —
+and Rust's `&&` binds tighter than `||`, so **the `style` arm escaped the guard** and an attribute
+that already carries a value still gets the command. The comment above it cited the upstream file
+and line correctly; the precedence is what diverged, which is the shape this file already warns
+about — **a citation is not a transcription**. Fixed to mirror upstream's nesting, pinned in both
+directions (`<div sty>` gets the command, `<div sty="a">` does not) rather than only the arm that
+was broken, and the pin is confirmed by installing the old condition and watching it go red.
+
 **`rsvelte-empty` on hover held an official defect, and splitting it out took a correction of its
 own.** Two of 23 sampled cases were official hovering svelte2tsx's synthesized `$$render`, which is
 the same cause the definition arm already calls `official-defect-svelte-ts-shadow`; the split feeds
