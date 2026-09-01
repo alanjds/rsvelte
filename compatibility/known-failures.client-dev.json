@@ -21,7 +21,6 @@
 	"musicat/src/lib/settings/SettingsPopup.svelte",
 	"musicat/src/lib/views/InternetArchiveView.svelte",
 	"networking-toolbox/src/lib/components/home/SiteMapList.svelte",
-	"pattern/issues/3072-extends-shapes-legal.svelte.js",
 	"photon/src/lib/app/auth/profile.svelte.ts",
 	"photon/src/lib/feature/post/form/postform.svelte.ts",
 	"photon/src/lib/ui/navbar/Profile.svelte",

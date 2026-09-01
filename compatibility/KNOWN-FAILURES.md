@@ -2865,17 +2865,29 @@ checked-in pattern corpus (#2019) surfaced are gone too: the two SSR
 destructuring ones (#2033, #2034) were fixed by #2036, and the block-local
 snippet render tag (#2031) by #2057.
 
-### Client (`known-failures.client.json`, 32 entries)
+### Client (`known-failures.client.json`, 31 entries)
 
-Partition of `known-failures.client.json` by verdict: `31 + 1`
+Partition of `known-failures.client.json` by verdict: `30 + 1`
 
-- **31 — the generated JS differs** (`js` / `code-differs`).
+- **30 — the generated JS differs** (`js` / `code-differs`).
 - **1 — the generated CSS differs.**
 
 The error classes this section used to carry are gone: the run behind this
 baseline reports `error-mismatch: 0` and `js-unparseable: 0` on every target, so
 no entry here is "both compilers reject with a different code", "one compiler
 rejects and the other compiles", or "rsvelte's output is not JavaScript".
+
+`pattern/issues/3072-extends-shapes-legal.svelte.js` left this target and `client-dev` when
+the class-body scan stopped taking the first `{` after the header. A heritage clause can open
+a brace of its own, and `find_class_header` counted exactly one thing that does — a nested
+`class` expression — so `class A extends function () {} { e = $state(5) }` read the
+function’s body as the class body and never privatised the field. A heritage is a
+`LeftHandSideExpression`, which closes the set: a class expression, a function expression in
+its four spellings, and an object literal in primary position. Measured one cell per member,
+**eight of eighteen diverged** and the shape this entry carries was one of them. The scan is
+shared by the client and the server (`client/class_transforms.rs:996`,
+`server/transform_script.rs:4864`), so the change was swept on all four targets rather than
+on the two this entry sits in.
 
 Two entries left this target and `client-dev` on two `$.mutate` decisions that answer
 differently depending on the HOST the write is written in. `musicat/…/Scrollbar.svelte`
@@ -2968,7 +2980,7 @@ the emitted default was the getter function rather than the store's value. Hashi
 client (entry, target) outputs before and after reports **2** changed units over 1 id,
 `match -> MISMATCH = 0`; the other two ids of that cluster do not move and stay listed.
 
-Every one of the remaining 32 arrived with the wave-2 enrolment (#3130) and is described
+Every one of the remaining 31 arrived with the wave-2 enrolment (#3130) and is described
 in § *Wave-2 enrolment*. The list was **0** before it, and the one entry it ever
 held — #2031, a `{#snippet}` declared inside
 an `{#if}` branch and `{@render}`ed as a sibling in that same branch, lowered
@@ -3075,15 +3087,15 @@ that became unparseable only with `dev: true`; #3877 corrected the component
 callback tail-comment insertion point, so both its parse and output entries have
 been retired.
 
-### Client dev (`known-failures.client-dev.json`, 46 entries)
+### Client dev (`known-failures.client-dev.json`, 45 entries)
 
-Partition of `known-failures.client-dev.json` by verdict: `46`
+Partition of `known-failures.client-dev.json` by verdict: `45`
 
-- **46 — the generated JS differs.**
+- **45 — the generated JS differs.**
 
 Unlike `client`, no CSS entry survives on this target.
 
-All remaining 46 arrived with the wave-2 enrolment (#3130); this target was at 0 before
+All remaining 45 arrived with the wave-2 enrolment (#3130); this target was at 0 before
 it, and it is the largest of the four — 15 JS entries that `client` does not
 carry, which is the reason it is ratcheted separately.
 

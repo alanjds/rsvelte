@@ -15,7 +15,6 @@
 	"mathesar/mathesar_ui/src/systems/databases/upgrade-database/UpgradeDatabaseModal.svelte",
 	"musicat/src/lib/settings/SettingsPopup.svelte",
 	"networking-toolbox/src/lib/components/home/SiteMapList.svelte",
-	"pattern/issues/3072-extends-shapes-legal.svelte.js",
 	"photon/src/lib/feature/post/form/postform.svelte.ts",
 	"photon/src/lib/ui/navbar/Profile.svelte",
 	"photon/src/routes/settings/app/+page.svelte",
