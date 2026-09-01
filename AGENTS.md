@@ -1092,6 +1092,11 @@ this session" is an assumption, and the two disagree silently. The prefix does n
 reset — it only makes each call independent of the previous call's cwd. What it cannot fake is
 the build's own `Compiling <crate> (<path>)` line, so read that before trusting any arm.
 
+A second, independent signal is the **diff between the two arms' trees** (`git diff <base> HEAD
+-- crates/`): a one-line answer to "do these arms differ by the change I think they do". Neither
+signal is sufficient alone — the `Compiling` line says which tree was read but not what is in it,
+and the diff says what is in a tree but not that the arm was built from that one. Read both.
+
 The last row is the expensive one, because its symptom is a plausible result.
 A `before -> after` sweep reported 4 output changes "toward official", two of
 them to byte-equality — in the right direction, at the right size, and
