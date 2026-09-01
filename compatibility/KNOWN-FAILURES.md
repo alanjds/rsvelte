@@ -4324,6 +4324,22 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**And a second block with three assignments produces a second three-label defect.**
+`CompletionProvider.ts:894-899` is one `if` body that writes `textEdit.newText` (trimmed to the
+part after the word range), `textEdit.range.start` (moved to the word start) and
+`completionItem.additionalTextEdits` (an edit restoring what `newText` no longer carries). rsvelte
+performs none of the three, so the same three sampled `components` module-specifier units appear as
+`completion-text-edit-new-text-ts` (3), `completion-text-edit-range-start` (3) and
+`completion-additional-text-edits-presence-official-only` (3) — the same three files, the same
+three positions. Likewise `completion-text-edit-range-end` (5) is the *other* block's five
+`accesskey` units.
+
+Both are the same shape and it is worth stating as a rule: **when one upstream block writes N
+fields, a port that skips the block produces N labels**, and the ratchet counts them as N. Reading
+a per-field ratchet as a defect count therefore overcounts by exactly the field-arity of whatever
+was skipped — which is why the entry count was never a burndown curve, and why the labels-per-unit
+distribution is the statistic that matters.
+
 **Three labels, one cursor position, one cause.** All five sampled
 `completion-command-presence-official-only` rows are the same shape: the cursor on the `d` of an
 SVG path's `d="…"`. Official's replace range there is **empty** (`col..col`, an insert) and emits
