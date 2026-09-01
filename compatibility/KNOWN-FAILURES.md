@@ -5017,6 +5017,35 @@ abbreviations against an empty rsvelte answer), and 16 more emmet-bearing rows a
 belongs. **A count that is large under a proposed key is not evidence the key is right** — ask
 which already-separated mechanisms it would swallow.
 
+**The instrument that was supposed to settle this family could not, and the broken instrument
+carried one unbroken field that measured how broken it was.** The offline sampler stored the first
+**8** items of each unpaired set, which is what a `mixed` verdict has to be read off. The
+`difference` string carries `count=N` for the whole set and is not affected by that cap, so the
+cap's damage is measurable from the capped artifact itself: **102 of 149 item-set rows (68.5%)
+have a differing set larger than 8**, the sizes run 1 / 4 / **127** / 884 / 1202 (min, p25, median,
+p75, max), and at the median the cap retains **6.30%** of the set. The bias has a direction — a
+large set is exactly where a second provider lives — so the cap systematically under-reports
+`mixed`. The fix is not a bigger cap: the sampler now stores a provider **histogram** computed over
+the whole unpaired set, three numbers rather than 1,202 items, using the classifier's own
+`completionProvider` rather than a second port of it. Its control is that the histogram's category
+reproduces the ratchet key on **22 of 22** records, which is expected — the classifier runs on the
+full arrays live — and is what says the histogram sees what the classifier saw.
+
+Measured that way over **266 item-set records from 52 bits-ui components** (one record per distinct
+file *and* line): every single-category label is `not-MANY` at n = 19 to 42 with rows, files and
+lines all equal, and **`completion-item-set-missing-mixed` is MANY with four compositions** —
+`html-close-tag+ts` 35, `html+ts` 4, `html+html-close-tag` 2, `css+emmet+html` 1. The dominant one
+is not a new defect: `html-close-tag` alone is already a signed `R` label, so those 35 rows are
+that signed defect **co-occurring on one request** with a TypeScript difference. That is the third
+axis on which one defect wears several labels, after the field it lands on and the pointer
+granularity — the axis here is the request, and nothing about either label is wrong. The two
+directions are not mirror images: `extra-mixed` is one composition (`html+ts`) at n = 6. Three
+labels are reported `insufficient(pos=1)` rather than `not-MANY`, because one position is not a
+measurement of uniformity. **The enumeration is a sample and is not closed**: 52 of bits-ui's 617
+components, one of four corpus repositories, so a fifth composition is not excluded. Splitting
+`mixed` by its composition is the shape the re-key takes, and it lands with the commit that puts
+`mech=` into the ratchet key — a key format and its baseline are one change.
+
 
 Every unit is compared twice. The harness sends `didOpen`, runs the request set, then applies a
 deterministic `didChange` script derived from the source and runs the **same** request set again.
