@@ -433,14 +433,16 @@ function record(
     } else {
       const requestKey = keyFor(kind, entry, request, phase);
       for (const difference of differences) {
-        const key = `${requestKey}|${difference}`;
+        // The trailing `[count=..,hash=..]` is the measured CONTENT, so a
+        // partial fix reads as one STALE plus one NEW instead of as a shrink.
+        // Dropping it collides nothing: the key is already one request, one
+        // pointer, one verdict, and the verdict now names the kind.
+        const key = `${requestKey}|${difference.replace(/\[[^\]]*\]$/, "")}`;
         current.push(key);
-        // A diagnostic array is collapsed to count + identity hash in the
-        // ratchet key. Keep the normalized values only for a newly observed
-        // fixture key, so CI says which diagnostic appeared instead of merely
-        // saying that the count changed. Corpus responses are intentionally
-        // excluded: they can contain project text and are aggregated before
-        // ratcheting anyway.
+        // Keep the normalized diagnostic values for a newly observed fixture
+        // key, so CI says which diagnostic appeared. Corpus responses are
+        // intentionally excluded: they can contain project text and are
+        // aggregated before ratcheting anyway.
         if (
           request.method === "textDocument/diagnostic" &&
           !knownBaselineSet.has(key)
