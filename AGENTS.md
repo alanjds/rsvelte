@@ -252,6 +252,25 @@ count, the count is a claim to check, not context; and when a defect is "a pass 
 branch", the repro is one cell per branch, because a fix that reaches the reported branch and one
 neighbour looks exactly like a fix that reaches all of them.
 
+**And an enumeration whose members came from bug reports is not an enumeration of the
+grammar.** `find_class_header` locates a class body by taking the first `{` at bracket depth
+zero after the header, and it counted one thing that can put a brace there first — a nested
+`class` expression. `class A extends function () {} { e = $state(5) }` therefore treated the
+*function's* body as the class body and never privatised the field. A heritage is a
+`LeftHandSideExpression`, which closes the domain: a class expression, a function expression in
+its four spellings, and an object literal in primary position, with everything parenthesised
+already at depth > 0 and a template's braces not code bytes. Measured one cell per member,
+**eight of eighteen diverged and the reported shape was one of them**. Adding `function` to the
+list would have been the same mistake one level down; the fix is `class` OR `function` opening a
+pending body, plus a `{` reached with no code byte since `extends`. Ask where a scanner's list of
+cases came from: if the answer is "the shapes someone hit", the list is a work log, not a
+partition. **The grid's other half earned itself in the same hour**: the first fix spelled "no
+brace-producing primary yet" as "no *code byte* since `extends`", and `js_scan::code_bytes`
+skips a template literal whole — so `` extends `${1}` `` produced no code bytes at all and the
+class body was skipped as if it were an object literal. That row had been **passing before the
+fix**, which is the only kind of row that can report this: a grid assembled from the cells a
+defect breaks has no cell left to regress.
+
 The other half of the same day's work is the ordinary two-ports shape wearing a host: upstream
 stops an assignment target's root walk at anything that is not a `MemberExpression`
 (`AssignmentExpression.js:104-112`), so `stage.container().style.cursor = 'grab'` has no root
