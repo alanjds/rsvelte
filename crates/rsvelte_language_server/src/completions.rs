@@ -322,7 +322,6 @@ fn html_tag_completions(text: &str, offset: usize, prefix: &str, markdown: bool)
     CompletionList {
         is_incomplete: false,
         items: provider::tags()
-            .filter(|tag| tag.name.starts_with(prefix))
             .map(|tag| CompletionItem {
                 label: tag.name.to_string(),
                 // `collectOpenTagSuggestions` (`htmlCompletion.js:200-212`).
@@ -656,7 +655,10 @@ mod tests {
     #[test]
     fn completes_native_html_and_svelte_tags() {
         assert!(labels("<sv").unwrap().contains(&"svelte:self".to_string()));
-        assert_eq!(labels("<tex").unwrap(), ["textarea"]);
+        // `collectOpenTagSuggestions` never filters on the typed name, so the two
+        // prefixes must answer with the same set for the client to filter itself.
+        assert!(labels("<tex").unwrap().contains(&"textarea".to_string()));
+        assert_eq!(labels("<tex").unwrap(), labels("<t").unwrap());
     }
 
     #[test]
