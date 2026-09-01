@@ -2847,11 +2847,11 @@ checked-in pattern corpus (#2019) surfaced are gone too: the two SSR
 destructuring ones (#2033, #2034) were fixed by #2036, and the block-local
 snippet render tag (#2031) by #2057.
 
-### Client (`known-failures.client.json`, 45 entries)
+### Client (`known-failures.client.json`, 34 entries)
 
-Partition of `known-failures.client.json` by verdict: `44 + 1`
+Partition of `known-failures.client.json` by verdict: `33 + 1`
 
-- **44 — the generated JS differs** (`js` / `code-differs`).
+- **33 — the generated JS differs** (`js` / `code-differs`).
 - **1 — the generated CSS differs.**
 
 The error classes this section used to carry are gone: the run behind this
@@ -2877,7 +2877,66 @@ parent, so transforming the root alone never reached it and `<input.component />
 attributes anything else to that change is answerable rather than assumed: hashing all
 104,439 (entry, target) outputs before and after reports exactly these two as changed.
 
-Every one of the remaining 45 arrived with the wave-2 enrolment (#3130) and is described
+Two entries (`shadcn-svelte-extras/…/demo/demo-code.svelte` and
+`photon/…/community/CommunityCard.svelte`) left this target and `client-dev` when an
+`{#await … then X}` / `{:catch X}` binding started shadowing a prop of the same name.
+Upstream shadows by overriding `state.transform[name]`; rsvelte registered that transform
+too, but a non-source prop never reaches it — the identifier arm returns `$$props.name`
+early, guarded only by `shadowed_prop_names`, which the await visitor did not populate.
+A prop with a default was unaffected, because a default makes it a source prop, which is
+why the shape looked narrower than it was. Hashing all 104,439 (entry, target) outputs
+before and after attributes exactly these four to the change.
+
+Four entries (`carbon-components-svelte/…/NotificationQueue.svelte`,
+`gitlight/…/NotificationLabels.svelte`, `huly/…/Timeline.svelte`,
+`huly/…/InboxCard.svelte`) plus `svelte-tweakpane-ui/…/ClsPad.svelte` left this target and
+`client-dev` when a `style:` directive's chunk metadata started reaching phase 3. Upstream's
+`StyleDirective` visitor calls `context.next()` and `ExpressionTag` swaps `state.expression`
+for the **tag's own** metadata before walking, merging each chunk up afterwards; rsvelte wrote
+into the directive's metadata, so the chunk stayed empty — and `build_attribute_value` reads
+the chunk, so `has_call` was always false and `build_expression` returned early, dropping the
+legacy `($.deep_read_state(dep), $.untrack(() => value))` wrapper. Only a **call** diverged,
+because `has_member_expression` and `has_assignment` are re-derived in phase 3. Hashing all
+69,626 client (entry, target) outputs before and after reports 14 changed units over 7 ids,
+`match -> MISMATCH = 0`, and 10 of the 14 newly matching.
+
+The other two of those seven ids — `open-webui/…/Models.svelte` and
+`huly/…/OptimizeSkills.svelte` — retire as well, and **only CI could say so**. A local
+reconstruction of the gate reported both as still mismatching on both targets, because it
+stopped at the byte comparison of the oxfmt-normalized text; the gate runs an **AST
+comparison on every byte-different output** after that, and each of those two residues is a
+comment placement, which the AST comparator does not represent. So the reconstruction was
+strictly *stricter* than the gate it stood in for — the opposite direction from the usual
+reconstruction hazard.
+
+Which direction a reconstruction misses in follows from **what kind of stage it dropped**: a
+gate's verdict is a pipeline, and dropping a *rescue* stage (this AST comparison, oxfmt) makes
+the reconstruction stricter, while dropping a *judging* stage makes it looser. That asymmetry
+is worth stating because it makes one side of the fidelity question free. A reconstruction
+that is stricter than the gate can report **zero** with no fidelity argument at all — a zero
+under a stricter comparison is a zero under the gate's. It is only a **non-zero** from a
+stricter reconstruction that is not a finding: it is a list of candidates to ask the gate
+about, and every entry on it can be a false positive. Both halves were exercised on the same
+day: these two entries are the false positives, and a 135,592-pair `compile()` sweep on raw
+hashes over four targets reported zero, which needed no gate confirmation for exactly this
+reason.
+
+One `huly/…/CreateIssueTemplate.svelte` entry left this target and `client-dev` when a legacy
+store or `$:` read **nested inside** a prop default stopped being judged simple. Upstream runs
+`is_simple_expression` on the *transformed* initializer, where `$s` is already the call `$s()`
+and a `$:` variable is already `$.get(r)` — hence non-simple, hence thunked with
+`PROPS_IS_LAZY_INITIAL`; rsvelte tested the untransformed source, where each is a plain
+identifier. A **bare** identifier already had its own three branches, so the divergence lived
+only where the read sat inside a logical / conditional / binary operand, and a 6 binding-kind ×
+5 position grid isolates it exactly: 8 diverging cells, all of them `store` or `$:` in one of
+the four non-bare positions, with a plain `let` in the same four positions as the control that
+stays simple. For a store the value itself was wrong, not only the flags — the post-pass that
+rewrites `$s` to `$s()` inside a default fires only when the default is already `() => …`, so
+the emitted default was the getter function rather than the store's value. Hashing all 69,626
+client (entry, target) outputs before and after reports **2** changed units over 1 id,
+`match -> MISMATCH = 0`; the other two ids of that cluster do not move and stay listed.
+
+Every one of the remaining 34 arrived with the wave-2 enrolment (#3130) and is described
 in § *Wave-2 enrolment*. The list was **0** before it, and the one entry it ever
 held — #2031, a `{#snippet}` declared inside
 an `{#if}` branch and `{@render}`ed as a sibling in that same branch, lowered
@@ -2902,11 +2961,23 @@ everywhere". Divergences this target keeps on purpose — because reproducing
 upstream's bytes would emit invalid JavaScript — are recorded in
 [`deliberate-divergences.md`](#deliberate-divergences), each pinned by a test.
 
-### Server (`known-failures.server.json`, 10 entries)
+### Server (`known-failures.server.json`, 4 entries)
 
-Partition of `known-failures.server.json` by verdict: `8 + 2`
+Partition of `known-failures.server.json` by verdict: `2 + 2`
 
-- **8 — the generated JS differs.**
+Attribution of `known-failures.server.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 2 | `deliberate-divergences` | a `$`-prefixed function parameter is a local binding; upstream's server visitor decides by name and lowers a write to `$.store_mutate`, which throws — reported in `upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md`, pinned by `crates/rsvelte_core/tests/dollar_parameter_is_not_a_store.rs` |
+
+The other 2 carry **no target yet**: each is a defect on rsvelte's side, so the
+only end state open to them is elimination. They are `networking-toolbox/…/SiteMapList.svelte`
+and `trakt-web/…/SegmentedSelect.svelte`, which both drop a CSS scope class from an
+element inside a snippet (#4115).
+
+
+- **2 — the generated JS differs.**
 - **2 — a recorded deliberate divergence, not a burndown target.**
   `pattern/issues/dollar-function-parameter.svelte` and
   `threlte/packages/extras/src/lib/hooks/useViewport.svelte.ts`. A `$`-prefixed
@@ -2939,19 +3010,31 @@ quoted key dropped in a destructured `$derived`) and #2034 (`$.to_array` arity
 with a rest element) — were resolved by #2036, which mirrored #2010's client
 destructuring fixes onto the server target.
 
-### Server dev (`known-failures.server-dev.json`, 10 entries)
+### Server dev (`known-failures.server-dev.json`, 4 entries)
 
 The `server-dev` target is the server transform with `dev: true`. It separately
 ratchets server-only development instrumentation: component metadata, element
 locations, dynamic-element validation, snippet validation, and injected CSS.
 
-Partition of `known-failures.server-dev.json` by verdict: `8 + 2`
+Partition of `known-failures.server-dev.json` by verdict: `2 + 2`
+
+Attribution of `known-failures.server-dev.json`:
+
+| n | target | cluster |
+|---|---|---|
+| 2 | `deliberate-divergences` | a `$`-prefixed function parameter is a local binding; upstream's server visitor decides by name and lowers a write to `$.store_mutate`, which throws — reported in `upstream_issues/svelte-server-treats-a-dollar-parameter-as-a-store.md`, pinned by `crates/rsvelte_core/tests/dollar_parameter_is_not_a_store.rs` |
+
+The other 2 carry **no target yet**: each is a defect on rsvelte's side, so the
+only end state open to them is elimination. They are `networking-toolbox/…/SiteMapList.svelte`
+and `trakt-web/…/SegmentedSelect.svelte`, which both drop a CSS scope class from an
+element inside a snippet (#4115).
+
 
 The trailing **2** is the same deliberate divergence as on `server` — the
 `$`-prefixed function parameter — carried on both targets because the server
 transform runs on both.
 
-- **8 — the generated JS differs.**
+- **2 — the generated JS differs.**
 - **2 — the same recorded deliberate divergence as on `server`.**
 
 All 13 arrived with the wave-2 enrolment (#3130); this target was at 0 before
@@ -2960,15 +3043,15 @@ that became unparseable only with `dev: true`; #3877 corrected the component
 callback tail-comment insertion point, so both its parse and output entries have
 been retired.
 
-### Client dev (`known-failures.client-dev.json`, 59 entries)
+### Client dev (`known-failures.client-dev.json`, 48 entries)
 
-Partition of `known-failures.client-dev.json` by verdict: `59`
+Partition of `known-failures.client-dev.json` by verdict: `48`
 
-- **59 — the generated JS differs.**
+- **48 — the generated JS differs.**
 
 Unlike `client`, no CSS entry survives on this target.
 
-All remaining 59 arrived with the wave-2 enrolment (#3130); this target was at 0 before
+All remaining 48 arrived with the wave-2 enrolment (#3130); this target was at 0 before
 it, and it is the largest of the four — 15 JS entries that `client` does not
 carry, which is the reason it is ratcheted separately.
 
@@ -6722,11 +6805,11 @@ The svelte2tsx output-parity corpus (`scripts/compat-corpus/svelte2tsx-*`) compa
 rsvelte's svelte2tsx port against **official `svelte2tsx`** byte-for-byte (after
 oxfmt normalization). The ratchet may only shrink.
 
-**Current baseline: `svelte2tsx-known-failures.json`, 35 entries.**
+**Current baseline: `svelte2tsx-known-failures.json`, 22 entries.**
 
-Partition of `svelte2tsx-known-failures.json` by verdict: `33 + 2`
+Partition of `svelte2tsx-known-failures.json` by verdict: `20 + 2`
 
-- **33 — the emitted TSX differs** (`ts-mismatch`).
+- **20 — the emitted TSX differs** (`ts-mismatch`).
 - **2 — one side rejects and the other compiles** (`error-mismatch`). Both are
   `cnblocks`'s `(app)/veil/` components, and the rejecting side is **official**:
   a UTF-8 BOM together with a `<script>` block and markup makes `svelte2tsx`
@@ -6739,15 +6822,15 @@ Attribution of `svelte2tsx-known-failures.json`:
 |---|---|---|
 | 2 | `upstream_issues/svelte2tsx-bom-crashes-on-any-component-with-a-script.md` | official throws on a BOM-prefixed component that has both a `<script>` and markup; rsvelte converts it |
 
-The remaining 33 carry **no target, and cannot have one**: every one of them was
+The remaining 20 carry **no target, and cannot have one**: every one of them was
 measured against official on 2026-09-01 and every one is an rsvelte defect, so
 the only end state open to them is elimination. The classification below is the
 input to that work; it is not an attribution, and this gate stays red until the
 entries are gone.
 
-### The 33 `ts-mismatch` entries, classified by mechanism (2026-09-01)
+### The 20 `ts-mismatch` entries, classified by mechanism (2026-09-01)
 
-Both implementations run directly on the 33 listed sources with the options
+Both implementations run directly on the 20 listed sources with the options
 `svelte2tsx-compile.mjs` passes (`{filename, isTsFile, mode:'ts', namespace:'html',
 version:'5'}`). This table replaces the earlier one keyed by the first differing
 line: that key is a **symptom**, so it split one mechanism across rows and put two
@@ -6762,14 +6845,10 @@ agreeing, so the cause is something else.
 
 | n | mechanism | pinned |
 |---|---|---|
-| 5 | a `<script>` **inside an HTML comment** is parsed as a script: official emits its eight-line empty projection, rsvelte emits the whole commented-out body | source |
-| 4 | a **commented-out `dispatch("name", …)`** is collected as a component event, so `events:` carries a name the component never dispatches | source |
-| 3 | a `+error.svelte`'s `error` prop is typed `any` instead of `App.Error` — upstream's `ExportedNames.ts:330` has an `isKitErrorFile` arm, and rsvelte's kit table in `props_rune.rs` has `data` / `form` / `params` and no error arm | source |
 | 3 | an existing `@type {…}` JSDoc on a `$props()` destructure is rewritten into a `@typedef … $$ComponentProps` plus `@type {$$ComponentProps}`; official leaves the block alone and copies it verbatim into `return { props: … }` | reduced |
 | 3 | a JSDoc block copied into `return { props: {` starts on the wrong line — official breaks before the `/**`, rsvelte keeps it on the `{` line and breaks inside | reduced |
 | 3 | `function $$render() {` opens on the wrong side of a hoisted type declaration. **The direction differs**: rsvelte opens it BEFORE an `interface $$Props` / `type …Props` that official puts first (2), and AFTER an `interface Props` in the `type T = $$Generic` case, where official emits `function $$render<T>()` first (1). Two directions of one shape, so read it as two defects until one fix moves both | reduced |
 | 2 | a renamed export (`export { componentClass as class }`) is dropped from `exports:`, where official emits `class: typeof componentClass` | source |
-| 1 | a **commented-out `$store` reference** is collected as a store subscription, adding a `__sveltets_2_store_get` official does not emit | source |
 | 1 | `export let x: T` with **no statement terminator** (the file ends at `</script>`) gains `x = __sveltets_2_any(x)`; adding a `;` and a newline makes the two agree | reduced |
 | 1 | `bind:this` on an element is emitted as an attribute rather than as an assignment to the bound variable | output only |
 | 1 | a `use:` action is emitted inside the attribute object rather than as a preceding `$$action_0` const | output only |
@@ -6780,15 +6859,37 @@ agreeing, so the cause is something else.
 | 1 | official emits a `$permissions` store-get that rsvelte omits — **cause not isolated** | output only |
 | 1 | rsvelte emits an extra `dragItem` slot prop — **cause not isolated** | output only |
 
-**Three of those rows are one class, and it is the largest thing here.** The
-commented-out `<script>`, the commented-out `dispatch(…)` and the commented-out
-`$store` are all a scan that does not exclude code inside a comment — **10 of 33
-entries, 30%**, against a largest mechanism of 5 when the table was keyed by
-symptom. It is the class the compiler side keeps rediscovering (#2986, #2987,
-#3127), reached here through a different port, and no gate compares the two ports.
+**The largest mechanism this table ever carried is gone, and the ten entries it
+held are the ten this ratchet just lost.** The commented-out `<script>`, the
+commented-out `dispatch(…)` and the commented-out `$store` were one class — a
+scan that does not exclude code inside a comment, **10 of 30 entries, 33%**,
+against a largest mechanism of 5 when the table was keyed by symptom. #4136
+routed those scans through the parser's own comment-, string- and regex-aware
+primitives. **The mapping from entry to mechanism is measured, not inferred from
+the arithmetic:** diffing the two arms' output on each of the ten names its cause
+— five drop an injected commented-out `<script>` body (9-128 lines), four drop an
+event name that only a comment dispatches (`BulkEditorMergeView` goes from two
+events to none), and `appwrite-console`'s
+`databases/database-[database]/table-[table]/+layout.svelte` drops an extra
+`$columnsOrder` store-get.
 
-**Six rows are `output only`, and the count is not their size.** The symptom-keyed
-table put 13 of these entries in a "one entry each" tail, which is where a
+**Two of those rows could not be read off the first-differing-line key at all**,
+which is why the table is keyed by mechanism. Under the old key they read
+`async () => {` against an `import` — an instance/module *statement order* defect
+— and "store declarations emitted in a different order". Both read as orderings
+and neither was one: the first is the commented-out `<script>`'s body injected at
+the head of `$$render()`, which pushes the imports down, and the second is the
+`$columnsOrder` declaration above. Running both implementations on the source is
+what showed it; the differing line named neither cause.
+
+It is the class the compiler side keeps rediscovering (#2986, #2987, #3127),
+reached here through a different port, and **no gate compares the two ports** —
+`compatibility/GATES.md#two-ports-inventory` row 6 carries it.
+
+**Six rows are `output only`, and the count is not their size.** They are now six
+of twenty rather than six of thirty, and nothing about them changed — a share
+moves when the denominator does. The symptom-keyed table put 13 of these entries
+in a "one entry each" tail, which is where a
 mechanism goes to look unimportant; all the count above says is that nobody has
 reduced them yet.
 

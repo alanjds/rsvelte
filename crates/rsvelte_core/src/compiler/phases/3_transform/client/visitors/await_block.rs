@@ -232,6 +232,7 @@ fn build_block_with_argument(
     let saved_transform = context.state.transform.clone();
     let saved_transform_deep_read = context.state.transform_deep_read.clone();
     let saved_await_binding_names = context.state.await_binding_names.clone();
+    let saved_shadowed_prop_names = context.state.shadowed_prop_names.clone();
 
     // Build the argument and declarations
     let (arg_pattern, declarations) = if let Some(pattern) = argument_pattern {
@@ -254,13 +255,38 @@ fn build_block_with_argument(
     context.state.in_control_flow_block = prev_in_control_flow;
     body_statements.extend(fragment_statements);
 
-    // Restore the transform state
-    context.state.transform = saved_transform;
+    // Upstream's `catch_context` spreads `state` without copying `transform`, so a catch
+    // binding's read override outlives its block; reproduced here for byte equality.
+    if block_type != "catch" {
+        context.state.transform = saved_transform;
+        context.state.shadowed_prop_names = saved_shadowed_prop_names;
+    } else {
+        // The leaked entry is read-only, so a write to the outer binding past the
+        // block loses its setter. Upstream then puts the read on the left of the
+        // assignment and emits output no JS parser accepts (#3306), which is the
+        // one class this port deliberately diverges on — so the write halves are
+        // restored while the read stays leaked.
+        let introduced: Vec<String> = context
+            .state
+            .await_binding_names
+            .keys()
+            .filter(|name| !saved_await_binding_names.contains_key(name.as_str()))
+            .cloned()
+            .collect();
+        for name in introduced {
+            let Some(outer) = saved_transform.get(name.as_str()) else {
+                continue;
+            };
+            let (assign, mutate, update) = (outer.assign, outer.mutate, outer.update);
+            if let Some(current) = context.state.transform.get_mut(name.as_str()) {
+                current.assign = assign;
+                current.mutate = mutate;
+                current.update = update;
+            }
+        }
+    }
     context.state.transform_deep_read = saved_transform_deep_read;
     context.state.await_binding_names = saved_await_binding_names;
-
-    // Log for debugging if needed
-    let _ = block_type;
 
     b::arrow_block(params, body_statements)
 }
@@ -307,6 +333,9 @@ fn create_derived_block_argument(
         // compiler and need deep_read_state wrapping in legacy reactivity.
         context.state.transform_deep_read.insert(name.clone(), ());
         context.state.await_binding_names.insert(name.clone(), ());
+        // A non-source prop is read as `$$props.name` before any transform is
+        // consulted, so the transform above cannot shadow one on its own.
+        context.state.shadowed_prop_names.insert(name.clone());
         return (Some(JsPattern::Identifier(name.into())), vec![]);
     }
 
@@ -385,6 +414,7 @@ fn create_derived_block_argument(
         // Destructured await then/catch values are template-kind.
         context.state.transform_deep_read.insert(id.clone(), ());
         context.state.await_binding_names.insert(id.clone(), ());
+        context.state.shadowed_prop_names.insert(id.clone());
 
         // Build: var id = $.derived(() => $.get($$value).id)
         let get_value_call = b::call(
