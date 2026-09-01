@@ -37,6 +37,8 @@ export const MECHANISMS = [
   // Official's whole hover is the import origin line, which tsgo drops -- so
   // dropping it leaves tsgo with nothing to answer.
   "rsvelte-empty-import-only",
+  // rsvelte answers a definition with the very token the request sat on.
+  "official-empty-target-is-the-request",
   // Two of the renderings at once. Named for the pair rather than for either
   // one, because a label that a rule wins by its position in the table makes
   // the ratchet key depend on the order the rules were written in.
@@ -341,8 +343,27 @@ function classifyHover(official, rsvelte) {
   return "ts-render";
 }
 
-function classifyDefinition(official, rsvelte, difference) {
-  if (isEmptyResult(official) && !isEmptyResult(rsvelte)) return "official-empty";
+// Whether rsvelte's own answer covers the position that was asked about. The
+// alternative -- listing the words official resolves nothing at -- needs a
+// vocabulary, and the document is three languages at once: the sampled residue
+// is `type`, `as` and Svelte's `snippet`.
+function targetCoversRequest(rsvelte, position) {
+  if (!position) return false;
+  const first = asList(rsvelte)[0];
+  const range = first?.targetSelectionRange ?? first?.range;
+  if (!range) return false;
+  const { line, character } = position;
+  if (range.start.line > line || range.end.line < line) return false;
+  if (range.start.line === line && range.start.character > character) return false;
+  if (range.end.line === line && range.end.character < character) return false;
+  return true;
+}
+
+function classifyDefinition(official, rsvelte, difference, position) {
+  if (isEmptyResult(official) && !isEmptyResult(rsvelte))
+    return targetCoversRequest(rsvelte, position)
+      ? "official-empty-target-is-the-request"
+      : "official-empty";
   if (!isEmptyResult(official) && isEmptyResult(rsvelte)) return "rsvelte-empty";
   const left = asList(official);
   const right = asList(rsvelte);
@@ -629,7 +650,7 @@ export function classifyDivergence(method, official, rsvelte, difference, contex
   let label;
   if (method === "textDocument/hover") label = classifyHover(official, rsvelte);
   else if (method === "textDocument/definition")
-    label = classifyDefinition(official, rsvelte, difference);
+    label = classifyDefinition(official, rsvelte, difference, context?.position);
   else if (method === "textDocument/completion")
     label = classifyCompletion(official, rsvelte, difference, requestRegion(context));
   else label = "unclassified";

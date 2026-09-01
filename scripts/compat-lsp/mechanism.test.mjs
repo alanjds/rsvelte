@@ -320,6 +320,36 @@ test("definition target: a component import and a declaration file are two mecha
   );
 });
 
+test("definition: an empty official answer splits on whether rsvelte pointed at the request", () => {
+	const link = (startLine, startChar, endLine, endChar) => [
+		{
+			targetUri: "file:///a.svelte",
+			targetSelectionRange: {
+				start: { line: startLine, character: startChar },
+				end: { line: endLine, character: endChar },
+			},
+		},
+	];
+	const at = (line, character) => ({ text: "", position: { line, character } });
+	// `{...restProps}` at 14:6 -- rsvelte answers with `restProps` itself.
+	assert.equal(
+		classifyDivergence("textDocument/definition", [], link(14, 5, 14, 14), ":extra-rsvelte-element[count=1,hash=x]", at(14, 6)),
+		"official-empty-target-is-the-request",
+	);
+	// `type ListItemProps = {` asked at the `type` keyword -- rsvelte answers with
+	// the NAME, which does not cover the keyword. The sampled residue is exactly
+	// this shape: `type`, `as`, and Svelte's `snippet`.
+	assert.equal(
+		classifyDivergence("textDocument/definition", [], link(42, 6, 42, 19), ":extra-rsvelte-element[count=1,hash=x]", at(42, 2)),
+		"official-empty",
+	);
+	// With no position the split cannot be made, and must not be guessed.
+	assert.equal(
+		classifyDivergence("textDocument/definition", [], link(14, 5, 14, 14), ":extra-rsvelte-element[count=1,hash=x]", { text: "" }),
+		"official-empty",
+	);
+});
+
 test("hover: an empty rsvelte answer whose official half is only an import line", () => {
 	const ts = (...lines) => ({ contents: ["```typescript", ...lines, "```"].join("\n") });
 	// 21 of 23 sampled `rsvelte-empty` hovers are this: official's entire answer

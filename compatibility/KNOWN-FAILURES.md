@@ -4241,6 +4241,28 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`official-empty` splits without a vocabulary, and its residue names three words the reserved-word
+enumeration could not have reached.** Sixteen sampled definition rows have rsvelte answering where
+official answers nothing, and all sixteen target the **same file on the same line** — but only
+eight have a target range that *covers the position that was asked about*. That containment test
+separates the two arms 16/16 against the token actually under the cursor, with no list of words in
+it: the covering eight are all `restProps` inside a `{...restProps}` spread, where rsvelte answers
+with the use itself, and the other eight are keyword positions.
+
+Those keywords are the interesting half. `server.rs`'s `RESERVED_WORDS` is `["const", "enum",
+"let", "var"]`, and its comment says the list was measured by asking both servers at each reserved
+word rather than assumed — which is the right method over the wrong population. The residue is
+`as` (4, in `import * as Alert from …`), `type` (2, at a type alias's keyword) and **`snippet`**
+(2, at `{#snippet child({ props })}`). The first two are TypeScript *contextual* keywords, which
+are not reserved words in JavaScript; the third is not a JavaScript word at all. A `.svelte`
+document is three languages at once, so an enumeration closed over one language's reserved words
+is closed over the wrong set — the population that was needed is *positions at which the two
+servers disagree*, which is what the corpus supplies and a keyword table cannot.
+
+`official-empty-target-is-the-request` is signed (n=8, files=8, pos=8). The residue stays listed:
+eight keyword definitions plus one hover is still two mechanisms, and the keyword arm's fix is a
+behaviour change rather than a classification.
+
 **`rsvelte-empty` was the one label with `alone > 0`, and 21 of its 23 sampled hover rows are a
 rendering difference with nothing left behind it.** Official's whole answer at those positions is
 the fenced block `import <Name>` and nothing else — the origin line tsgo drops. Drop it and tsgo

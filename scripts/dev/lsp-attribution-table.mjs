@@ -29,6 +29,7 @@ const TARGETS = {
 	'completion-item-detail-presence-rsvelte-only': ['R', null],
 	'completion-text-edit-presence-rsvelte-only': ['R', null],
 	'rsvelte-empty-import-only': ['U', 'upstream_issues/tsgo-lsp-hover-renders-declarations-differently-from-tsc.md'],
+	'official-empty-target-is-the-request': ['R', null],
 	'ts-lib-copy': ['D', 'deliberate-divergences'],
 	'official-defect-svelte-ts-shadow': ['U', 'upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md'],
 	// Only the SINGLE-field, SINGLE-provider cell is attributable: the field set
@@ -66,6 +67,7 @@ const CLUSTERS = {
 	'completion-item-detail-presence-rsvelte-only': 'official assigns `detail` only in `completionItem/resolve` (`CompletionProvider.ts:989`), so its initial list can never carry one; rsvelte’s tsgo proxy fills it there',
 	'completion-text-edit-presence-rsvelte-only': 'official emits `textEdit` only where tsc returned a `replacementSpan` (`CompletionProvider.ts:693`); rsvelte emits one unconditionally',
 	'rsvelte-empty-import-only': 'official’s entire hover is the `import <Name>` line tsgo drops, so dropping it leaves tsgo with nothing to answer',
+	'official-empty-target-is-the-request': 'rsvelte answers a definition with the very token the request sat on — every sampled row is `restProps` inside a `{...restProps}` spread',
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
