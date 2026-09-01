@@ -292,9 +292,10 @@ test("ts-render: each of the four tsgo renderings is its own label", () => {
     render("const flagged: false", "const flagged: false\n\n*@default* — false"),
     "ts-render-jsdoc-tag",
   );
-  // The residual is deliberately NOT one of the four: `tsc` and `tsgo` agree on
-  // this shape, so attributing it to tsgo would assert what was not measured.
-  assert.equal(render("const controls: Writable<{", "const controls: any"), "ts-render");
+  // Not one of the renderings: the two agree on how to print a type and disagree
+  // about which type it is. Naming the shape is not attributing it -- the label
+  // says what differs, and the terminal is decided separately.
+  assert.equal(render("const controls: Writable<{", "const controls: any"), "ts-type-any");
 });
 
 test("definition target: a component import and a declaration file are two mechanisms", () => {
@@ -317,6 +318,58 @@ test("definition target: a component import and a declaration file are two mecha
     ),
     "target-declaration-vs-source",
   );
+});
+
+test("ts render: a rewrite names the mechanism only when it is the only one that fits", () => {
+	const hover = (contents) => ({ contents });
+	const ts = (...lines) => hover(["```typescript", ...lines, "```"].join("\n"));
+
+	// tsc names the import a symbol came through; tsgo omits the line.
+	assert.equal(
+		classify(
+			"textDocument/hover",
+			ts("(alias) type SelectGroupProps = any", "import SelectGroupProps"),
+			ts("(alias) type SelectGroupProps = any"),
+		),
+		"ts-render-import-line",
+	);
+	// tsc counts the overloads it did not print.
+	assert.equal(
+		classify(
+			"textDocument/hover",
+			ts("function $state<false>(initial: false): false (+1 overload)"),
+			ts("function $state<false>(initial: false): false"),
+		),
+		"ts-render-overload-count",
+	);
+	// Both at once. This is the order-freeness control: under a first-match loop
+	// this input took whichever label sat higher in the table, so the ratchet key
+	// depended on the order the rules happened to be written in.
+	const compound = () =>
+		classify(
+			"textDocument/hover",
+			ts("(method) Array.from<unknown>(): unknown[] (+3 overloads)", "import Array"),
+			ts("(method) Array.from<unknown>(): unknown[]"),
+		);
+	assert.equal(compound(), "ts-render-multiple");
+	// Neither constituent label may claim it.
+	for (const label of ["ts-render-overload-count", "ts-render-import-line"])
+		assert.notEqual(compound(), label);
+	// The same declaration with the type erased is not a rendering difference.
+	assert.equal(
+		classify(
+			"textDocument/hover",
+			ts("let className: ClassValue | null | undefined"),
+			ts("let className: any"),
+		),
+		"ts-type-any",
+	);
+	// The control that keeps `ts-type-any` from swallowing a different symbol:
+	// the name differs too, so no rewrite and no `any` rule may claim it.
+	assert.equal(
+		classify("textDocument/hover", ts("let className: any"), ts("let other: any")),
+		"ts-symbol-name",
+	);
 });
 
 test("region: the boundary is the outside edge of both tags", () => {

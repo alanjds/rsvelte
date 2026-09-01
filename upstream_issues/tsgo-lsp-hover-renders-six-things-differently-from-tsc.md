@@ -1,11 +1,11 @@
-# `tsgo --lsp` renders four things in `textDocument/hover` differently from `tsc`'s quick info
+# `tsgo --lsp` renders six things in `textDocument/hover` differently from `tsc`'s quick info
 
 `rsvelte-language-server` proxies a child `tsgo --lsp` for TypeScript features, while the official
 `svelte-language-server` calls the bundled `typescript` package's `LanguageService` directly. The
-two are meant to answer the same question, and for hover they mostly do — but four renderings
+two are meant to answer the same question, and for hover they mostly do — but six renderings
 differ, and every one of them reaches a user as a different hover card for identical source.
 
-The four are reported together because they are one component (the quick-info renderer) and one
+The six are reported together because they are one component (the quick-info renderer) and one
 input file reproduces all of them.
 
 ## Reproduction
@@ -31,6 +31,18 @@ export function outer() {
  * @default false
  */
 export const flagged = false;
+
+export const fromSet = Array.from(new Set<number>());
+
+import { helper } from "./other";
+export const usedHelper = helper;
+```
+
+`src/other.ts`:
+
+```ts
+export type Helper = { readonly tag: "helper" };
+export const helper: Helper = { tag: "helper" };
 ```
 
 `tsc` side: `ts.createLanguageService(...).getQuickInfoAtPosition(file, offset)`, then
@@ -40,7 +52,7 @@ export const flagged = false;
 `tsgo` side: `tsgo --lsp -stdio`, `initialize` + `didOpen` + `textDocument/hover` at the identical
 position, reading `contents.value`.
 
-## The four differences
+## The six differences
 
 | position | `tsc` 6.0.3 | `tsgo --lsp` |
 |---|---|---|
@@ -49,6 +61,8 @@ position, reading `contents.value`.
 | `singleQuoted` | `const singleQuoted: () => ReturnType<import("svelte").Snippet>` | `const singleQuoted: () => ReturnType<import('svelte').Snippet>` |
 | `classes` (its use on the `return` line) | `(local function) classes(list: string): string[]` | `function classes(list: string): string[]` |
 | `flagged` | `const flagged: false` **plus** `tags = [{name: "default", text: "false"}]` | `const flagged: false` **plus** the literal text `*@default* — false` appended to the hover body |
+| `from` in `Array.from(…)` | `(method) ArrayConstructor.from<number>(iterable: Iterable<number> \| ArrayLike<number>): number[] (+3 overloads)` | `(method) ArrayConstructor.from<number>(iterable: ArrayLike<number> \| Iterable<number>): number[]` |
+| `helper` in `= helper;` | `(alias) const helper: Helper` **plus** a second line `import helper` | `(alias) const helper: Helper`, with no second line |
 
 1. **Union members are sorted.** `tsc` prints a union in declaration order; `tsgo` prints it
    alphabetically. Both examples above are ordinary string-literal unions with no `keyof`, no
@@ -61,6 +75,18 @@ position, reading `contents.value`.
 4. **JSDoc tags are inlined into the hover body rather than returned separately.** This one is
    arguably a protocol-shape choice rather than a defect, but it means a client cannot render tags
    its own way, and the resulting markdown differs (`*@default* — false` versus a `tags` array).
+5. **The overload count is dropped.** `tsc` appends `(+3 overloads)` to a call signature it
+   selected out of an overload set; `tsgo` prints the selected signature alone, so the hover
+   gives the reader no sign that other signatures exist.
+6. **The `import <name>` origin line is dropped.** For an aliased import `tsc` prints the
+   declaration and then a second line naming the import it came through; `tsgo` prints the
+   declaration only. Both agree on the `(alias)` prefix, so the two halves of that answer are
+   split between the two implementations.
+
+The `from` row also reproduces difference 1 on a union that is **not** a string-literal union
+(`Iterable<number> | ArrayLike<number>` against `ArrayLike<number> | Iterable<number>`), which
+the original probe could not show — see *What does NOT differ* below for what still needs an
+inline union.
 
 ## What does NOT differ
 

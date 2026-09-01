@@ -4234,11 +4234,38 @@ populated provider labels.
 
 `ts-render` splits by asking which rewrite makes the two texts equal, in a fixed order, and the
 rewrite decides the **label** only — `diff.mjs` has already decided that the entry diverges, so no
-rewrite can hide a difference. Four of them are `tsgo --lsp` renderings that `tsc`'s quick info
+rewrite can hide a difference. Six are `tsgo --lsp` renderings that `tsc`'s quick info
 spells differently, with both sides' output at one probe position each in
-[`upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md`](../upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md):
+[`upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md`](../upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md):
 a union's members sorted, a dynamic import's quote spelling echoed from source rather than
-normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body.
+normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
+plus the two the next paragraph adds.
+
+**A classifier that stops at the first predicate that fits makes the ratchet key depend on the
+order the predicates were written in.** `classifyTsRender` applied its rewrites in a fixed list and
+returned the first that equalized the two texts, so a hover carrying two of the renderings at once
+took whichever rule sat higher — and inserting a rule above another would have silently re-keyed
+every such entry. It now asks which rewrites are *individually* sufficient: exactly one names the
+mechanism, more than one or none-but-the-composition is `ts-render-multiple`, and the label cannot
+move when the table is reordered.
+
+Making it order-free is what exposed the residue. `ts-render` held 17 sampled rows and reads as one
+name; it was five things. Eleven are official carrying a second line `import <Name>` that rsvelte
+omits, two are official appending `(+3 overloads)` / `(+1 overload)`, one is both at once, and two
+are not a rendering difference at all — the same declaration typed `any` on the rsvelte side where
+official resolves `ClassValue | null | undefined`. Only one row survives as unclassified, and it is
+a union order (`keyof Props | ""` against `"" | keyof Props`) that the existing `sortUnions` rewrite
+cannot normalize because its token pattern does not span `keyof T`.
+
+The two new renderings were **not** attributed from the server pair that reported them. Official
+against rsvelte cannot distinguish a tsgo defect from a svelte2tsx projection artifact, so both were
+re-run through the plain-TypeScript probe the report already carries — `tsc` 6.0.3's
+`getQuickInfoAtPosition` against `tsgo --lsp`, one `.ts` file, no Svelte anywhere. Both reproduce:
+`(method) ArrayConstructor.from<number>(…): number[] (+3 overloads)` against the same text with the
+suffix absent, and `(alias) const helper: Helper\nimport helper` against the first line alone. That
+is why they join `upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md` and
+`ts-type-any` does not — the `any` rows were never put to that probe, so they carry no claim about
+which side is wrong beyond "rsvelte answers `any`".
 
 **The split moved 172 fields out of `ts-symbol-kind`, and that number is the check on it.**
 `(local function) f()` against `function f()` reads as a KIND disagreement to a classifier that

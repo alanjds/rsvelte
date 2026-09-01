@@ -26,11 +26,19 @@ export const MECHANISMS = [
   "ts-lib-copy",
   // The four renderings a `tsgo --lsp` hover spells differently from `tsc`'s
   // quick info, each pinned by one probe position in
-  // `upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md`.
+  // `upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md`.
   "ts-render-union-order",
   "ts-render-quote-style",
   "ts-render-local-modifier",
   "ts-render-jsdoc-tag",
+  "ts-render-import-line",
+  "ts-render-overload-count",
+  // Two of the renderings at once. Named for the pair rather than for either
+  // one, because a label that a rule wins by its position in the table makes
+  // the ratchet key depend on the order the rules were written in.
+  "ts-render-multiple",
+  // Not a rendering difference at all: the same declaration, typed.
+  "ts-type-any",
   // The residual: a hover text none of those four rules explains. It is NOT
   // attributed to tsgo -- the same probe shows `tsc` and `tsgo` agreeing on the
   // shapes this bucket holds, so which side is wrong is unmeasured.
@@ -213,6 +221,14 @@ const normalizeImportQuotes = (text) =>
 // kind word is not.
 const dropLocalModifier = (text) =>
   text.replace(/\(local (function|var|let|const|class|method|property)\)/g, "$1");
+// tsc names the import a symbol came through on its own line; tsgo omits it.
+const dropImportLine = (text) =>
+  text
+    .split("\n")
+    .filter((line) => !/^import [\w$]+$/.test(line))
+    .join("\n");
+// `(+3 overloads)` / `(+1 overload)`: tsc counts the overloads it did not print.
+const dropOverloadCount = (text) => text.replace(/ \(\+\d+ overloads?\)/g, "");
 const dropJsdocTags = (text) =>
   text
     .split("\n")
@@ -227,11 +243,37 @@ const TS_RENDER_RULES = [
   ["ts-render-quote-style", normalizeImportQuotes],
   ["ts-render-local-modifier", dropLocalModifier],
   ["ts-render-jsdoc-tag", dropJsdocTags],
+  ["ts-render-import-line", dropImportLine],
+  ["ts-render-overload-count", dropOverloadCount],
 ];
 
+// The same declaration with the type erased: rsvelte answers `any` where
+// official names a type, which no rewrite can express because it is not a
+// rendering difference. Every differing line must have the shape, so a genuinely
+// different symbol whose type happens to be `any` cannot match.
+function differsOnlyByAny(official, rsvelte) {
+  const left = official.split("\n");
+  const right = rsvelte.split("\n");
+  if (left.length !== right.length) return false;
+  let differing = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] === right[i]) continue;
+    differing += 1;
+    if (!right[i].endsWith("any")) return false;
+    if (left[i].slice(0, right[i].length - 3) !== right[i].slice(0, -3)) return false;
+  }
+  return differing > 0;
+}
+
+// Order-free by construction: a rule never wins because of where it sits in the
+// table, so the ratchet key cannot change when a rule is added above another.
 function classifyTsRender(left, right) {
-  for (const [label, rewrite] of TS_RENDER_RULES)
-    if (rewrite(left) === rewrite(right)) return label;
+  const sufficient = TS_RENDER_RULES.filter(([, rewrite]) => rewrite(left) === rewrite(right));
+  if (sufficient.length === 1) return sufficient[0][0];
+  if (sufficient.length > 1) return "ts-render-multiple";
+  const all = (text) => TS_RENDER_RULES.reduce((acc, [, rewrite]) => rewrite(acc), text);
+  if (all(left) === all(right)) return "ts-render-multiple";
+  if (differsOnlyByAny(left, right)) return "ts-type-any";
   return "ts-render";
 }
 

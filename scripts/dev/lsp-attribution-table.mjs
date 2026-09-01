@@ -15,10 +15,14 @@ const RATCHET = path.join(ROOT, 'compatibility/lsp-known-failures.json');
 // `U` = attributed to a filed upstream report; `D` = deliberate, pinned by a
 // test; `R` = an rsvelte defect, whose only end state is zero entries.
 const TARGETS = {
-	'ts-render-union-order': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
-	'ts-render-quote-style': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
-	'ts-render-local-modifier': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
-	'ts-render-jsdoc-tag': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
+	'ts-render-union-order': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-render-quote-style': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-render-local-modifier': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-render-jsdoc-tag': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-render-import-line': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-render-overload-count': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-render-multiple': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
+	'ts-type-any': ['R', null],
 	'ts-lib-copy': ['D', 'deliberate-divergences'],
 	'official-defect-svelte-ts-shadow': ['U', 'upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md'],
 	// Only the SINGLE-field, SINGLE-provider cell is attributable: the field set
@@ -46,6 +50,10 @@ const CLUSTERS = {
 	'ts-render-quote-style': 'tsgo echoes the source’s quote spelling in `import(…)`; tsc normalizes to `"`',
 	'ts-render-local-modifier': 'tsc marks a nested function `(local function)`; tsgo does not',
 	'ts-render-jsdoc-tag': 'tsc returns JSDoc tags separately; tsgo inlines them into the hover body',
+	'ts-render-import-line': 'tsc names the import an alias came through on a second line; tsgo prints the declaration alone',
+	'ts-render-overload-count': 'tsc appends `(+N overloads)` to a selected call signature; tsgo prints the signature alone',
+	'ts-render-multiple': 'two of the six renderings in one hover — named for the pair, because a label a rule wins by its position in the table would make the ratchet key depend on that order',
+	'ts-type-any': 'the same declaration typed `any` on the rsvelte side where official resolves a real type — not a rendering difference',
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
