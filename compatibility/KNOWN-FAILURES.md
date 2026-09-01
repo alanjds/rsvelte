@@ -4324,6 +4324,19 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`completion-item-pairing-key-kind+sort-text` cannot be signed and its content is now measured.**
+The label is a *union* over the pairing-key fields that differ, so a `kind+sort-text` cell holds
+whatever the two fields hold. Over 24 sampled units the (kind, sortText) pairs are: `kind 3→3,
+sortText "15"→"-1"` ×31 and `kind 21→6, "11"→"-1"` ×9 — rsvelte applying the
+`preferComponents ? '-1'` boost (`CompletionProvider.ts:711-712`) where official does not;
+`kind 6→6, "Z15"→"15"` ×7 and `kind 9→9, "Z15"→"15"` ×1 — the `Z` auto-import prefix present on
+official and absent on rsvelte; and `kind 21→6` / `10→6` with the sortText agreeing ×16 — the
+already-signed tsgo kind omission on its own. Three mechanisms, one of which is signed elsewhere.
+
+Recording it rather than splitting it: the sub-key is read off the difference pointer's field set,
+so splitting on the *values* would put a measurement in the key, and a ratchet whose key encodes
+what it measures cannot record progress on it.
+
 **`projection-origin-range` stays unsplit, and measuring it shows why the label boundary is not
 the defect boundary.** Its 21 sampled rows are all `textDocument/definition`, and the shift from
 official's origin range to rsvelte's is: `0:-5` twelve times, `-1:-1` three times, `0:-6` three
