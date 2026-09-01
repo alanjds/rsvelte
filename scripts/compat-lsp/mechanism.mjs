@@ -34,6 +34,9 @@ export const MECHANISMS = [
   "ts-render-import-line",
   "ts-render-overload-count",
   "ts-render-declaration-order",
+  // Official's whole hover is the import origin line, which tsgo drops -- so
+  // dropping it leaves tsgo with nothing to answer.
+  "rsvelte-empty-import-only",
   // Two of the renderings at once. Named for the pair rather than for either
   // one, because a label that a rule wins by its position in the table makes
   // the ratchet key depend on the order the rules were written in.
@@ -286,6 +289,16 @@ function classifyTsRender(left, right) {
   return "ts-render";
 }
 
+// The whole answer is the `import <Name>` line `ts-render-import-line` names,
+// so this is that omission with nothing left behind it rather than a second
+// mechanism that happens to be empty.
+function importOnlyBody(text) {
+  const fenced = /^```typescript\n([\s\S]*?)\n```$/.exec(text.trim());
+  if (!fenced) return false;
+  const lines = fenced[1].split("\n");
+  return lines.length === 1 && /^import [\w$]+$/.test(lines[0]);
+}
+
 function classifyHover(official, rsvelte) {
   if (isEmptyResult(official) && !isEmptyResult(rsvelte)) return "official-empty";
   if (!isEmptyResult(official) && isEmptyResult(rsvelte)) {
@@ -296,6 +309,7 @@ function classifyHover(official, rsvelte) {
     // mentions `$$ComponentProps` while the hover is about the user's own
     // declaration, and only the former is official answering about the shadow.
     const subject = markupTextOf(official.contents);
+    if (subject !== null && importOnlyBody(subject)) return "rsvelte-empty-import-only";
     if (subject !== null && declarationHead(subject).name.startsWith("$$"))
       return "official-defect-svelte-ts-shadow";
     return "rsvelte-empty";

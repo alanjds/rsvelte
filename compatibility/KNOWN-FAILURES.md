@@ -4241,6 +4241,20 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`rsvelte-empty` was the one label with `alone > 0`, and 21 of its 23 sampled hover rows are a
+rendering difference with nothing left behind it.** Official's whole answer at those positions is
+the fenced block `import <Name>` and nothing else — the origin line tsgo drops. Drop it and tsgo
+has no hover to send, so the null is not a second mechanism, it is the sixth rendering at the
+boundary where the omitted part was the entire payload. The label is split on that shape
+(`rsvelte-empty-import-only`, n=21, files=21, pos=18) and attributed to the same report; one row is
+the `$render` shadow the earlier split already claims, and four survive as genuinely unexplained —
+three of them `textDocument/definition` rather than hover, which is a different question again.
+
+The reusable half is that **the label most worth splitting is not the biggest one, it is the one
+whose name states an absence**. "Empty" describes what a response lacks, which is a property every
+mechanism can end in; the same reasoning is why "one side sent nothing" failed as an axis for the
+completion item sets. Here it worked only because the *other* side's payload had a shape to key on.
+
 **A per-label sample cannot measure co-occurrence, and reading one as if it could inverts the
 answer.** The three `presence-rsvelte-only` labels on `commitCharacters`, `detail` and `textEdit`
 all concentrate on module-specifier completions, which suggests one cause spending three labels.

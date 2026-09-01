@@ -28,6 +28,7 @@ const TARGETS = {
 	'projection-target-position-workspace': ['R', null],
 	'completion-item-detail-presence-rsvelte-only': ['R', null],
 	'completion-text-edit-presence-rsvelte-only': ['R', null],
+	'rsvelte-empty-import-only': ['U', 'upstream_issues/tsgo-lsp-hover-renders-declarations-differently-from-tsc.md'],
 	'ts-lib-copy': ['D', 'deliberate-divergences'],
 	'official-defect-svelte-ts-shadow': ['U', 'upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md'],
 	// Only the SINGLE-field, SINGLE-provider cell is attributable: the field set
@@ -58,12 +59,13 @@ const CLUSTERS = {
 	'ts-render-import-line': 'tsc names the import an alias came through on a second line; tsgo prints the declaration alone',
 	'ts-render-overload-count': 'tsc appends `(+N overloads)` to a selected call signature; tsgo prints the signature alone',
 	'ts-render-declaration-order': 'a merged symbol prints one line per declaration and the two disagree on the order; every rune is a function plus a namespace',
-	'ts-render-multiple': 'two of the six renderings in one hover — named for the pair, because a label a rule wins by its position in the table would make the ratchet key depend on that order',
+	'ts-render-multiple': 'two of the seven renderings in one hover — named for the pair, because a label a rule wins by its position in the table would make the ratchet key depend on that order',
 	'ts-type-any': 'the same declaration typed `any` on the rsvelte side where official resolves a real type — not a rendering difference',
 	'projection-target-position-declaration': 'official lands eight lines short of a rune’s `declare function`, inside its JSDoc; rsvelte lands on the declaration',
 	'projection-target-position-workspace': 'rsvelte’s origin range covers the enclosing node where official’s covers the identifier — the ends agree and rsvelte’s start is earlier',
 	'completion-item-detail-presence-rsvelte-only': 'official assigns `detail` only in `completionItem/resolve` (`CompletionProvider.ts:989`), so its initial list can never carry one; rsvelte’s tsgo proxy fills it there',
 	'completion-text-edit-presence-rsvelte-only': 'official emits `textEdit` only where tsc returned a `replacementSpan` (`CompletionProvider.ts:693`); rsvelte emits one unconditionally',
+	'rsvelte-empty-import-only': 'official’s entire hover is the `import <Name>` line tsgo drops, so dropping it leaves tsgo with nothing to answer',
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
@@ -113,9 +115,22 @@ for (const [label, n] of rows) {
 	if (!target || !target[1]) continue;
 	console.log(`| ${n} | \`${target[1]}\` | ${CLUSTERS[label] ?? label} |`);
 }
+// A signed label the artifact holds no carrier for is NOT n = 0: this artifact
+// was written before the label existed, so the population is stale and nothing
+// about that label was measured. A blank and a zero are indistinguishable, and
+// a dropped row is worse than either.
+for (const label of Object.keys(TARGETS)) {
+	if (counts.has(label) || !TARGETS[label][1]) continue;
+	console.log(`| STALE-POPULATION | \`${TARGETS[label][1]}\` | ${CLUSTERS[label] ?? label} |`);
+}
 // The label is IN the ratchet key, so one entry carries exactly one label and
 // `n` partitions the file by construction -- no dominant-label rule is needed
 // and none may be added, because it would double-count or drop entries.
+const staleSigned = Object.keys(TARGETS).filter((label) => !counts.has(label));
+if (staleSigned.length)
+	console.log(
+		`\n${staleSigned.length} signed label(s) have no carrier in this artifact and are printed as STALE-POPULATION, not 0: ${staleSigned.join(', ')}.`,
+	);
 const rLabels = rows.filter(([label]) => TARGETS[label]?.[0] === 'R');
 const total = (subset) => subset.reduce((sum, [, n]) => sum + n, 0);
 const attributed = total(rows.filter(([label]) => TARGETS[label]?.[1]));

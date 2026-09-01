@@ -320,6 +320,27 @@ test("definition target: a component import and a declaration file are two mecha
   );
 });
 
+test("hover: an empty rsvelte answer whose official half is only an import line", () => {
+	const ts = (...lines) => ({ contents: ["```typescript", ...lines, "```"].join("\n") });
+	// 21 of 23 sampled `rsvelte-empty` hovers are this: official's entire answer
+	// is the origin line tsgo drops, so dropping it leaves nothing to send.
+	assert.equal(
+		classify("textDocument/hover", ts("import NavigationMenu"), null),
+		"rsvelte-empty-import-only",
+	);
+	// One more line and it is not the same thing: tsgo had something to answer
+	// with and answered nothing anyway.
+	assert.equal(
+		classify("textDocument/hover", ts('(alias) const Example: Component<{}, {}, "">', "import Example"), null),
+		"rsvelte-empty",
+	);
+	// And a declaration that merely mentions an import is not an import line.
+	assert.equal(
+		classify("textDocument/hover", ts("const imported: number"), null),
+		"rsvelte-empty",
+	);
+});
+
 test("ts render: a rewrite names the mechanism only when it is the only one that fits", () => {
 	const hover = (contents) => ({ contents });
 	const ts = (...lines) => hover(["```typescript", ...lines, "```"].join("\n"));
@@ -444,7 +465,11 @@ test("hover: an empty rsvelte answer splits on whether official hovered the shad
     classify("textDocument/hover", ts('(alias) const Example: Component<$$ComponentProps, {}, "">'), null),
     "rsvelte-empty",
   );
-  assert.equal(classify("textDocument/hover", ts("import RadioGroup"), null), "rsvelte-empty");
+  // An import-only body is its own label: the shadow test must not claim it.
+  assert.equal(
+    classify("textDocument/hover", ts("import RadioGroup"), null),
+    "rsvelte-empty-import-only",
+  );
 });
 
 test("completion: a label on both sides with a differing pairing-key field is its own mechanism", () => {
