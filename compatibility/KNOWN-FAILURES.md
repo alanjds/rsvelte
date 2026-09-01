@@ -4433,6 +4433,28 @@ ORs the flag across plugins, and `CSSPlugin.ts:288` and `HTMLPlugin.ts:152` both
 so **only the TypeScript plugin can make it true** (`TypeScriptPlugin.ts:404` passes tsc's value
 through). The emmet items are on those units for a different reason.
 
+**A better-powered sample turned that refusal into a mechanism, and moved the question one server
+along.** Over 931 sampled records from 52 bits-ui components, `completion-is-incomplete` is 20
+rows over 20 files and 20 distinct lines, **every one `official=true rsvelte=false`, every one
+`region=markup`, and every one with rsvelte returning zero items** against official's 4 to 13.
+**18 of the 20 also carry `completion-item-set-missing-emmet`** — so the association is real and
+still not the cause: with only three `isIncomplete` sites in official's tree
+(`CSSPlugin.ts:288` and `HTMLPlugin.ts:152` hardcode `false`, `TypeScriptPlugin.ts:404` passes
+tsc's value) and `PluginHost.ts:278-281` ORing them, a list of four **emmet** items marked
+incomplete says the TypeScript plugin returned an **empty but incomplete** list beside them. The
+confound and the cause are both visible only because the sample carries the item providers.
+
+The remaining question is which of rsvelte's two contributors drops it, and one measurement rules
+out the near one: across all **579** records carrying an `isIncomplete` pair, rsvelte answers
+`true` **zero** times and official answers it 44 times — but rsvelte's merge is not hardcoded,
+`server.rs:4719` ORs the tsgo list with its own and
+`is_incomplete_is_ored_over_both_contributors` pins all four cells. So the `false` comes from the
+tsgo contributor, and signing this label needs tsgo's LSP asked directly at a position where tsc
+answers `true`. **An earlier probe returned `undefined` from tsc on both passes and that was a
+fact about the probe**: tsc sets `isIncomplete` only when its auto-import export map is still
+incomplete, which a two-file synthetic workspace never reaches. The label stays unsigned until
+that probe runs against a project large enough to reproduce the condition.
+
 The same function carries a second consequence: at `:286-296`, when the flag is true and
 `filterIncompleteCompletions` is on — and it defaults to `true` at `:63` — official filters the
 item list itself, keeping only labels containing the typed prefix. So on exactly these units the
