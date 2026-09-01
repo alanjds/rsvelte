@@ -4241,6 +4241,25 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**A per-label sample cannot measure co-occurrence, and reading one as if it could inverts the
+answer.** The three `presence-rsvelte-only` labels on `commitCharacters`, `detail` and `textEdit`
+all concentrate on module-specifier completions, which suggests one cause spending three labels.
+Counted from the per-label sample: **0** units carry all three. Counted from the `--write-current`
+artifact, which holds every entry: **22** do, 20 carry two and 26 carry one, and
+`commit-characters` is a strict superset of the other two (68 ⊇ 42 ⊇ 22). The sampler keeps N rows
+per label, so a unit is visible under a label only if it was sampled *there* — the intersection is
+the one statistic a stratified sample is structurally unable to report.
+
+The nesting is suggestive and is not the attribution. Two of the three are settled from official's
+own source instead: `CompletionProvider.ts:693` emits `textEdit` only where tsc returned a
+`replacementSpan`, and the object it returns at :705-717 has **no `detail` key at all** — official
+assigns `detail` in `completionItem/resolve` (:966, :989), which the gate never sends. So official
+cannot carry either field on an initial list, whatever the entry kind, and rsvelte's tsgo proxy
+carries both. Both are `R`. The `commitCharacters` arm is *not* the same cause and keeps its own
+attribution: official's rule reads `entry.commitCharacters`, `response.isNewIdentifierLocation` and
+`response.defaultCommitCharacters`, and tsgo's LSP exposes none of the three, so a proxy can only
+always append `(` or never — which is the filed report, not a fixable difference here.
+
 **The seventh rendering was found in a label that names something else, and the split conserves.**
 `ts-symbol-kind` compares declaration heads, so `namespace $props` against `function $props(): any`
 read as a kind disagreement — but the two hovers hold the *same two lines* in opposite orders,

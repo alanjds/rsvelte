@@ -26,6 +26,8 @@ const TARGETS = {
 	'ts-type-any': ['R', null],
 	'projection-target-position-declaration': ['U', 'upstream_issues/svelte-language-server-rune-definition-lands-inside-the-jsdoc.md'],
 	'projection-target-position-workspace': ['R', null],
+	'completion-item-detail-presence-rsvelte-only': ['R', null],
+	'completion-text-edit-presence-rsvelte-only': ['R', null],
 	'ts-lib-copy': ['D', 'deliberate-divergences'],
 	'official-defect-svelte-ts-shadow': ['U', 'upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md'],
 	// Only the SINGLE-field, SINGLE-provider cell is attributable: the field set
@@ -60,6 +62,8 @@ const CLUSTERS = {
 	'ts-type-any': 'the same declaration typed `any` on the rsvelte side where official resolves a real type — not a rendering difference',
 	'projection-target-position-declaration': 'official lands eight lines short of a rune’s `declare function`, inside its JSDoc; rsvelte lands on the declaration',
 	'projection-target-position-workspace': 'rsvelte’s origin range covers the enclosing node where official’s covers the identifier — the ends agree and rsvelte’s start is earlier',
+	'completion-item-detail-presence-rsvelte-only': 'official assigns `detail` only in `completionItem/resolve` (`CompletionProvider.ts:989`), so its initial list can never carry one; rsvelte’s tsgo proxy fills it there',
+	'completion-text-edit-presence-rsvelte-only': 'official emits `textEdit` only where tsc returned a `replacementSpan` (`CompletionProvider.ts:693`); rsvelte emits one unconditionally',
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
