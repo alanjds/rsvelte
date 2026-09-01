@@ -4528,6 +4528,27 @@ control (official must resolve into the `typescript` package) caught both fixtur
 probe position that landed inside `local` instead of `toUpperCase`, and macOS's `/var` symlink
 making the control compare an echoed URI against a resolved one.
 
+**`ts-symbol-name` and `projection-response-range` are ONE defect wearing two labels, and the
+arithmetic says so exactly.** rsvelte's position projection is short by a per-line constant, and
+which label a request produces depends only on whether the shifted position lands on the same
+symbol or on its neighbour. Measure the shift from the range label, then predict the text label:
+
+| file:line | shift | request | shifted to | official there | rsvelte answered |
+|---|---|---|---|---|---|
+| `navigation-menu-demo-force-mount:134` | 11 | col 48 | 37 | `component` at 37..46 | `let component` |
+| `forms:69` | 6 | col 34 | 28 | `plan` at 28..32 | `let plan` |
+| `charts-nav:43` | 6 | col 31 | 25 | `link` at 25..29 | `let link` |
+
+Three of three exact, on every sample where the two labels share a `(file, line)`. So
+`ts-symbol-name` is signed to the same terminal, and the pair is the clearest instance in this
+gate of the rule that **an entry count is not a defect count** — here two labels, tens of entries
+and one cause.
+
+Read the shift as per-line, not global: the measured values are 11, 6, 6, 5 and **-1**, so it is a
+mapping that loses a varying number of columns earlier on the line rather than a single constant,
+and the negative one runs the other way and may be a separate arm. Three pairs is a small sample;
+what is established is the mechanism, not its coefficient.
+
 **`projection-response-range` can be signed without deciding which side is right, because the
 range has a property that does not reference official at all: it must cover the position the
 request asked about.** Over 11 samples official's range contains the requested column **11 times**
