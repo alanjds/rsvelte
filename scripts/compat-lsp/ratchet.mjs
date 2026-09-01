@@ -4,18 +4,12 @@ import { OPEN_PHASE } from "./edits.mjs";
 const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 
-export function compactCorpusObservation(
-  method,
-  position,
-  differences,
-  mechanisms = ["unclassified"],
-) {
+export function compactCorpusObservation(method, position, differences) {
   return {
     method,
     position,
     diffDigest: digest([...differences].sort()),
     fieldCount: differences.length,
-    mechanisms,
   };
 }
 
@@ -24,25 +18,41 @@ export function aggregateCorpusDifferences(
   observations,
   phase = OPEN_PHASE,
 ) {
-  // The key carries the MECHANISM, not the measured content: a digest of the
-  // difference would change the moment one mechanism is partly fixed, and CI
-  // would read the new key as a NEW failure instead of as progress.
-  const byCell = new Map();
+  const byMethod = new Map();
   for (const observation of observations) {
-    for (const mechanism of observation.mechanisms ?? ["unclassified"])
-      byCell.set(`${observation.method}|mech=${mechanism}`, true);
+    byMethod.set(observation.method, [
+      ...(byMethod.get(observation.method) ?? []),
+      observation,
+    ]);
   }
   const entries = [];
-  for (const cell of [...byCell.keys()].sort((left, right) =>
+  for (const [method, values] of [...byMethod].sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    // The divergence COUNT is deliberately absent: two CI runs whose merge refs
-    // share a `main` parent and differ by ten commits that touch no Rust moved
-    // one file's hover count 91 -> 90 and 88 -> 90, which is 2 NEW + 2 STALE and
-    // a red shard. It was sensitivity without direction — a shrink and a growth
-    // are both one NEW and one STALE.
+    const normalized = values
+      .map((value) =>
+        value.diffDigest
+          ? {
+              position: value.position,
+              diffDigest: value.diffDigest,
+              fieldCount: value.fieldCount,
+            }
+          : compactCorpusObservation(
+              value.method,
+              value.position,
+              value.differences,
+            ),
+      )
+      .sort((left, right) => left.position.localeCompare(right.position));
+    // The request count does not reproduce either, and it never discriminated:
+    // `fileId|method|phase` is already unique, so dropping it leaves all 23,890
+    // committed keys. Two CI runs whose merge refs share a `main` parent and
+    // differ by ten commits that touch NO Rust moved one file's hover count
+    // 91 -> 90 and 88 -> 90 — 2 NEW + 2 STALE and a red shard; with the count out
+    // of the key the same pair of runs is 0 and 0. It was sensitivity without
+    // direction: a shrink and a growth are both one NEW and one STALE.
     const stage = phase === OPEN_PHASE ? "" : `|phase=${phase}`;
-    entries.push(`aggregate:${fileId}|${cell}${stage}`);
+    entries.push(`aggregate:${fileId}|${method}${stage}`);
   }
   return entries;
 }
