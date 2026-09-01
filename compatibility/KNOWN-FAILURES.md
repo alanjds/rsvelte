@@ -4241,6 +4241,25 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**`projection-target-position-*` splits into two labels that share a name and share no
+mechanism.** On the `-workspace` arm the *origin* range differs: the ends agree 19/19 and
+rsvelte's start is earlier 19/19, because official's range covers the identifier and rsvelte's
+covers the enclosing node (request at 53:4 → official 53:3–53:8, rsvelte 52:2–53:8). On the
+`-declaration` arm the origin range is **identical** 16/16 and the *target* differs: same
+`svelte/types/index.d.ts`, same columns, and the line off by exactly **8** in all sixteen.
+
+That constant is answerable without an oracle, and the answer runs the other way from what the
+label's name suggests. Reading the file at both candidate lines — `svelte@5.56.10` as this repo
+resolves it, at the version the corpus repo pins — rsvelte's line 3591 is
+`declare function $props(): any;`, where `declare function ` is 17 characters so the reported
+columns 17..23 are exactly `$props`; official's line 3583 is ` * Declares the props that a
+component accepts. Example:`, a JSDoc line where those columns spell `s that`. The same holds for
+`$bindable` at 3637 against 3629 with columns 17..26. **Eight is the length of the JSDoc block**,
+and official is the side that lands in it. Two independent symbols agreeing at exact columns is
+what makes this a measurement rather than a guess; it is
+`upstream_issues/svelte-language-server-rune-definition-lands-inside-the-jsdoc.md`, which existed
+before this label did and was attached to nothing.
+
 **A classifier that stops at the first predicate that fits makes the ratchet key depend on the
 order the predicates were written in.** `classifyTsRender` applied its rewrites in a fixed list and
 returned the first that equalized the two texts, so a hover carrying two of the renderings at once

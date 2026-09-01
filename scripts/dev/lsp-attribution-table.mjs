@@ -23,6 +23,8 @@ const TARGETS = {
 	'ts-render-overload-count': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
 	'ts-render-multiple': ['U', 'upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md'],
 	'ts-type-any': ['R', null],
+	'projection-target-position-declaration': ['U', 'upstream_issues/svelte-language-server-rune-definition-lands-inside-the-jsdoc.md'],
+	'projection-target-position-workspace': ['R', null],
 	'ts-lib-copy': ['D', 'deliberate-divergences'],
 	'official-defect-svelte-ts-shadow': ['U', 'upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md'],
 	// Only the SINGLE-field, SINGLE-provider cell is attributable: the field set
@@ -54,6 +56,8 @@ const CLUSTERS = {
 	'ts-render-overload-count': 'tsc appends `(+N overloads)` to a selected call signature; tsgo prints the signature alone',
 	'ts-render-multiple': 'two of the six renderings in one hover — named for the pair, because a label a rule wins by its position in the table would make the ratchet key depend on that order',
 	'ts-type-any': 'the same declaration typed `any` on the rsvelte side where official resolves a real type — not a rendering difference',
+	'projection-target-position-declaration': 'official lands eight lines short of a rune’s `declare function`, inside its JSDoc; rsvelte lands on the declaration',
+	'projection-target-position-workspace': 'rsvelte’s origin range covers the enclosing node where official’s covers the identifier — the ends agree and rsvelte’s start is earlier',
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
