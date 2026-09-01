@@ -1,12 +1,13 @@
-# `tsgo --lsp` renders six things in `textDocument/hover` differently from `tsc`'s quick info
+# `tsgo --lsp` renders seven things in `textDocument/hover` differently from `tsc`'s quick info
 
 `rsvelte-language-server` proxies a child `tsgo --lsp` for TypeScript features, while the official
 `svelte-language-server` calls the bundled `typescript` package's `LanguageService` directly. The
-two are meant to answer the same question, and for hover they mostly do — but six renderings
+two are meant to answer the same question, and for hover they mostly do — but seven renderings
 differ, and every one of them reaches a user as a different hover card for identical source.
 
-The six are reported together because they are one component (the quick-info renderer) and one
-input file reproduces all of them.
+The seven are reported together because they are one component (the quick-info renderer) and one
+input file reproduces all of them. The count is deliberately not in the filename: it has already
+moved twice.
 
 ## Reproduction
 
@@ -36,6 +37,12 @@ export const fromSet = Array.from(new Set<number>());
 
 import { helper } from "./other";
 export const usedHelper = helper;
+
+declare function merged(): any;
+declare namespace merged {
+  export function id(): string;
+}
+export const usedMerged = merged;
 ```
 
 `src/other.ts`:
@@ -52,7 +59,7 @@ export const helper: Helper = { tag: "helper" };
 `tsgo` side: `tsgo --lsp -stdio`, `initialize` + `didOpen` + `textDocument/hover` at the identical
 position, reading `contents.value`.
 
-## The six differences
+## The seven differences
 
 | position | `tsc` 6.0.3 | `tsgo --lsp` |
 |---|---|---|
@@ -63,6 +70,7 @@ position, reading `contents.value`.
 | `flagged` | `const flagged: false` **plus** `tags = [{name: "default", text: "false"}]` | `const flagged: false` **plus** the literal text `*@default* — false` appended to the hover body |
 | `from` in `Array.from(…)` | `(method) ArrayConstructor.from<number>(iterable: Iterable<number> \| ArrayLike<number>): number[] (+3 overloads)` | `(method) ArrayConstructor.from<number>(iterable: ArrayLike<number> \| Iterable<number>): number[]` |
 | `helper` in `= helper;` | `(alias) const helper: Helper` **plus** a second line `import helper` | `(alias) const helper: Helper`, with no second line |
+| `merged` in `= merged;` | `namespace merged` **then** `function merged(): any` | `function merged(): any` **then** `namespace merged` |
 
 1. **Union members are sorted.** `tsc` prints a union in declaration order; `tsgo` prints it
    alphabetically. Both examples above are ordinary string-literal unions with no `keyof`, no
@@ -82,6 +90,11 @@ position, reading `contents.value`.
    declaration and then a second line naming the import it came through; `tsgo` prints the
    declaration only. Both agree on the `(alias)` prefix, so the two halves of that answer are
    split between the two implementations.
+7. **A merged symbol's declarations are listed in the opposite order.** `tsc` prints the
+   `namespace` line first and the `function` line second; `tsgo` prints them the other way round.
+   The two lines themselves are identical, so this is order alone — and it reaches a hover for
+   every Svelte rune, because `svelte/types/index.d.ts` declares `$props`, `$state` and their
+   siblings as a function plus a namespace.
 
 The `from` row also reproduces difference 1 on a union that is **not** a string-literal union
 (`Iterable<number> | ArrayLike<number>` against `ArrayLike<number> | Iterable<number>`), which

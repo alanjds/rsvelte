@@ -4236,10 +4236,27 @@ populated provider labels.
 rewrite decides the **label** only — `diff.mjs` has already decided that the entry diverges, so no
 rewrite can hide a difference. Six are `tsgo --lsp` renderings that `tsc`'s quick info
 spells differently, with both sides' output at one probe position each in
-[`upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md`](../upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md):
+[`upstream_issues/tsgo-lsp-hover-renders-declarations-differently-from-tsc.md`](../upstream_issues/tsgo-lsp-hover-renders-declarations-differently-from-tsc.md):
 a union's members sorted, a dynamic import's quote spelling echoed from source rather than
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
+
+**The seventh rendering was found in a label that names something else, and the split conserves.**
+`ts-symbol-kind` compares declaration heads, so `namespace $props` against `function $props(): any`
+read as a kind disagreement — but the two hovers hold the *same two lines* in opposite orders,
+which the plain-TypeScript probe reproduces with no Svelte in sight (`tsc`: `namespace merged` then
+`function merged(): any`; `tsgo`: the reverse). It reaches a hover on every rune, because
+`svelte/types/index.d.ts` declares each one as a function plus a namespace.
+
+Adding the rewrite moved three rows out of `ts-symbol-kind` and, unexpectedly, three more out of
+`ts-symbol-name` — a component import whose hover holds `(alias) type Example`, `(alias) const
+Example` and `import Example`, where official and rsvelte differ in **both** the order and the
+import line. Neither rewrite alone equalizes those, the composition does, and `ts-render-multiple`
+is the honest name for them; the head comparison had been reading `type Example` against
+`const Example` as a different symbol. The seven hover labels close at 48 = 48 with
+`ts-render` 17 → 1, `ts-symbol-kind` 4 → 1 and `ts-symbol-name` 10 → 7 — and the three rows that
+stay in `ts-symbol-name` are exactly the column-shift rows the earlier measurement was drawn from,
+so that claim is unaffected rather than merely unchallenged.
 
 **`projection-target-position-*` splits into two labels that share a name and share no
 mechanism.** On the `-workspace` arm the *origin* range differs: the ends agree 19/19 and
@@ -4282,7 +4299,7 @@ re-run through the plain-TypeScript probe the report already carries — `tsc` 6
 `getQuickInfoAtPosition` against `tsgo --lsp`, one `.ts` file, no Svelte anywhere. Both reproduce:
 `(method) ArrayConstructor.from<number>(…): number[] (+3 overloads)` against the same text with the
 suffix absent, and `(alias) const helper: Helper\nimport helper` against the first line alone. That
-is why they join `upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md` and
+is why they join `upstream_issues/tsgo-lsp-hover-renders-declarations-differently-from-tsc.md` and
 `ts-type-any` does not — the `any` rows were never put to that probe, so they carry no claim about
 which side is wrong beyond "rsvelte answers `any`".
 

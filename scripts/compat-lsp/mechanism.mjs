@@ -26,13 +26,14 @@ export const MECHANISMS = [
   "ts-lib-copy",
   // The four renderings a `tsgo --lsp` hover spells differently from `tsc`'s
   // quick info, each pinned by one probe position in
-  // `upstream_issues/tsgo-lsp-hover-renders-six-things-differently-from-tsc.md`.
+  // `upstream_issues/tsgo-lsp-hover-renders-declarations-differently-from-tsc.md`.
   "ts-render-union-order",
   "ts-render-quote-style",
   "ts-render-local-modifier",
   "ts-render-jsdoc-tag",
   "ts-render-import-line",
   "ts-render-overload-count",
+  "ts-render-declaration-order",
   // Two of the renderings at once. Named for the pair rather than for either
   // one, because a label that a rule wins by its position in the table makes
   // the ratchet key depend on the order the rules were written in.
@@ -229,6 +230,13 @@ const dropImportLine = (text) =>
     .join("\n");
 // `(+3 overloads)` / `(+1 overload)`: tsc counts the overloads it did not print.
 const dropOverloadCount = (text) => text.replace(/ \(\+\d+ overloads?\)/g, "");
+// A merged symbol prints one line per declaration, and the two disagree on the
+// order. Only the fenced code block is sorted, so prose cannot be reordered into
+// equality.
+const sortDeclarationLines = (text) =>
+  text.replace(/```typescript\n([\s\S]*?)\n```/, (block, body) =>
+    block.replace(body, body.split("\n").sort().join("\n")),
+  );
 const dropJsdocTags = (text) =>
   text
     .split("\n")
@@ -245,6 +253,7 @@ const TS_RENDER_RULES = [
   ["ts-render-jsdoc-tag", dropJsdocTags],
   ["ts-render-import-line", dropImportLine],
   ["ts-render-overload-count", dropOverloadCount],
+  ["ts-render-declaration-order", sortDeclarationLines],
 ];
 
 // The same declaration with the type erased: rsvelte answers `any` where

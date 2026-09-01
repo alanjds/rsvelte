@@ -355,6 +355,27 @@ test("ts render: a rewrite names the mechanism only when it is the only one that
 	// Neither constituent label may claim it.
 	for (const label of ["ts-render-overload-count", "ts-render-import-line"])
 		assert.notEqual(compound(), label);
+	// A merged symbol prints one line per declaration and the two disagree on the
+	// order. `svelte/types/index.d.ts` declares every rune as a function plus a
+	// namespace, so this reaches a hover on `$props` in any component.
+	assert.equal(
+		classify(
+			"textDocument/hover",
+			ts("namespace $props", "function $props(): any"),
+			ts("function $props(): any", "namespace $props"),
+		),
+		"ts-render-declaration-order",
+	);
+	// Only the fenced block is sorted: prose below it cannot be reordered into
+	// equality, or two different explanations would read as one mechanism.
+	assert.equal(
+		classify(
+			"textDocument/hover",
+			hover(ts("namespace $props").contents + "\n---\nalpha\nbeta"),
+			hover(ts("namespace $props").contents + "\n---\nbeta\nalpha"),
+		),
+		"ts-render",
+	);
 	// The same declaration with the type erased is not a rendering difference.
 	assert.equal(
 		classify(

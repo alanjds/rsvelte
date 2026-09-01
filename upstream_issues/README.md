@@ -118,7 +118,7 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md` | sveltejs/language-tools (svelte-language-server) | — | unrecorded |
 | `tsgo-lsp-completion-item-omits-the-typescript-kind.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 | `tsgo-lsp-completion-omits-the-commit-character-inputs.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
-| `tsgo-lsp-hover-renders-six-things-differently-from-tsc.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
+| `tsgo-lsp-hover-renders-declarations-differently-from-tsc.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 
 **26** reports carry no rsvelte issue number. Six came out of the lint-parity campaign (five
 against `eslint-plugin-svelte`, one against `svelte-eslint-parser`), two out of the
