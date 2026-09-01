@@ -4324,6 +4324,23 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**A third field official's completion path never sets, and the limit of that argument.**
+`completion-item-pairing-key-filter-text-ts` is 9 rows, 9 files, 9 positions, and all nine are the
+identical item: the `Symbol` bracket-accessor completion, same `label`, same
+`insertText: "[Symbol]"`, same `additionalTextEdits` rewriting the `.` to a `[` — differing only in
+that rsvelte carries `filterText: ".Symbol"` and official carries none. Grepping official's whole
+language-server for `filterText` returns **one** setter, and it is the Svelte `component` snippet
+(`svelte/features/getCompletions.ts:28`); no TypeScript path sets it. `R`.
+
+That is the third field settled this way, after `detail` and `textEdit`, and the tempting
+generalization — official's list-builder returns a fixed ten keys (`label`, `insertText`, `kind`,
+`commitCharacters`, `sortText`, `preselect`, `insertTextFormat`, `labelDetails`, `textEdit`,
+`data`), so anything else rsvelte emits is an over-emission — **is wrong as stated**. The wire
+response carries `additionalTextEdits`, which is not one of the ten: `CompletionProvider.ts:899`
+adds it while fixing up a mapped word range, and `:1016` adds more during resolve. The sound form
+of the argument is per field and needs the grep: a field is an over-emission when *no* reachable
+setter assigns it on the list path, not when the base object literal omits it.
+
 **`completion-is-incomplete` is 16/16 one direction and still not signed, because the association
 that explains it is a confound.** Official says `isIncomplete: true` and rsvelte says `false` on
 every sampled row, and every one of those rows also carries emmet items — which reads as "emmet
