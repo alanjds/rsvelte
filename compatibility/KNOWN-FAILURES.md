@@ -4324,6 +4324,22 @@ a union's members sorted, a dynamic import's quote spelling echoed from source r
 normalized, the `(local function)` qualifier dropped, and JSDoc tags inlined into the hover body —
 plus the two the next paragraph adds.
 
+**Three labels, one cursor position, one cause.** All five sampled
+`completion-command-presence-official-only` rows are the same shape: the cursor on the `d` of an
+SVG path's `d="…"`. Official's replace range there is **empty** (`col..col`, an insert) and emits
+`autocorrect="$1"` with the trigger-suggest command; rsvelte's range is `col..col+1` (it replaces
+the `d`) and emits `autocorrect` with no command. The two servers disagree about **where the
+attribute name being completed ends**, and everything else follows: `htmlCompletion.js:216-220`
+gates *both* the `="$1"` snippet and the command on the same `value.length`, and `value` is empty
+exactly when the name is followed by `=`. rsvelte spells that condition as "the attribute already
+has a value", which is a different question once the two disagree about which name is being
+completed.
+
+So `completion-command-presence-official-only`, `completion-text-edit-new-text-html` and the
+`completion-text-edit-range-*` rows on these units are one defect wearing three labels — and this
+one is *not* the co-occurrence artifact recorded above, because the shared cause is a gate in
+upstream's source rather than a correlation in the artifact. All three are `R`.
+
 **`completion-text-edit-new-text` is two builders, and the split is read off the item rather than
 off the region.** Five sampled rows are an HTML attribute where official's `newText` is
 `accesskey="$1"` and rsvelte's is `accesskey`; three are a module specifier where official's is the
