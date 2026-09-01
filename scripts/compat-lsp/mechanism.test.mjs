@@ -246,6 +246,30 @@ test("completion item set: the provider of the differing items names the mechani
     classify("textDocument/completion", set(tagItem("nav"), tsItem("Window")), set(), "/items:missing-rsvelte-element[count=1,hash=x]"),
     "completion-item-set-missing-mixed",
   );
+  // Emmet names itself in `detail`. Nothing else does: the abbreviation has no
+  // `kind` and no MDN prose, so the region alone would file it under html and it
+  // would land in `mixed` beside a real tag gap.
+  const emmetItem = (label) => ({ label, detail: "Emmet Abbreviation", insertTextFormat: 2 });
+  assert.equal(
+    classify("textDocument/completion", set(emmetItem("Card.Title>R")), set(), "/items:missing-rsvelte-element[count=1,hash=x]"),
+    "completion-item-set-missing-emmet",
+  );
+  // The control that makes the marker load-bearing: the same shape without it.
+  assert.equal(
+    classifyDivergence(
+      "textDocument/completion",
+      set({ label: "Card.Title>R", insertTextFormat: 2 }),
+      set(),
+      "/items:missing-rsvelte-element[count=1,hash=x]",
+      { text: "<div a></div>\n", position: { line: 0, character: 5 } },
+    ),
+    "completion-item-set-missing-html",
+  );
+  // And an emmet item beside a real tag gap is `mixed`, not either one.
+  assert.equal(
+    classify("textDocument/completion", set(emmetItem("s"), tagItem("nav")), set(), "/items:missing-rsvelte-element[count=1,hash=x]"),
+    "completion-item-set-missing-mixed",
+  );
 });
 
 test("ts-render: each of the four tsgo renderings is its own label", () => {

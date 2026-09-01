@@ -9,7 +9,7 @@
 import { identity } from "./diff.mjs";
 const PAIRING_KEY_FIELDS = ["kind", "sortText", "filterText"];
 const PAIRING_KEY_SLUG = { kind: "kind", sortText: "sort-text", filterText: "filter-text" };
-const COMPLETION_PROVIDERS = ["ts", "html", "html-close-tag", "css", "svg", "other", "mixed"];
+const COMPLETION_PROVIDERS = ["ts", "html", "html-close-tag", "css", "svg", "emmet", "other", "mixed"];
 function pairingKeyLabelSpace() {
   const space = [];
   for (let mask = 1; mask < 1 << PAIRING_KEY_FIELDS.length; mask += 1)
@@ -60,7 +60,7 @@ export const MECHANISMS = [
   // items come from, because one `/items` difference hid TypeScript, HTML tag,
   // HTML attribute and CSS data gaps under one name.
   ...["missing", "extra"].flatMap((direction) =>
-    ["ts", "html", "html-close-tag", "css", "svg", "other", "mixed"].map(
+    ["ts", "html", "html-close-tag", "css", "svg", "emmet", "other", "mixed"].map(
       (provider) => `completion-item-set-${direction}-${provider}`,
     ),
   ),
@@ -367,6 +367,9 @@ const COMPLETION_POINTERS = [
 // and its label spelling is the one thing that separates it from an open tag.
 function completionProvider(item, region) {
   if (item?.data !== undefined) return "ts";
+  // Emmet names itself, and nothing else about the item does: an abbreviation
+  // carries no `kind` and no MDN prose, so the region would read it as html.
+  if (item?.detail === "Emmet Abbreviation") return "emmet";
   if (typeof item?.label === "string" && item.label.startsWith("/"))
     return "html-close-tag";
   const documentation =

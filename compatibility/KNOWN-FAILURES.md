@@ -4671,6 +4671,30 @@ control is to diff the two arms' outputs directly rather than to read the ratche
 completion condition has to be stated per label, not per entry**, because no per-label action can
 move the per-entry number until a cell is nearly clear.
 
+**The `completion-item-set-*` family is the largest remaining block and its axis was nearly
+replaced by a worse one.** 149 sampled rows split `missing-ts` 25, `missing-mixed` 25, `extra-ts`
+24, `extra-html` 24, `missing-html` 23, `missing-html-close-tag` 23, `extra-mixed` 3, and one each
+of `missing-css` / `extra-css`. Two things are measurable about it. Seven units carry an
+`extra-<A>` and a `missing-<B>` with disjoint providers, six of them at counts of
+official 1059 / rsvelte 127 — that is not two gaps, it is the two servers disagreeing about
+**which provider answers at all**, one cause spending two labels. And 48 of the 149 are rsvelte
+answering **zero** items where official answers up to 1189.
+
+That second number looks like an axis and is not. Splitting the family on "one side sent nothing"
+was written, tested and reverted: 23 of those 48 are `missing-html-close-tag`, a label that is
+already 23/23 empty and already signed on exactly that reasoning, so the split would have
+**merged a single-mechanism label into a new many-mechanism one** — the empty rows are close
+tags, emmet abbreviations and one CSS at-rule, which have nothing in common but the emptiness.
+The defect the empty count was pointing at is a missing *provider value*: an emmet item carries
+no `kind` and no MDN prose, so the region read it as `html`, and `detail === "Emmet Abbreviation"`
+is the one thing on the item that names it. With `emmet` in the vocabulary the family loses 5 rows
+to `completion-item-set-missing-emmet` (n=5, files=5, pos=5; every row is official-only
+abbreviations against an empty rsvelte answer), and 16 more emmet-bearing rows are visible under
+`completion-is-incomplete`, which is where an emmet participant marking the list incomplete
+belongs. **A count that is large under a proposed key is not evidence the key is right** — ask
+which already-separated mechanisms it would swallow.
+
+
 Every unit is compared twice. The harness sends `didOpen`, runs the request set, then applies a
 deterministic `didChange` script derived from the source and runs the **same** request set again.
 The script inserts an `import` at the end of the first `<script>`, a rule at the end of the first
