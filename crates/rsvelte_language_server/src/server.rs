@@ -1950,6 +1950,21 @@ impl Server {
             ));
             return;
         }
+        if request.method == "textDocument/definition"
+            && request
+                .params
+                .get("textDocument")
+                .and_then(|value| value.get("uri"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|uri| self.documents.get_by_key(uri))
+                .zip(request.params.get("position"))
+                .is_some_and(|(document, position)| {
+                    position_is_on_reserved_word(document.text(), position)
+                })
+        {
+            self.respond(Response::new_ok(request.id, serde_json::json!([])));
+            return;
+        }
         let Ok(completion_site_data) = self.completion_data_site(&mut request) else {
             // Without tsgo's payload the child rejects the request outright; the
             // unresolved item is still a valid response to the editor.
@@ -4317,6 +4332,39 @@ fn position_is_in_script(text: &str, position: &serde_json::Value) -> bool {
     crate::context::EmbeddedRegions::new(text).in_script(offset)
 }
 
+/// The words where TypeScript resolves no symbol and tsgo answers with the
+/// enclosing declaration, measured by asking both at each reserved word rather
+/// than assumed: every other reserved word either resolves in both or neither.
+const RESERVED_WORDS: &[&str] = &["const", "enum", "let", "var"];
+
+fn position_is_on_reserved_word(text: &str, position: &serde_json::Value) -> bool {
+    let Ok(position) = serde_json::from_value::<Position>(position.clone()) else {
+        return false;
+    };
+    let offset = LineIndex::new(text).offset(text, position);
+    let bytes = text.as_bytes();
+    if offset > bytes.len() {
+        return false;
+    }
+    let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
+    let mut start = offset.min(bytes.len().saturating_sub(1));
+    if !bytes.get(start).is_some_and(|byte| word(*byte)) {
+        return false;
+    }
+    while start > 0 && word(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = start;
+    while end < bytes.len() && word(bytes[end]) {
+        end += 1;
+    }
+    // A reserved word is a legal PROPERTY name, and a definition on one resolves.
+    if text[..start].trim_end().ends_with('.') {
+        return false;
+    }
+    RESERVED_WORDS.contains(&&text[start..end])
+}
+
 /// `CompletionProvider.ts:828-830`: with `checkCommitCharacters` off every item
 /// answers `undefined`, so the field is absent rather than empty.
 fn strip_commit_characters(result: &mut serde_json::Value) {
@@ -4687,5 +4735,59 @@ mod merge_tsgo_result_tests {
         assert!(merged_is_incomplete(true, false));
         assert!(merged_is_incomplete(false, true));
         assert!(merged_is_incomplete(true, true));
+    }
+}
+
+#[cfg(test)]
+mod reserved_word_tests {
+    use super::position_is_on_reserved_word;
+    use serde_json::json;
+
+    fn at(text: &str, line: u32, character: u32) -> bool {
+        position_is_on_reserved_word(text, &json!({ "line": line, "character": character }))
+    }
+
+    #[test]
+    fn a_declaration_keyword_is_filtered_and_an_identifier_is_not() {
+        let text = "<script lang=\"ts\">\n\tconst animate = 1;\n</script>\n";
+        assert!(at(text, 1, 1));
+        assert!(at(text, 1, 5));
+        assert!(!at(text, 1, 6));
+        assert!(!at(text, 1, 8));
+        assert!(!at(text, 1, 14));
+    }
+
+    // A keyword is a legal property name, where a definition resolves.
+    #[test]
+    fn a_keyword_after_a_dot_is_kept() {
+        assert!(!at("a.const\n", 0, 3));
+        assert!(!at("a . const\n", 0, 5));
+        assert!(at("const x = 1\n", 0, 1));
+    }
+
+    // Measured, not assumed: TypeScript DOES resolve a symbol at these, so
+    // filtering them would delete an answer the official server gives.
+    #[test]
+    fn a_keyword_typescript_resolves_is_not_filtered() {
+        for (text, character) in [
+            ("class C {}\n", 1),
+            ("function f() {}\n", 1),
+            ("const a = b instanceof C;\n", 13),
+            ("const a = \"m\" in b;\n", 15),
+            ("class D { m() { return this; } }\n", 24),
+            ("async function f() { await p; }\n", 22),
+        ] {
+            assert!(!at(text, 0, character), "{text} at {character}");
+        }
+        // `class` also names the HTML attribute, where official answers.
+        assert!(!at("<div class=\"a\"></div>\n", 0, 6));
+    }
+
+    // Contextual keywords ARE identifiers, so the list must not hold them.
+    #[test]
+    fn a_contextual_keyword_is_not_filtered() {
+        assert!(!at("type A = 1;\n", 0, 1));
+        assert!(!at("x as B;\n", 0, 3));
+        assert!(!at("interface I {}\n", 0, 2));
     }
 }
