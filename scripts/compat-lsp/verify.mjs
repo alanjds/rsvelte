@@ -24,6 +24,7 @@ import {
 import { createCurrentArtifact, recordsFixtureControls } from "./artifacts.mjs";
 import { EDIT_PHASES, OPEN_PHASE, editChanges } from "./edits.mjs";
 import { diffJson } from "./diff.mjs";
+import { MECHANISMS, classifyDivergence } from "./mechanism.mjs";
 import {
   aggregateCorpusDifferences,
   assertNonemptySuites,
@@ -54,6 +55,38 @@ if (UPDATE)
     "direct --update-baseline is disabled; merge the complete fixture and eight corpus artifacts with merge-current.mjs --update-baseline",
   );
 const SHOW = Number(argValue("--show") ?? 30);
+// One label per divergence, so the histogram sums to the divergent-field count
+// and a classifier that stops discriminating shows up as `unclassified` growth.
+const mechanismCounts = new Map();
+let corpusDivergentFields = 0;
+function countMechanism(method, mechanism) {
+  const key = `${method}|${mechanism}`;
+  mechanismCounts.set(key, (mechanismCounts.get(key) ?? 0) + 1);
+}
+function reportMechanisms() {
+  const total = [...mechanismCounts.values()].reduce((a, b) => a + b, 0);
+  if (total === 0) return;
+  // The labels must PARTITION the divergences: a classifier that drops or
+  // double-counts one reads as a mechanism that shrank.
+  if (total !== corpusDivergentFields) {
+    throw new Error(
+      `mechanism labels do not partition the corpus divergences: ${total} labelled, ${corpusDivergentFields} measured`,
+    );
+  }
+  const unclassified = [...mechanismCounts]
+    .filter(([key]) => key.endsWith("|unclassified"))
+    .reduce((a, [, value]) => a + value, 0);
+  console.log(
+    `[lsp-verify] corpus divergence mechanisms: ${total} labelled, ${unclassified} unclassified (${((100 * unclassified) / total).toFixed(1)}%), vocabulary ${MECHANISMS.length}`,
+  );
+  for (const [key, value] of [...mechanismCounts].sort(
+    (left, right) => right[1] - left[1],
+  )) {
+    console.log(
+      `[lsp-verify]   ${String(value).padStart(7)}  ${((100 * value) / total).toFixed(1).padStart(5)}%  ${key}`,
+    );
+  }
+}
 const CONCURRENCY = Number(
   argValue("--concurrency") ?? process.env.LSP_CONCURRENCY ?? 32,
 );
@@ -380,8 +413,22 @@ function record(
     counts.divergent++;
     counts.divergentFields += differences.length;
     if (entry.suite === "corpus") {
+      const mechanisms = new Set();
+      corpusDivergentFields += differences.length;
+      for (const difference of differences) {
+        const mechanism = classifyDivergence(
+          request.method,
+          left,
+          right,
+          difference,
+        );
+        countMechanism(request.method, mechanism);
+        mechanisms.add(mechanism);
+      }
       corpusObservations.push(
-        compactCorpusObservation(request.method, request.suffix, differences),
+        compactCorpusObservation(request.method, request.suffix, differences, [
+          ...mechanisms,
+        ].sort()),
       );
     } else {
       const requestKey = keyFor(kind, entry, request, phase);
@@ -948,6 +995,8 @@ async function main() {
   console.log(
     `[lsp-verify] ${cases.length} cases; ${counts.compared}/${counts.total} compared, ${counts.divergent} divergent requests / ${counts.divergentFields} divergent fields, ${counts.skipped} skipped`,
   );
+
+  reportMechanisms();
 
   // Before the artifact, not after: a run measured against a degraded oracle
   // must leave nothing that `merge-current.mjs` could accept.

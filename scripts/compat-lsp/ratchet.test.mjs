@@ -106,9 +106,35 @@ test("a corpus file+method that stops diverging leaves the ratchet", () => {
     aggregateCorpusDifferences("corpus/repo/a.svelte", [
       { method: "textDocument/hover", position: "1:1", differences: ["/a"] },
     ]),
-    ["aggregate:corpus/repo/a.svelte|textDocument/hover"],
+    ["aggregate:corpus/repo/a.svelte|textDocument/hover|mech=unclassified"],
   );
   assert.deepEqual(aggregateCorpusDifferences("corpus/repo/a.svelte", []), []);
+});
+
+test("one mechanism leaving a file does not suppress its siblings", () => {
+  const before = aggregateCorpusDifferences("corpus/repo/a.svelte", [
+    {
+      method: "textDocument/hover",
+      position: "1:1",
+      differences: ["/a"],
+      mechanisms: ["css-data", "ts-render"],
+    },
+  ]);
+  assert.deepEqual(before, [
+    "aggregate:corpus/repo/a.svelte|textDocument/hover|mech=css-data",
+    "aggregate:corpus/repo/a.svelte|textDocument/hover|mech=ts-render",
+  ]);
+  const after = aggregateCorpusDifferences("corpus/repo/a.svelte", [
+    {
+      method: "textDocument/hover",
+      position: "9:9",
+      differences: ["/b", "/c"],
+      mechanisms: ["ts-render"],
+    },
+  ]);
+  assert.deepEqual(after, [
+    "aggregate:corpus/repo/a.svelte|textDocument/hover|mech=ts-render",
+  ]);
 });
 
 test("a selected suite with zero cases is rejected", () => {
