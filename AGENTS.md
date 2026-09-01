@@ -1086,6 +1086,12 @@ between them fake. Build as `cd <worktree> && CARGO_TARGET_DIR=<worktree>/target
 cargo …`: the `cd` protects your sources, the env var protects everyone else's
 `target/`, and neither protects the other.
 
+Prefix **every** Bash invocation with `cd <worktree> &&`, including the ones that only read.
+The tool result's `Shell cwd was reset to …` line is the observation; "I ran `cd` earlier in
+this session" is an assumption, and the two disagree silently. The prefix does not prevent the
+reset — it only makes each call independent of the previous call's cwd. What it cannot fake is
+the build's own `Compiling <crate> (<path>)` line, so read that before trusting any arm.
+
 The last row is the expensive one, because its symptom is a plausible result.
 A `before -> after` sweep reported 4 output changes "toward official", two of
 them to byte-equality — in the right direction, at the right size, and
