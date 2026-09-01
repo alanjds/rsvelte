@@ -173,6 +173,42 @@ if (rLabels.length) {
 	for (const [label, n] of rLabels) console.log(`  ${String(n).padStart(7)}  ${label}`);
 }
 
+// P3 is complete when every entry is attributed, and an attribution is a
+// FILE, not a label: one defect wearing three labels is one row someone has to
+// write and one report someone has to read. Counting labels therefore
+// overstates the remaining work by exactly the labels-per-ID factor, so the
+// progress metric is the ID count and the factor is printed beside it.
+const byTarget = new Map();
+for (const [label, n] of rows) {
+	const id = TARGETS[label]?.[1];
+	if (!id) continue;
+	const seen = byTarget.get(id) ?? { labels: [], entries: 0 };
+	seen.labels.push(label);
+	seen.entries += n;
+	byTarget.set(id, seen);
+}
+for (const label of staleSigned) {
+	const id = TARGETS[label][1];
+	if (!id) continue;
+	const seen = byTarget.get(id) ?? { labels: [], entries: 0 };
+	seen.labels.push(label);
+	byTarget.set(id, seen);
+}
+const ids = [...byTarget].sort((left, right) => right[1].entries - left[1].entries);
+const signedLabels = ids.reduce((sum, [, seen]) => sum + seen.labels.length, 0);
+if (ids.length) {
+	console.log(`\n${ids.length} attribution ID(s) cover ${signedLabels} label(s):\n`);
+	console.log('| labels | entries | attribution |');
+	console.log('|---|---|---|');
+	for (const [id, seen] of ids)
+		console.log(`| ${seen.labels.length} | ${seen.entries} | \`${id}\` |`);
+	// All N entries of an N-label defect must carry the SAME attribution, so a
+	// multi-label ID is the shape to check by hand: the labels below are one
+	// report, and a reader who lands on any of them must reach that report.
+	for (const [id, seen] of ids)
+		if (seen.labels.length > 1) console.log(`\n\`${id}\` <- ${seen.labels.join(', ')}`);
+}
+
 // `n` bounds nothing in either direction. One label spans several mechanisms
 // until it is split, and one mechanism spans several labels: at
 // `hr.svelte:2:39` the item `elements` has `kind`, `sortText` and `filterText`
