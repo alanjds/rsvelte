@@ -1094,6 +1094,24 @@ position: an LSP label's five representatives turned out to sit at `0:2`, `0:9`,
 and the first import line — so "not-MANY at n=5" was really n=1 with the file
 varied. Report the sample's real denominator (`n=5, sites=1`), not its nominal one.
 
+**And a shortcut licensed by n agreeing cases can be a proxy for the measurement rather
+than the measurement.** Three completion fields — `detail`, `textEdit`, `filterText` — were
+each settled as rsvelte over-emissions by grepping official's language server for a reachable
+setter and finding none. Three agreements suggested reading the answer off the list-builder
+instead: it returns a fixed ten keys, so anything outside them is an over-emission. The wire
+response carries `additionalTextEdits`, which is not one of the ten —
+`CompletionProvider.ts:899` adds it after the literal is built and `:1016` adds more during
+resolve. The proxy failed in the one direction the three cases could not show, because in all
+three the base literal and the reachable-setter set happened to agree. **A shortcut that
+agrees with the measurement on every case that suggested it is not thereby validated**: ask
+which case would separate the two, and remember that a field assigned after an object literal
+is constructed is invisible to the literal.
+**The count of agreeing cases is the wrong question and the axis they were drawn from is the
+right one**: `detail`, `textEdit` and `filterText` are three fields the list path never
+assigns *at all*, so a fourth of that kind would have agreed too and added nothing. A case
+separates a proxy from its measurand only when it is drawn from where the two are free to
+differ — here, a field assigned somewhere other than the literal.
+
 ### The ORDER of an upstream guard can be the semantics, and only the oracle can say so
 
 A port is checked against "does it have all the same conditions". It is not checked against
