@@ -115,16 +115,17 @@ deletion, and is deliberately left to its own change rather than folded into the
 | `svelte2tsx-shorthand-style-directive-modifier.md` | sveltejs/language-tools (svelte2tsx) | #3567, #3578 | unrecorded |
 | `svelte2tsx-transposes-an-unclosed-start-tag.md` | sveltejs/language-tools (svelte2tsx) | — | unrecorded |
 | `svelte-language-server-rune-definition-lands-inside-the-jsdoc.md` | sveltejs/language-tools (svelte-language-server) | — | unrecorded |
+| `svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md` | sveltejs/language-tools (svelte-language-server) | — | unrecorded |
 | `tsgo-lsp-completion-item-omits-the-typescript-kind.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 | `tsgo-lsp-completion-omits-the-commit-character-inputs.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 | `tsgo-lsp-hover-renders-four-things-differently-from-tsc.md` | microsoft/typescript-go (`tsgo --lsp`) | — | unrecorded |
 
-**25** reports carry no rsvelte issue number. Six came out of the lint-parity campaign (five
+**26** reports carry no rsvelte issue number. Six came out of the lint-parity campaign (five
 against `eslint-plugin-svelte`, one against `svelte-eslint-parser`), two out of the
 `two-ports-inventory.md` row 21 shadow probes, seven out of the SCSS-backend burndown — five
 covering every unit `scss-known-failures.json` lists as `grass-rejects-accepted`, plus the two
 classes in that ratchet whose output is not render-neutral (a hoisted declaration, and a slash list
-divided inside a nested rule) — and five out of the LSP differential campaign. The remaining five
+divided inside a nested rule) — and six out of the LSP differential campaign. The remaining five
 are later: two `oxfmt` CSS reports from the formatter-parity corpus, one against `esrap`, one
 against `language-tools`, and one against `prettier-plugin-svelte` from the formatter-parity
 burndown (an inline element in a text run overflows `printWidth`, and re-formatting the output is

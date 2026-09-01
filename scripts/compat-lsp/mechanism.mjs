@@ -143,6 +143,15 @@ const isSvelteShadow = (uri) => /\.svelte\.ts$/.test(uri);
 
 // rsvelte's CSS hover is a name-only stub; official serves the MDN description.
 const RSVELTE_CSS_STUB = /^`[^`]+` CSS property$|^`:global\(\.\.\.\)` prevents/;
+// A hover body whatever its shape: TypeScript sends a bare string here and
+// `plaintextOf` answers only for the language-data payloads.
+const markupTextOf = (contents) =>
+  typeof contents === "string"
+    ? contents
+    : contents && !Array.isArray(contents) && typeof contents.value === "string"
+      ? contents.value
+      : null;
+
 const plaintextOf = (contents) =>
   contents && typeof contents === "object" && !Array.isArray(contents) &&
   contents.kind === "plaintext"
@@ -232,6 +241,12 @@ function classifyHover(official, rsvelte) {
     const kind = hoverDataKind(official);
     if (kind === "css") return "css-data";
     if (kind === "html") return "html-data";
+    // The subject's NAME, not any `$$` in the text: a real symbol's type often
+    // mentions `$$ComponentProps` while the hover is about the user's own
+    // declaration, and only the former is official answering about the shadow.
+    const subject = markupTextOf(official.contents);
+    if (subject !== null && declarationHead(subject).name.startsWith("$$"))
+      return "official-defect-svelte-ts-shadow";
     return "rsvelte-empty";
   }
   if (isEmptyResult(official) || isEmptyResult(rsvelte)) return "unclassified";

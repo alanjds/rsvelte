@@ -332,6 +332,23 @@ test("completion item set: the same MDN-less item is css in a style block and ht
   );
 });
 
+test("hover: an empty rsvelte answer splits on whether official hovered the shadow", () => {
+  const ts = (text) => ({ contents: "```typescript\n" + text + "\n```" });
+  // official hovers svelte2tsx's own synthesized function, which exists in no
+  // editor the user has open.
+  assert.equal(
+    classify("textDocument/hover", ts("function $$render(): { props: $$ComponentProps; }"), null),
+    "official-defect-svelte-ts-shadow",
+  );
+  // The same `$$` appears in a real symbol's TYPE, and that hover is about the
+  // user's own declaration -- a text-wide `$$` test would take both.
+  assert.equal(
+    classify("textDocument/hover", ts('(alias) const Example: Component<$$ComponentProps, {}, "">'), null),
+    "rsvelte-empty",
+  );
+  assert.equal(classify("textDocument/hover", ts("import RadioGroup"), null), "rsvelte-empty");
+});
+
 test("completion: a label on both sides with a differing pairing-key field is its own mechanism", () => {
   const pointer = "/items:missing-rsvelte-element[count=1,hash=x]";
   // `diff.mjs` never pairs these two, so the arrays differ while the label sets

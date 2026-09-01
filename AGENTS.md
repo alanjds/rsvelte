@@ -978,6 +978,7 @@ on one day, by three different people, each already knowing the rule:
 | `cargo test 2>&1 \| tail -25` | `[exited with code 0]` for a run that **failed to compile** (`no field 'errors'`; it is `diagnostics`) | the compile error scrolled past the window, and `$?` came from `tail` |
 | `cargo clippy 2>&1 \| tail -40` | dependency crates and `Finished` — the target crate's own line was outside the window | a clippy run that is clean and one that never reached your file print the *same nothing* |
 | `pgrep -c … \|\| echo 0` | `0` | the `\|\|` arm fabricated a datum that reads exactly like a measurement |
+| `ls dir_a; ls dir_b` | a script in `scripts/ci/` invoked as `scripts/dev/…`, which then "failed" | two listings printed into one stream are one listing with no boundary, and a name read out of it carries no directory |
 
 Rules, in the order they are cheap:
 

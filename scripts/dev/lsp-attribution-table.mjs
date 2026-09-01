@@ -20,6 +20,7 @@ const TARGETS = {
 	'ts-render-local-modifier': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
 	'ts-render-jsdoc-tag': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
 	'ts-lib-copy': ['D', 'deliberate-divergences'],
+	'official-defect-svelte-ts-shadow': ['U', 'upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md'],
 	// Only the SINGLE-field, SINGLE-provider cell is attributable: the field set
 	// and the provider are both unions over one response, so `kind+sort-text` and
 	// `-mixed` each still hold two mechanisms.
@@ -42,6 +43,7 @@ const CLUSTERS = {
 	'ts-render-local-modifier': 'tsc marks a nested function `(local function)`; tsgo does not',
 	'ts-render-jsdoc-tag': 'tsc returns JSDoc tags separately; tsgo inlines them into the hover body',
 	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
+	'official-defect-svelte-ts-shadow': 'official answers about svelte2tsx’s generated `$$render` / `*.svelte.ts` shadow, which exists in no document the user has open',
 	'completion-item-pairing-key-kind-ts': 'tsgo omits the TypeScript kind, so a `const` completes as `Variable` where tsc says `Constant`',
 	'completion-item-set-missing-html-close-tag': 'rsvelte has no `collectCloseTagSuggestions` path at all',
 	'target-component-vs-import': 'a component import resolves to the import specifier, not the component',

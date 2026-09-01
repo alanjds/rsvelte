@@ -4528,6 +4528,33 @@ control (official must resolve into the `typescript` package) caught both fixtur
 probe position that landed inside `local` instead of `toUpperCase`, and macOS's `/var` symlink
 making the control compare an echoed URI against a resolved one.
 
+**`rsvelte-empty` on hover held an official defect, and splitting it out took a correction of its
+own.** Two of 23 sampled cases were official hovering svelte2tsx's synthesized `$$render`, which is
+the same cause the definition arm already calls `official-defect-svelte-ts-shadow`; the split feeds
+that existing label rather than a new one. The first version tested for `$$` anywhere in the hover
+text, which also matches `(alias) const Example: Component<$$ComponentProps, {}, "">` — a hover
+about the user's OWN declaration whose type merely mentions a generated name. The subject is the
+declaration head's NAME, and both cases are pinned. A second defect in the same edit: the
+extraction used `plaintextOf`, which answers only for `{kind:"plaintext"}` language-data payloads,
+so every TypeScript hover (a bare string) fell through and the split did nothing at all — a green
+run cannot show that, and only the second test case did.
+
+Minimally: a three-line component, `textDocument/hover` at line 0 character 15, inside `lang="ts"`.
+Official returns `function $$render(): { props: $$ComponentProps; exports: {}; bindings: "";
+slots: {}; events: {}; }` over a **zero-width** range at 0:1, so an editor shows a tooltip and
+highlights nothing; rsvelte returns `null`. In the same file and session, hovering `style` in the
+script body is byte-identical on both. `upstream_issues/svelte-language-server-hovers-svelte2tsx-synthesized-render-function.md`
+carries it, and the label is signed to that report.
+
+**What is left of `rsvelte-empty` is NOT yet one mechanism, and the sieve says otherwise.** It
+scores `not-MANY(n=23, files=23, pos=20)` — but hover's difference pointer has four values across
+every hover label, so that verdict is a property of the key. Two hand-built shapes already
+separate: hovering a component ELEMENT in the template (`<Child />`) has official answering
+`(alias) const Child: Component<…>` and rsvelte `null`, while hovering the import SPECIFIER that
+declares it has rsvelte answering `(alias) const Child: any` — not empty at all, and so not even in
+this label. The label stays unsigned. Two probe shapes disagreeing is weak evidence for two
+mechanisms and conclusive evidence that `n=23` over a four-valued key was not measuring it.
+
 **The field a divergence sits on is not always the axis that separates its terminals, and
 `completion-item-pairing-key-kind` is where that cost showed.** At
 `radio-group-demo-disabled.svelte:1:2` (2,281 official items, 2,349 rsvelte, 1,559 labels on both
