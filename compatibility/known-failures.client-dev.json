@@ -22,7 +22,6 @@
 	"musicat/src/lib/views/InternetArchiveView.svelte",
 	"networking-toolbox/src/lib/components/home/SiteMapList.svelte",
 	"photon/src/lib/app/auth/profile.svelte.ts",
-	"photon/src/lib/feature/post/form/postform.svelte.ts",
 	"photon/src/lib/ui/navbar/Profile.svelte",
 	"photon/src/lib/ui/navbar/commands/actions.svelte.ts",
 	"primo/src/lib/builder/ui/Button.svelte",

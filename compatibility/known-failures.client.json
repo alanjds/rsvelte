@@ -15,7 +15,6 @@
 	"mathesar/mathesar_ui/src/systems/databases/upgrade-database/UpgradeDatabaseModal.svelte",
 	"musicat/src/lib/settings/SettingsPopup.svelte",
 	"networking-toolbox/src/lib/components/home/SiteMapList.svelte",
-	"photon/src/lib/feature/post/form/postform.svelte.ts",
 	"photon/src/lib/ui/navbar/Profile.svelte",
 	"primo/src/lib/builder/ui/Button.svelte",
 	"svelte-bits/src/lib/components/library/TextAnimations/RotatingText/RotatingText.svelte",
