@@ -47,7 +47,7 @@ export const MECHANISMS = [
   "official-empty",
   // rsvelte's `.svelte` <-> `.tsx` position projection.
   "projection-origin-range",
-  "projection-target-position",
+  ...["declaration", "workspace"].map((where) => `projection-target-position-${where}`),
   "projection-response-range",
   // official resolves an imported component to its file; rsvelte stops at the
   // import specifier in the requesting document.
@@ -76,17 +76,26 @@ export const MECHANISMS = [
   "completion-commit-characters-value-other",
   "completion-commit-characters-presence-rsvelte-only",
   "completion-commit-characters-presence-official-only",
-  "completion-command",
+  ...[
+    "presence-rsvelte-only",
+    "presence-official-only",
+    "value",
+  ].map((suffix) => `completion-command-${suffix}`),
   // Two labels each hid two mechanisms: a field one side never writes, and a
   // value both sides write and compute differently. The sub-key is read off
   // the difference pointer, so it names what diverged and not who is right.
   ...[
     "presence-rsvelte-only",
     "presence-official-only",
-    "range",
+    "range-start",
+    "range-end",
+    "range-other",
     "new-text",
     "other",
   ].map((suffix) => `completion-text-edit-${suffix}`),
+  ...["presence-rsvelte-only", "presence-official-only", "other"].map(
+    (suffix) => `completion-additional-text-edits-${suffix}`,
+  ),
   ...[
     "source-rsvelte-only",
     "source-official-only",
@@ -96,7 +105,14 @@ export const MECHANISMS = [
     "other",
   ].map((suffix) => `completion-item-data-${suffix}`),
   "completion-is-incomplete",
-  "completion-item-detail",
+  // `detail`, `documentation` and `labelDetails` are three fields with three
+  // producers; one label reported an extra `detail` and an absent
+  // `documentation` as the same thing.
+  ...["detail", "documentation", "label-details"].flatMap((field) =>
+    ["presence-rsvelte-only", "presence-official-only", "value"].map(
+      (suffix) => `completion-item-${field}-${suffix}`,
+    ),
+  ),
   "unclassified",
 ];
 
@@ -260,7 +276,10 @@ function classifyDefinition(official, rsvelte, difference) {
   if (all.every((key) => isLibFile(uriOf(key)))) return "ts-lib-copy";
   if (onlyLeft.some((key) => isSvelteShadow(uriOf(key))))
     return "official-defect-svelte-ts-shadow";
-  if (new Set(all.map(uriOf)).size === 1) return "projection-target-position";
+  if (new Set(all.map(uriOf)).size === 1)
+    return /\.d\.ts$/.test(uriOf(all[0]))
+      ? "projection-target-position-declaration"
+      : "projection-target-position-workspace";
   const isComponent = (uri) => /\.svelte$/.test(uri);
   if (onlyLeft.every((key) => isComponent(uriOf(key))) &&
       onlyRight.every((key) => isComponent(uriOf(key))))
@@ -313,11 +332,11 @@ const COMPLETION_POINTERS = [
     (difference) => `completion-commit-characters-presence${directionSuffix(difference)}`,
   ],
   [/\/commitCharacters(:|$)/, commitCharacterValueLabel],
-  [/\/command(:|$)/, "completion-command"],
+  [/\/command(:|$)/, completionCommandLabel],
   [/\/(textEdit|additionalTextEdits)(\/|:|$)/, completionTextEditLabel],
   [/\/data(\/|:|$)/, completionItemDataLabel],
   [/^\/isIncomplete:/, "completion-is-incomplete"],
-  [/\/(detail|documentation|labelDetails)(\/|:|$)/, "completion-item-detail"],
+  [/\/(detail|documentation|labelDetails)(\/|:|$)/, completionItemDetailLabel],
 ];
 
 // Which provider produced a completion item, read off the item itself: the TS
@@ -442,12 +461,39 @@ function directionSuffix(difference) {
   return "-rsvelte-only";
 }
 
+function completionCommandLabel(difference) {
+  return /\/command:(extra|missing)-rsvelte-field/.test(difference)
+    ? `completion-command-presence${directionSuffix(difference)}`
+    : "completion-command-value";
+}
+
+function completionItemDetailLabel(difference) {
+  const match = /\/(detail|documentation|labelDetails)(:(extra|missing)-rsvelte-field)?/.exec(
+    difference,
+  );
+  const field = match[1] === "labelDetails" ? "label-details" : match[1];
+  return match[2]
+    ? `completion-item-${field}-presence${directionSuffix(difference)}`
+    : `completion-item-${field}-value`;
+}
+
+// `textEdit` and `additionalTextEdits` are separate fields with separate
+// producers, and a range's two endpoints move independently -- a shift and a
+// length change are one key only while both endpoints share a label.
 function completionTextEditLabel(difference) {
+  const additional = /\/additionalTextEdits(\/|:|$)/.test(difference);
   if (/\/(textEdit|additionalTextEdits):(extra|missing)-rsvelte-field/.test(difference))
-    return `completion-text-edit-presence${directionSuffix(difference)}`;
+    return additional
+      ? `completion-additional-text-edits-presence${directionSuffix(difference)}`
+      : `completion-text-edit-presence${directionSuffix(difference)}`;
+  if (additional) return "completion-additional-text-edits-other";
   if (/\/newText(:|$)/.test(difference)) return "completion-text-edit-new-text";
+  if (/\/(range|insert|replace)\/start(\/|:|$)/.test(difference))
+    return "completion-text-edit-range-start";
+  if (/\/(range|insert|replace)\/end(\/|:|$)/.test(difference))
+    return "completion-text-edit-range-end";
   if (/\/(range|insert|replace)(\/|:|$)/.test(difference))
-    return "completion-text-edit-range";
+    return "completion-text-edit-range-other";
   return "completion-text-edit-other";
 }
 

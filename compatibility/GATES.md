@@ -7774,6 +7774,43 @@ they are rsvelte-side defects and are not covered here.
 Remove this entry when `tsgo --lsp` carries the TypeScript kind — the pinned test fails at that
 point, and both halves become ordinary parity work.
 
+---
+
+### A `lib.d.ts` definition lands in the copy that answered it
+
+**Pinned by** `scripts/compat-lsp/test-ts-lib-copy.mjs`, run by `ci.yml`'s `Language server`
+job.
+**Ratchet** `compatibility/lsp-known-failures.json`, mechanism label `ts-lib-copy`.
+
+Official's language server calls the `LanguageService` of the `typescript` package bundled with
+`svelte-language-server`; rsvelte proxies a child `tsgo --lsp`, which ships its own copy of the
+standard library. A `textDocument/definition` on `toUpperCase` therefore names the same
+declaration in two different files. On `const upper = String(local).toUpperCase();` in a
+`lang="ts"` instance script, both answer `lib.es5.d.ts` at line 505, characters 4-15:
+
+```
+official  .../node_modules/.pnpm/typescript%406.0.3/node_modules/typescript/lib/lib.es5.d.ts
+rsvelte    .../node_modules/.pnpm/%40typescript%2Bnative-preview-darwin-arm64%407.0.0-dev.../lib/lib.es5.d.ts
+```
+
+Matching official's path would mean pointing the user at a `lib.d.ts` that is not the one the
+type checker answering their questions actually read — the two copies can differ, and a
+"go to definition" that opens a file the checker is not using is worse than one that names a
+different path. The divergence is the package the file lives in and nothing else: the test
+asserts the same basename, deep-equal `targetRange` and `targetSelectionRange`, and it asserts
+a *non*-lib definition (`local`) lands on the same entity on both sides, so "every target is a
+different copy" cannot satisfy it.
+
+The test carries its own oracle control, because the run-level control that guards the rest of
+the LSP gate does not reach a standalone script: official is required to resolve into the
+`typescript` package, and a degraded official server fails the test instead of quietly turning
+"the two differ" into "the two agree" — which would pass a test whose entire subject is a
+difference. No platform triple is written down; `native-preview` is the only substring matched,
+because this machine is `darwin-arm64` and CI is `linux-x64`.
+
+Remove this entry if rsvelte stops proxying tsgo, or if tsgo begins resolving the standard
+library from the workspace's own `typescript` install.
+
 <a id="README"></a>
 
 ## Compatibility system

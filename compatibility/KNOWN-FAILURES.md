@@ -4477,6 +4477,80 @@ they are reported as `insufficient(pos=1)` rather than `not-MANY`, because a mea
 not happen must not share a column with one that did. The sampler now requires a distinct file
 **and** a distinct line.
 
+**Re-measuring the sieve against the vocabulary it was meant to check moved the answer from four
+aggregates to six, and none of the four was on the new list.** The samples the earlier verdict was
+drawn from predate the 61-label split, so the sieve was reporting `MANY` on labels that no longer
+exist (`completion-text-edit` had already become `-new-text` / `-presence` / `-commitCharacters`).
+Re-captured with the current classifier, the aggregates are `completion-command`,
+`completion-item-detail`, `completion-text-edit-presence-official-only`,
+`completion-text-edit-range`, `projection-target-position` and `projection-origin-range`. **A sieve
+verdict is a statement about the sample AND about the classifier that produced it, and only one of
+those two is usually re-checked.**
+
+Five are split, taking the vocabulary to 77: `command` gains the presence/value and direction
+split its `commitCharacters` neighbour already had; `detail`, `documentation` and `labelDetails`
+become three fields rather than one label that reported an extra `detail` and an absent
+`documentation` as the same thing; `additionalTextEdits` separates from `textEdit`; a range's
+`start` and `end` separate, because under one label a shift and a length change are one key; and a
+same-file position defect separates by whether that file is a `.d.ts` or a workspace file. The
+split is confirmed rather than assumed — a second capture with the new classifier over the same two
+shards takes the sieve from 6 `MANY` to 2, and **both arms of every split are populated**
+(`command` 21/5, `detail` 10/1, `text-edit-presence` 7/1, `range-end`/`range-start` 5/3,
+`projection-target-position` 19 workspace / 16 declaration), so none of them is a hypothetical
+direction.
+
+**The second capture also produced a `MANY` the first did not, on a label neither run changed, and
+that one is the sieve being wrong rather than the label.** `completion-item-pairing-key-kind` read
+`not-MANY(n=16)` on one capture and `MANY` on the next over the identical shard, split across
+`/items:extra-rsvelte-element` and `/items:missing-rsvelte-element`. Those two are one event:
+`diff.mjs` pushes `missingRsvelte` and `extraRsvelte` from a single comparison, so an item whose
+pairing-key field differs is unmatched on **both** sides and emits two pointers from one cause.
+The element direction therefore carries the mechanism everywhere except on the labels whose cause
+*is* the pairing, and the sieve now normalizes it there and nowhere else. Two things to keep from
+it: a `not-MANY` is a property of the sample that was drawn, not of the label — the same shard
+produced both verdicts with no code between them — and **a key that over-reports is not the safe
+direction it looks like**, because the remedy it invites is splitting one mechanism into two
+labels, which no later measurement will undo.
+
+`projection-origin-range` is the one remaining `MANY` and stays unsigned. It reads as an aggregate
+on both axes at once (`start` vs `end`, and a `.d.ts` vs a workspace target), which is consistent
+with the earlier per-request endpoint distribution that already falsified reading it as one range;
+it is held unsplit deliberately, and an unsigned aggregate is the honest state for it rather than a
+terminal assigned to a label that has not been shown to be one thing.
+
+`ts-lib-copy` is signed **D**: official's `LanguageService` comes from the `typescript` package
+bundled with `svelte-language-server` and rsvelte proxies a `tsgo --lsp` that ships its own
+standard library, so a definition on `toUpperCase` names `lib.es5.d.ts` at line 505, characters
+4-15 on both sides and differs only in which package's copy answered. The entry is in
+`GATES.md#deliberate-divergences` and the pin is `scripts/compat-lsp/test-ts-lib-copy.mjs`, wired
+into `ci.yml`'s `Language server` job — **a test that does not run is not a pin**. Its own oracle
+control (official must resolve into the `typescript` package) caught both fixture bugs it had: a
+probe position that landed inside `local` instead of `toUpperCase`, and macOS's `/var` symlink
+making the control compare an echoed URI against a resolved one.
+
+**The number of entries a label can remove is measurable, and for 47 of 48 labels it is zero.**
+`verify.mjs --write-current` already emits the `mech=` keys, so no instrument is needed: group the
+emitted keys of a run by `(file, method, phase)` and count how many units carry one label alone.
+Over shard 3/64 of `bits-ui` and `shadcn-svelte` — 1,470 keys, 216 units, 0 keys without a
+`mech=` segment — **24 of 216 units (11.1%) carry exactly one label, and all 24 of them are
+`rsvelte-empty`**. Every other label has `alone = 0`, including
+`completion-commit-characters-value-extra-paren` at 54 entries and `ts-lib-copy` at 30: fixing any
+one of them to zero divergent fields removes **zero** ratchet entries, because the ratchet's unit is
+a `(file, method, phase)` cell and a cell survives until its *last* mechanism is gone.
+
+The distribution is why. A completion unit carries a **median of 14** distinct labels (max 25);
+definition 4 (max 6); hover 2 (max 8). So the entry count is not a burndown curve for this work at
+all — it is a curve of how many cells have had every one of their mechanisms cleared, which for
+completion means fourteen unrelated fixes before the first entry moves.
+
+Three things follow, and the third is the one that costs time if it is missed. **A field share and
+an entry share are different units and neither is a defect count** — "14 labels cover 95.6% of
+divergent fields" and "those 14 labels can remove 0 entries" are both true here. **A re-baseline
+after a genuine fix will show no shrink**, which reads exactly like a fix that did not work; the
+control is to diff the two arms' outputs directly rather than to read the ratchet. And **the P3
+completion condition has to be stated per label, not per entry**, because no per-label action can
+move the per-entry number until a cell is nearly clear.
+
 Every unit is compared twice. The harness sends `didOpen`, runs the request set, then applies a
 deterministic `didChange` script derived from the source and runs the **same** request set again.
 The script inserts an `import` at the end of the first `<script>`, a rule at the end of the first

@@ -91,7 +91,12 @@ test("definition: a shadow official alone answers about is its own class", () =>
 test("definition: same file is a position defect, another file is a target defect", () => {
   assert.equal(
     classify("textDocument/definition", [link("file:///ws/a.svelte", 71, 28)], [link("file:///ws/a.svelte", 71, 1)], ":extra-rsvelte"),
-    "projection-target-position",
+    "projection-target-position-workspace",
+  );
+  // A position inside a `.d.ts` is not the `.svelte` -> `.tsx` projection at all.
+  assert.equal(
+    classify("textDocument/definition", [link("file:///ws/a.d.ts", 71, 28)], [link("file:///ws/a.d.ts", 71, 1)], ":extra-rsvelte"),
+    "projection-target-position-declaration",
   );
   assert.equal(
     classify("textDocument/definition", [link("file:///ws/types.ts", 0, 12)], [link("file:///ws/a.svelte", 71, 1)], ":extra-rsvelte"),
@@ -132,9 +137,41 @@ test("completion: the field the pointer names decides the label", () => {
   );
   // A `textEdit` and a `data` each carry two mechanisms, and the sub-key is what
   // separates "a field rsvelte never writes" from "a value both sides compute".
+  // A range's two endpoints move independently: under one label a shift and a
+  // length change are the same key.
   assert.equal(
     classify("textDocument/completion", both, both, "/items/@x/textEdit/range/end/character:value-mismatch"),
-    "completion-text-edit-range",
+    "completion-text-edit-range-end",
+  );
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/textEdit/range/start/character:value-mismatch"),
+    "completion-text-edit-range-start",
+  );
+  // `additionalTextEdits` is a different field with a different producer.
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/additionalTextEdits:missing-rsvelte-field[hash=x]"),
+    "completion-additional-text-edits-presence-official-only",
+  );
+  // `detail` and `documentation` reached one label in both directions.
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/detail:extra-rsvelte-field[hash=x]"),
+    "completion-item-detail-presence-rsvelte-only",
+  );
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/documentation:missing-rsvelte-field[hash=x]"),
+    "completion-item-documentation-presence-official-only",
+  );
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/labelDetails/description:value-mismatch"),
+    "completion-item-label-details-value",
+  );
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/command:extra-rsvelte-field[hash=x]"),
+    "completion-command-presence-rsvelte-only",
+  );
+  assert.equal(
+    classify("textDocument/completion", both, both, "/items/@x/command:missing-rsvelte-field[hash=x]"),
+    "completion-command-presence-official-only",
   );
   assert.equal(
     classify("textDocument/completion", both, both, "/items/@x/textEdit/newText:value-mismatch"),

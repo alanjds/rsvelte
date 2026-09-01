@@ -19,6 +19,7 @@ const TARGETS = {
 	'ts-render-quote-style': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
 	'ts-render-local-modifier': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
 	'ts-render-jsdoc-tag': ['U', 'upstream_issues/tsgo-lsp-hover-renders-four-things-differently-from-tsc.md'],
+	'ts-lib-copy': ['D', 'deliberate-divergences'],
 	'completion-item-set-missing-html-close-tag': ['R', null],
 	'target-component-vs-import': ['R', null],
 	'completion-item-data-source-official-only': ['R', null],
@@ -36,6 +37,7 @@ const CLUSTERS = {
 	'ts-render-quote-style': 'tsgo echoes the source’s quote spelling in `import(…)`; tsc normalizes to `"`',
 	'ts-render-local-modifier': 'tsc marks a nested function `(local function)`; tsgo does not',
 	'ts-render-jsdoc-tag': 'tsc returns JSDoc tags separately; tsgo inlines them into the hover body',
+	'ts-lib-copy': 'each server names the `lib.d.ts` of the type checker that answered — pinned by `scripts/compat-lsp/test-ts-lib-copy.mjs`',
 	'completion-item-set-missing-html-close-tag': 'rsvelte has no `collectCloseTagSuggestions` path at all',
 	'target-component-vs-import': 'a component import resolves to the import specifier, not the component',
 	'completion-item-data-source-official-only': 'tsgo sends `data.source`; `adopt_upstream_item_data` rebuilds `data` without it',
@@ -48,12 +50,24 @@ const CLUSTERS = {
 	'completion-commit-characters-value-other': 'upstream passes TypeScript’s per-entry list through; tsgo sends no per-entry list',
 };
 
-const entries = JSON.parse(fs.readFileSync(RATCHET, 'utf8'));
-const list = Array.isArray(entries) ? entries : Object.values(entries).flat();
+// An optional path so the table can be produced from a `--write-current`
+// artifact: the committed ratchet is only re-keyed by a baseline run, and the
+// table's own arithmetic is otherwise never exercised.
+const entries = JSON.parse(fs.readFileSync(process.argv[2] ?? RATCHET, 'utf8'));
+const list = entries.current ?? (Array.isArray(entries) ? entries : Object.values(entries).flat());
 const counts = new Map();
 for (const key of list) {
 	const match = /\|mech=([^|]+)/.exec(key);
 	counts.set(match ? match[1] : '(no mech= segment)', (counts.get(match ? match[1] : '(no mech= segment)') ?? 0) + 1);
+}
+
+// The ratchet is re-keyed by a baseline run, not by this branch, so until the
+// next `lsp-corpus` dispatch every entry lands in one bucket and the table is
+// empty by construction rather than by a missing target.
+if (counts.size === 1 && counts.has('(no mech= segment)')) {
+	console.log(
+		`This ratchet predates the \`mech=\` re-keying: ${counts.get('(no mech= segment)')} entries carry no label, and the table below populates only after the next \`lsp-corpus\` baseline.\n`,
+	);
 }
 
 const rows = [...counts].sort((left, right) => right[1] - left[1]);
@@ -66,14 +80,32 @@ for (const [label, n] of rows) {
 	if (!target || !target[1]) continue;
 	console.log(`| ${n} | \`${target[1]}\` | ${CLUSTERS[label] ?? label} |`);
 }
+// The label is IN the ratchet key, so one entry carries exactly one label and
+// `n` partitions the file by construction -- no dominant-label rule is needed
+// and none may be added, because it would double-count or drop entries.
+const rLabels = rows.filter(([label]) => TARGETS[label]?.[0] === 'R');
+const total = (subset) => subset.reduce((sum, [, n]) => sum + n, 0);
+const attributed = total(rows.filter(([label]) => TARGETS[label]?.[1]));
+const owedTotal = total(owed);
+const rTotal = total(rLabels);
 console.log(`\n${list.length} entries total; ${rows.length} mechanism labels.`);
+console.log(
+	`${attributed} attributed + ${rTotal} awaiting zero + ${owedTotal} undecided = ${attributed + rTotal + owedTotal}`,
+);
+if (attributed + rTotal + owedTotal !== list.length)
+	console.log('WARNING: the three buckets do not partition the ratchet.');
 if (owed.length) {
 	console.log('\nLabels with no declared target (a decision is owed, not a row):');
 	for (const [label, n] of owed) console.log(`  ${String(n).padStart(7)}  ${label}`);
 }
-const rLabels = rows.filter(([label]) => TARGETS[label]?.[0] === 'R');
 if (rLabels.length) {
-	console.log('\nLabels whose only end state is zero (R):');
+	// `attribution-check.mjs` takes an `upstream_issues/` path or
+	// `deliberate-divergences` and nothing else, so an rsvelte defect is not a
+	// row: it is the first of P3's three options, and the attribution sum stays
+	// short by exactly this bucket until these labels reach zero.
+	console.log(
+		`\nLabels whose only end state is zero (${rTotal} entries; not attributable, so not rows):`,
+	);
 	for (const [label, n] of rLabels) console.log(`  ${String(n).padStart(7)}  ${label}`);
 }
 
