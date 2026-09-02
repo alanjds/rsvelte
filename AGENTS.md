@@ -1121,6 +1121,28 @@ assigns *at all*, so a fourth of that kind would have agreed too and added nothi
 separates a proxy from its measurand only when it is drawn from where the two are free to
 differ — here, a field assigned somewhere other than the literal.
 
+**A ratchet's NEW/stale counts have a shape, and reading only "it is red" loses it.** One LSP
+run carried three at once: `2116 NEW / 2116 stale` on the fixture job, `9176 / 1272` on a corpus
+shard, and `2 / 2` locally.
+
+| NEW vs stale | what it means |
+|---|---|
+| exactly 1:1, large | every key was respelled — a key-format change, not a behaviour change |
+| ratio broken | real movement, mixed with whatever else changed |
+| exactly 1:1, small | a **value** moved, because the key carries the measurement |
+
+The first and third have the same shape, which is the trap: the `2 / 2` was one entry going from
+`count=131` to `count=5` — a 26x improvement that the ratchet can only spell as one NEW plus one
+stale, because `count=` is *in* the key. **A predicted failure is more dangerous than an
+unpredicted one**: the prediction explains why a red exists and says nothing about how much of it
+there should be, so a second, unrelated cause hides inside "as expected". Check the arithmetic
+against the prediction before classifying the red.
+
+The same run also showed why the search that found the first cause cannot find the second.
+`grep 'mech='` finds a token being *added* to a key and is structurally blind to an existing
+token being *respelled* — and both were in the same PR. **Count the sites where the key is
+assembled** (there were two) instead of grepping for the mechanism's name.
+
 ### The ORDER of an upstream guard can be the semantics, and only the oracle can say so
 
 A port is checked against "does it have all the same conditions". It is not checked against
