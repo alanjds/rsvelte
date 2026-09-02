@@ -3332,17 +3332,30 @@ that became unparseable only with `dev: true`; #3877 corrected the component
 callback tail-comment insertion point, so both its parse and output entries have
 been retired.
 
-### Client dev (`known-failures.client-dev.json`, 22 entries)
+### Client dev (`known-failures.client-dev.json`, 21 entries)
 
-Partition of `known-failures.client-dev.json` by verdict: `22`
+Partition of `known-failures.client-dev.json` by verdict: `21`
 
-- **22 — the generated JS differs.**
+- **21 — the generated JS differs.**
 
 Unlike `client`, no CSS entry survives on this target.
 
-All remaining 22 arrived with the wave-2 enrolment (#3176); this target was at 0 before
-it, and it is the largest of the four — 11 JS entries that `client` does not
+All remaining 21 arrived with the wave-2 enrolment (#3176); this target was at 0 before
+it, and it is the largest of the four — 10 JS entries that `client` does not
 carry, which is the reason it is ratcheted separately.
+
+`svelte-lexical/…/notesStore.svelte.ts` left this target when `compileModule` stopped
+deciding `$.proxy` with a text sniff. Upstream's `should_proxy`
+(`3-transform/client/utils.js:133-163`) is a deny-list defaulting to `true`;
+`expression_needs_proxy` only proxied shapes it had a predicate for, so an unlisted one
+was stored unproxied and did not invalidate. The carrier here is `s = await b.init()`,
+which the dev instrumentation rewrites to `(await $.track_reactivity_loss(b.init()))()`
+before the decision runs — which is why this is a `client-dev` entry and `client` never
+held it. The predicate was replaced by `should_proxy_ast`, the port the component host
+already used, so the two stopped being two. Over 96 module cells the divergence went 17 to
+4; the remaining 4 are the other direction (a `const` resolved through `binding.initial`
+at an assignment site) and have a pinned test rather than a ratchet entry, because no
+corpus file carries them — measured 0 over 104/104 sources for every one of the shapes.
 
 `huly/…/SelectAvatarPopup.svelte` left it when a member assignment whose root resolves to
 no binding stopped being wrapped. Upstream's `build_assignment` opens with `if (!binding)
