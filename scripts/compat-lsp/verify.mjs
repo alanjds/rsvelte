@@ -443,11 +443,10 @@ function record(
     } else {
       const requestKey = keyFor(kind, entry, request, phase);
       for (const difference of differences) {
-        // The trailing `[count=..,hash=..]` is the measured CONTENT, so a
-        // partial fix reads as one STALE plus one NEW instead of as a shrink.
-        // Dropping it collides nothing: the key is already one request, one
-        // pointer, one verdict, and the verdict now names the kind.
-        const key = `${requestKey}|${difference.replace(/\[[^\]]*\]$/, "")}`;
+        // The classifier reads the `-element` / `-field` suffix and it must not
+        // reach the key: a respelling makes every committed entry stale at once,
+        // so it lands with its re-baseline rather than on its own.
+        const key = `${requestKey}|${difference.replace(/-rsvelte-(?:element|field)/, "-rsvelte")}`;
         current.push(key);
         // Keep the normalized diagnostic values for a newly observed fixture
         // key, so CI says which diagnostic appeared. Corpus responses are
