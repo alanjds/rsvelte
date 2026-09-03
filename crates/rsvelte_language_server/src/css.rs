@@ -1,12 +1,18 @@
 //! Native CSS assistance for Svelte style blocks and static style attributes.
 
 use lsp_types::{
-    Color, ColorInformation, ColorPresentation, CompletionItem, CompletionItemKind, CompletionList,
-    Diagnostic, DiagnosticSeverity, Documentation, MarkupContent, MarkupKind, NumberOrString,
-    Range,
+    Color, ColorInformation, ColorPresentation, CompletionItem, CompletionItemKind,
+    CompletionItemTag, CompletionList, CompletionTextEdit, Diagnostic, DiagnosticSeverity,
+    Documentation, InsertTextFormat, MarkupContent, MarkupKind, NumberOrString, Range, TextEdit,
 };
 
 use rsvelte_lint::rules::data::known_css_properties::KNOWN_CSS_PROPERTIES;
+
+use crate::css_data::documentation::documentation;
+use crate::css_data::svelte_css::SVELTE_PSEUDO_CLASSES;
+use crate::css_data::web::{
+    AT_DIRECTIVES, Entry, HTML5_TAGS, PSEUDO_CLASSES, PSEUDO_ELEMENTS, SVG_ELEMENTS,
+};
 
 use crate::text::LineIndex;
 
@@ -143,25 +149,10 @@ pub fn completions(text: &str, offset: usize) -> Option<CompletionList> {
     {
         return Some(selector_completions(text, *marker as char, prefix));
     }
-    if prefix_start
-        .checked_sub(1)
-        .and_then(|index| before.as_bytes().get(index))
-        == Some(&b':')
-        && "global".starts_with(prefix)
+    if let Some(body) = style_body_range(text, offset)
+        && brace_depth(&text[body.start..offset]) == 0
     {
-        return Some(CompletionList {
-            is_incomplete: false,
-            items: vec![CompletionItem {
-                label: ":global".to_string(),
-                insert_text: Some("global($0)".to_string()),
-                kind: Some(CompletionItemKind::FUNCTION),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: "`:global(...)` prevents Svelte CSS scoping for a selector.".to_string(),
-                })),
-                ..CompletionItem::default()
-            }],
-        });
+        return Some(selector_context_completions(text, body.start, offset));
     }
     let value = before
         .rfind(':')
@@ -192,6 +183,164 @@ pub fn hover(text: &str, offset: usize) -> Option<String> {
     KNOWN_CSS_PROPERTIES
         .contains(&property)
         .then(|| format!("`{property}` CSS property"))
+}
+
+/// Unbalanced `{` in `text`, so a cursor in a selector can be told from one in
+/// a declaration block.
+fn brace_depth(text: &str) -> usize {
+    text.bytes().fold(0usize, |depth, byte| match byte {
+        b'{' => depth + 1,
+        b'}' => depth.saturating_sub(1),
+        _ => depth,
+    })
+}
+
+/// Where the selector token under the cursor begins. Upstream generates no node
+/// for a bare `:`, so `getCompletionsForSelector` grows `currentWord` back over
+/// the colons and the replace range grows with it.
+fn selector_token_start(body: &str) -> usize {
+    let bytes = body.as_bytes();
+    let mut start = body.len();
+    while start > 0
+        && matches!(bytes[start - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_')
+    {
+        start -= 1;
+    }
+    while start > 0 && bytes[start - 1] == b':' {
+        start -= 1;
+    }
+    if start > 0 && bytes[start - 1] == b'@' {
+        start -= 1;
+    }
+    start
+}
+
+/// Whitespace and complete block comments only, which is what upstream's parser
+/// skips before deciding a statement may begin here.
+fn is_blank_css(text: &str) -> bool {
+    let mut rest = text.trim_start();
+    while let Some(after) = rest.strip_prefix("/*") {
+        rest = after
+            .find("*/")
+            .map_or("", |end| &after[end + 2..])
+            .trim_start();
+    }
+    rest.is_empty()
+}
+
+/// Upstream reaches its at-directive list only from `getCompletionForTopLevel`,
+/// which needs a parse tree; this is the lexical stand-in, and the residue it
+/// leaves is enumerated in `divergences_from_the_official_service_this_leaves`.
+fn offers_at_directives(body: &str, token_start: usize) -> bool {
+    let token = &body[token_start..];
+    if !token.is_empty() && !token.starts_with('@') {
+        return false;
+    }
+    let head = &body[..token_start];
+    is_blank_css(head.rfind('}').map_or(head, |at| &head[at + 1..]))
+}
+
+fn entry_tags(entry: &Entry) -> Vec<CompletionItemTag> {
+    if matches!(entry.status, Some("nonstandard" | "obsolete")) {
+        vec![CompletionItemTag::DEPRECATED]
+    } else {
+        Vec::new()
+    }
+}
+
+fn entry_documentation(entry: &Entry) -> Option<Documentation> {
+    documentation(&entry.into(), true).map(|value| {
+        Documentation::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value,
+        })
+    })
+}
+
+fn replace(range: Range, new_text: impl Into<String>) -> Option<CompletionTextEdit> {
+    Some(CompletionTextEdit::Edit(TextEdit {
+        range,
+        new_text: new_text.into(),
+    }))
+}
+
+fn at_directive_item(entry: &Entry, range: Range) -> CompletionItem {
+    CompletionItem {
+        label: entry.name.to_string(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        documentation: entry_documentation(entry),
+        tags: Some(entry_tags(entry)),
+        text_edit: replace(range, entry.name),
+        ..CompletionItem::default()
+    }
+}
+
+/// `vendor` is the prefix that sorts an entry last: `:-` for a pseudo-class and
+/// `::-` for a pseudo-element, so the two tables cannot share one test.
+fn pseudo_item(entry: &Entry, range: Range, vendor: &str) -> CompletionItem {
+    // `moveCursorInsideParenthesis`: a trailing `()` becomes a snippet stop.
+    let (new_text, insert_text_format) = match entry.name.strip_suffix("()") {
+        Some(head) => (format!("{head}($1)"), Some(InsertTextFormat::SNIPPET)),
+        None => (entry.name.to_string(), None),
+    };
+    CompletionItem {
+        label: entry.name.to_string(),
+        kind: Some(CompletionItemKind::FUNCTION),
+        documentation: entry_documentation(entry),
+        tags: Some(entry_tags(entry)),
+        text_edit: replace(range, new_text),
+        insert_text_format,
+        sort_text: entry.name.starts_with(vendor).then(|| "x".to_string()),
+        ..CompletionItem::default()
+    }
+}
+
+/// What the official service offers in a selector position: pseudo-classes,
+/// Svelte's `:global()`, pseudo-elements, every HTML and SVG element name, and —
+/// where a statement may begin — the at-directives.
+fn selector_context_completions(text: &str, body_start: usize, offset: usize) -> CompletionList {
+    let body = &text[body_start..offset];
+    let token_start = selector_token_start(body);
+    let index = LineIndex::new(text);
+    let range = Range::new(
+        index.position(text, body_start + token_start),
+        index.position(text, offset),
+    );
+
+    let mut items: Vec<CompletionItem> = Vec::new();
+    if offers_at_directives(body, token_start) {
+        items.extend(
+            AT_DIRECTIVES
+                .iter()
+                .map(|entry| at_directive_item(entry, range)),
+        );
+    }
+    items.extend(
+        PSEUDO_CLASSES
+            .iter()
+            .chain(SVELTE_PSEUDO_CLASSES)
+            .map(|entry| pseudo_item(entry, range, ":-")),
+    );
+    items.extend(
+        PSEUDO_ELEMENTS
+            .iter()
+            .map(|entry| pseudo_item(entry, range, "::-")),
+    );
+    items.extend(
+        HTML5_TAGS
+            .iter()
+            .chain(SVG_ELEMENTS)
+            .map(|name| CompletionItem {
+                label: (*name).to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                text_edit: replace(range, *name),
+                ..CompletionItem::default()
+            }),
+    );
+    CompletionList {
+        is_incomplete: false,
+        items,
+    }
 }
 
 fn css_prefix(text: &str, offset: usize) -> Option<&str> {
@@ -380,7 +529,13 @@ fn values(prefix: &str) -> Vec<CompletionItem> {
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::Position;
+
     use super::*;
+
+    fn items(text: &str) -> Vec<CompletionItem> {
+        completions(text, text.len()).unwrap().items
+    }
 
     fn labels(text: &str) -> Vec<String> {
         completions(text, text.len())
@@ -466,13 +621,139 @@ mod tests {
 
     #[test]
     fn completes_and_documents_global_selectors() {
-        let items = labels("<style>:glo");
-        assert!(items.contains(&":global".to_string()));
+        let global = items("<style>:glo")
+            .into_iter()
+            .find(|item| item.label == ":global()")
+            .expect(":global() is not offered");
+        assert_eq!(global.kind, Some(CompletionItemKind::FUNCTION));
+        assert_eq!(global.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        assert_eq!(
+            global.text_edit,
+            replace(
+                Range::new(Position::new(0, 7), Position::new(0, 11)),
+                ":global($1)"
+            )
+        );
+        assert!(global.sort_text.is_none());
         assert!(
             hover("<style>:global(.external) {}</style>", 14)
                 .unwrap()
                 .contains("prevents")
         );
+    }
+
+    /// Every number here was printed by `createLanguageServices().css`, the
+    /// service the official server runs, on the same text without `<style>`.
+    #[test]
+    fn offers_the_selector_context_the_official_service_offers() {
+        for (source, total, at_directives) in [
+            ("<style>", 402, 25),
+            ("<style> ", 402, 25),
+            ("<style>\n", 402, 25),
+            ("<style>@", 402, 25),
+            ("<style>@med", 402, 25),
+            ("<style>a{}\n", 402, 25),
+            ("<style>a{} ", 402, 25),
+            ("<style>a{}\n@", 402, 25),
+            ("<style>/*c*/", 402, 25),
+            ("<style>/*c*/@", 402, 25),
+            ("<style>:", 377, 0),
+            ("<style>:glo", 377, 0),
+            ("<style>a", 377, 0),
+            ("<style>a:", 377, 0),
+            ("<style>a:glo", 377, 0),
+            ("<style>a::", 377, 0),
+            ("<style>a,", 377, 0),
+            ("<style>a, ", 377, 0),
+            ("<style>a >", 377, 0),
+            ("<style>a > ", 377, 0),
+            ("<style>a{}\n:glo", 377, 0),
+        ] {
+            let items = items(source);
+            assert_eq!(items.len(), total, "{source:?}");
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item.label.starts_with('@'))
+                    .count(),
+                at_directives,
+                "{source:?}"
+            );
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item.kind == Some(CompletionItemKind::FUNCTION))
+                    .count(),
+                199,
+                "{source:?}"
+            );
+            // Only the vendor-prefixed pseudo entries are sorted last, and the
+            // property completion's `d_`/`x_` scheme reaches none of them.
+            assert_eq!(
+                items.iter().filter(|item| item.sort_text.is_some()).count(),
+                81,
+                "{source:?}"
+            );
+            assert!(
+                items
+                    .iter()
+                    .all(|item| item.sort_text.is_none() || item.sort_text.as_deref() == Some("x")),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// The residue of the lexical stand-in for `getCompletionForTopLevel`, over a
+    /// 270-cell grid of which 240 reach this path: 212 agree and these 28 do not.
+    /// Four of the five clusters are the official parser falling into a different
+    /// branch on a half-typed token; the fifth is a list rsvelte does not build.
+    #[test]
+    fn divergences_from_the_official_service_this_leaves() {
+        for (source, official, ours) in [
+            // A lone `-` leaves the official parser with no node before the
+            // offset, so it answers as if the statement had not started (10 cells).
+            ("<style>-", 402, 377),
+            ("<style>a{} -", 402, 377),
+            // The same after a `,`, where an empty token answers 377 (6 cells).
+            ("<style>a,@", 402, 377),
+            ("<style>a, -", 402, 377),
+            // The official service also offers every class selector the sheet
+            // itself declares, which rsvelte does not collect (10 cells).
+            ("<style>.x ", 378, 377),
+            // A cursor exactly on the closing brace is still inside the
+            // declarations upstream, so it completes properties (1 cell).
+            ("<style>a{}", 844, 402),
+            // And nothing at all after a closed at-rule block (1 cell).
+            ("<style>@media (x){}\n", 0, 402),
+        ] {
+            assert_ne!(
+                official, ours,
+                "{source:?} no longer diverges by construction"
+            );
+            assert_eq!(items(source).len(), ours, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn tags_a_deprecated_pseudo_entry_and_leaves_an_element_name_untagged() {
+        let items = items("<style>");
+        let deprecated: Vec<&str> = items
+            .iter()
+            .filter(|item| item.tags.as_deref().is_some_and(|tags| !tags.is_empty()))
+            .map(|item| item.label.as_str())
+            .collect();
+        assert_eq!(
+            deprecated,
+            vec![
+                "::-moz-range-progress",
+                "::-moz-range-thumb",
+                "::-moz-range-track",
+                "::-webkit-progress-inner-value",
+            ]
+        );
+        // Upstream builds an element name from a bare string, so it carries no
+        // `tags` at all where every data-derived entry carries an empty one.
+        assert_eq!(items.iter().filter(|item| item.tags.is_none()).count(), 178);
     }
 
     #[test]
