@@ -2950,11 +2950,11 @@ checked-in pattern corpus (#2019) surfaced are gone too: the two SSR
 destructuring ones (#2033, #2034) were fixed by #2036, and the block-local
 snippet render tag (#2031) by #2057.
 
-### Client (`known-failures.client.json`, 11 entries)
+### Client (`known-failures.client.json`, 10 entries)
 
-Partition of `known-failures.client.json` by verdict: `11`
+Partition of `known-failures.client.json` by verdict: `10`
 
-- **11 — the generated JS differs** (`js` / `code-differs`).
+- **10 — the generated JS differs** (`js` / `code-differs`).
 
 No CSS entry survives on this target: the one that did left with the ancestor-scoping fix
 below.
@@ -2978,6 +2978,20 @@ only. A two-arm sweep over this branch moved **2** units — this file on `clien
 `server`, both `css DIFF → EQ` — while the ratchet can hold only the first. The asymmetry is
 worth stating rather than rounding away: "the sweep moved 2 and the ratchet retires 1" is not
 a discrepancy, it is the population of the gate.
+
+`svelte-tweakpane-ui/…/control/Point.svelte` left this target and `client-dev` when the
+`$props` → `$sanitized_props` rewrite stopped being decided per LINE. Upstream rewrites
+`$props` **reads** through the AST (`read: (node) => ({ ...node, name: '$sanitized_props' })`),
+and the first argument of a generated `$.prop` / `$.bind_prop` / `$.legacy_rest_props` call is a
+binding position rather than a read, so upstream leaves it alone without needing a rule for it.
+rsvelte approximated that with a text scan that skipped **every line containing** one of those
+calls, which also skipped the genuine read inside a default-value thunk: one line of a 201-line
+output, `() => $props.expanded ?? undefined` where official emits `$sanitized_props`. The
+comment above the loop asserted the narrower claim correctly ("these calls … always use
+`$props` directly") and was wrong only about the **scope** — which is what made the line read
+as already checked. The repro carries the control that names the scanning unit as the defect: the
+same `$props.b` read moved out of the `$.prop` line into the script body is EQ on both arms.
+A 134,268-unit four-target sweep moved exactly these 2 units.
 
 `pattern/issues/3072-extends-shapes-legal.svelte.js` left this target and `client-dev` when
 the class-body scan stopped taking the first `{` after the header. A heritage clause can open
@@ -3228,7 +3242,7 @@ comments and compare" said the opposite, because official's line reduces to a ba
 the stripper invents a structural difference; that is the stricter-reconstruction hazard two
 paragraphs above, reached from the other side.
 
-Every one of the remaining 11 arrived with the wave-2 enrolment (#3176) and is described
+Every one of the remaining 10 arrived with the wave-2 enrolment (#3176) and is described
 in § *Wave-2 enrolment*. The list was **0** before it, and the one entry it ever
 held — #2031, a `{#snippet}` declared inside
 an `{#if}` branch and `{@render}`ed as a sibling in that same branch, lowered
@@ -3332,15 +3346,15 @@ that became unparseable only with `dev: true`; #3877 corrected the component
 callback tail-comment insertion point, so both its parse and output entries have
 been retired.
 
-### Client dev (`known-failures.client-dev.json`, 18 entries)
+### Client dev (`known-failures.client-dev.json`, 17 entries)
 
-Partition of `known-failures.client-dev.json` by verdict: `18`
+Partition of `known-failures.client-dev.json` by verdict: `17`
 
-- **18 — the generated JS differs.**
+- **17 — the generated JS differs.**
 
 Unlike `client`, no CSS entry survives on this target.
 
-All remaining 18 arrived with the wave-2 enrolment (#3176); this target was at 0 before
+All remaining 17 arrived with the wave-2 enrolment (#3176); this target was at 0 before
 it, and it is the largest of the four — 7 JS entries that `client` does not
 carry, which is the reason it is ratcheted separately.
 
