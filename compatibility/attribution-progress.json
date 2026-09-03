@@ -1,0 +1,138 @@
+{
+	"known-failures.client.json": [
+		{
+			"id": "ha-fusion/src/lib/Modal/VisibilityConfig/Index.svelte",
+			"issue": 4231,
+			"port": "3_transform/client",
+			"mechanism": "$.invalidate_inner_signals names the each item where upstream names the collection indexed by the each index"
+		},
+		{
+			"id": "headscale-ui/src/lib/settings/ServerSettings.svelte",
+			"issue": 4233,
+			"port": "3_transform/client",
+			"mechanism": "a String.raw tagged template attribute value is judged dynamic, so the $.set_attribute moves into a $.template_effect"
+		},
+		{
+			"id": "immich/web/src/lib/components/asset-viewer/ActivityViewer.svelte",
+			"issue": 4226,
+			"port": "3_transform/client",
+			"mechanism": "an assignment is proxied where upstream leaves it alone: the OVER direction of should_proxy"
+		},
+		{
+			"id": "musicat/src/lib/settings/SettingsPopup.svelte",
+			"issue": 4232,
+			"port": "3_transform/client",
+			"mechanism": "no $.invalidate_inner_signals is emitted beside a store mutation, while the $.store_mutate calls themselves are all present"
+		},
+		{
+			"id": "photon/src/lib/ui/navbar/Profile.svelte",
+			"issue": 4234,
+			"port": "3_transform/client",
+			"mechanism": "two $.reactive_import declarations are emitted in the wrong order"
+		},
+		{
+			"id": "primo/src/lib/builder/ui/Button.svelte",
+			"issue": 4230,
+			"port": "3_transform/client",
+			"mechanism": "PROPS_IS_LAZY_INITIAL is set for a parenthesised initializer upstream calls simple"
+		},
+		{
+			"id": "syntaxfm-website/src/routes/(site)/guests/+page.svelte",
+			"issue": 4236,
+			"port": "3_transform/client",
+			"mechanism": "a destructuring from a prop inlines its right-hand side into each member read instead of binding it once"
+		},
+		{
+			"id": "trakt-web/projects/client/src/lib/sections/navbar/_internal/NavbarHeader.svelte",
+			"issue": 4237,
+			"port": "3_transform/client",
+			"mechanism": "a {@const} is declared once and closed over where upstream re-declares it in each block body that reads it"
+		}
+	],
+	"known-failures.client-dev.json": [
+		{
+			"id": "ha-fusion/src/lib/Modal/VisibilityConfig/Index.svelte",
+			"issue": 4231,
+			"port": "3_transform/client",
+			"mechanism": "$.invalidate_inner_signals names the each item where upstream names the collection indexed by the each index"
+		},
+		{
+			"id": "headscale-ui/src/lib/settings/ServerSettings.svelte",
+			"issue": 4233,
+			"port": "3_transform/client",
+			"mechanism": "a String.raw tagged template attribute value is judged dynamic, so the $.set_attribute moves into a $.template_effect"
+		},
+		{
+			"id": "huly/plugins/workbench-resources/src/components/HelpAndSupport.svelte",
+			"issue": 4227,
+			"port": "3_transform/client/assign_dev_ast.rs",
+			"mechanism": "the AssignSites list is consumed in post-order, so a chained assignment reports a location column that does not advance"
+		},
+		{
+			"id": "immich/web/src/lib/components/asset-viewer/ActivityViewer.svelte",
+			"issue": 4226,
+			"port": "3_transform/client",
+			"mechanism": "an assignment is proxied where upstream leaves it alone: the OVER direction of should_proxy"
+		},
+		{
+			"id": "immich/web/src/lib/components/timeline/Timeline.svelte",
+			"issue": 4228,
+			"port": "3_transform/client/prop_mutation_validation_ast.rs",
+			"mechanism": "the ownership validator wraps the bare assignment and the bindable-prop setter is added outside it, inverting upstream composition order"
+		},
+		{
+			"id": "musicat/src/lib/settings/SettingsPopup.svelte",
+			"issue": 4232,
+			"port": "3_transform/client",
+			"mechanism": "no $.invalidate_inner_signals is emitted beside a store mutation, while the $.store_mutate calls themselves are all present"
+		},
+		{
+			"id": "photon/src/lib/ui/navbar/Profile.svelte",
+			"issue": 4234,
+			"port": "3_transform/client",
+			"mechanism": "two $.reactive_import declarations are emitted in the wrong order"
+		},
+		{
+			"id": "primo/src/lib/builder/ui/Button.svelte",
+			"issue": 4230,
+			"port": "3_transform/client",
+			"mechanism": "PROPS_IS_LAZY_INITIAL is set for a parenthesised initializer upstream calls simple"
+		},
+		{
+			"id": "svelte-bits/src/lib/components/library/Animations/MetallicPaint/MetallicPaint.svelte",
+			"issue": 4227,
+			"port": "3_transform/client/assign_dev_ast.rs",
+			"mechanism": "the AssignSites list is consumed in post-order, so a chained assignment reports a location column that does not advance"
+		},
+		{
+			"id": "svelte-lexical/packages/svelte-lexical/src/lib/core/NestedComposer.svelte",
+			"issue": 4228,
+			"port": "3_transform/client/prop_mutation_validation_ast.rs",
+			"mechanism": "the ownership validator wraps the bare assignment and the bindable-prop setter is added outside it, inverting upstream composition order"
+		},
+		{
+			"id": "svelte/packages/svelte/tests/snapshot/samples/delegated-locally-declared-shadowed/index.svelte",
+			"issue": 4235,
+			"port": "3_transform/client",
+			"mechanism": "a locally declared shadow of an each index is dev-instrumented as if it were reactive state"
+		},
+		{
+			"id": "svelvet/src/lib/components/Edge/Edge.svelte",
+			"issue": 4229,
+			"port": "3_transform/client",
+			"mechanism": "PROPS_IS_LAZY_INITIAL is decided on the initializer before the dev instrumentation rewrites it"
+		},
+		{
+			"id": "syntaxfm-website/src/routes/(site)/guests/+page.svelte",
+			"issue": 4236,
+			"port": "3_transform/client",
+			"mechanism": "a destructuring from a prop inlines its right-hand side into each member read instead of binding it once"
+		},
+		{
+			"id": "trakt-web/projects/client/src/lib/sections/navbar/_internal/NavbarHeader.svelte",
+			"issue": 4237,
+			"port": "3_transform/client",
+			"mechanism": "a {@const} is declared once and closed over where upstream re-declares it in each block body that reads it"
+		}
+	]
+}
