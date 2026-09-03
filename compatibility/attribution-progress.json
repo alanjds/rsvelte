@@ -16,7 +16,7 @@
 			"id": "immich/web/src/lib/components/asset-viewer/ActivityViewer.svelte",
 			"issue": 4226,
 			"port": "3_transform/client",
-			"mechanism": "an assignment is proxied where upstream leaves it alone: the OVER direction of should_proxy"
+			"mechanism": "a prop whose default is undefined is proxied on assignment, where a literal default and a bare prop both agree with upstream"
 		},
 		{
 			"id": "musicat/src/lib/settings/SettingsPopup.svelte",
@@ -72,7 +72,7 @@
 			"id": "immich/web/src/lib/components/asset-viewer/ActivityViewer.svelte",
 			"issue": 4226,
 			"port": "3_transform/client",
-			"mechanism": "an assignment is proxied where upstream leaves it alone: the OVER direction of should_proxy"
+			"mechanism": "a prop whose default is undefined is proxied on assignment, where a literal default and a bare prop both agree with upstream"
 		},
 		{
 			"id": "immich/web/src/lib/components/timeline/Timeline.svelte",
