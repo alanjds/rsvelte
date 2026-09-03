@@ -98,6 +98,7 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 
 use crate::compiler::phases::phase1_parse::parser::is_js_whitespace;
+use crate::compiler::phases::phase3_transform::shared::substring::Substring;
 use crate::compiler::phases::phase3_transform::shared::js_scan::{
     after_keyword, after_keywords, code_bytes, contains_identifier, find_code, find_rune_code,
     is_ident_byte, skip_opaque,
@@ -126,7 +127,7 @@ use crate::compiler::phases::phase2_analyze::scope::{BindingKind, DeclarationKin
 use crate::compiler::phases::phase2_analyze::types::{CopiedSourceChunk, ScriptProjection};
 
 // Import new visitor system types
-use crate::compiler::phases::phase3_transform::shared::substring::Substring;
+use crate::compiler::phases::phase3_transform::shared::json_field::Field;
 use types::{ComponentClientTransformState, ComponentContext, TransformOptions, TransformResult};
 
 // Cached regular expression for $$props replacement
@@ -2551,32 +2552,32 @@ pub(crate) fn transform_client(
         let ce_props: Vec<(String, serde_json::Map<String, serde_json::Value>)> = ce
             .props
             .as_ref()
-            .and_then(|p| p.get("properties"))
+            .and_then(|p| p.field("properties"))
             .and_then(|p| p.as_array())
             .map(|props| {
                 props
                     .iter()
                     .filter_map(|prop| {
-                        let key = prop.get("key")?;
+                        let key = prop.field("key")?;
                         let name = key
-                            .get("name")
+                            .field("name")
                             .and_then(|n| n.as_str())
-                            .or_else(|| key.get("value").and_then(|v| v.as_str()))?
+                            .or_else(|| key.field("value").and_then(|v| v.as_str()))?
                             .to_string();
                         let mut def = serde_json::Map::new();
                         if let Some(value_props) = prop
-                            .get("value")
-                            .and_then(|v| v.get("properties"))
+                            .field("value")
+                            .and_then(|v| v.field("properties"))
                             .and_then(|p| p.as_array())
                         {
                             for vp in value_props {
-                                let vkey = vp.get("key").and_then(|k| {
-                                    k.get("name")
+                                let vkey = vp.field("key").and_then(|k| {
+                                    k.field("name")
                                         .and_then(|n| n.as_str())
-                                        .or_else(|| k.get("value").and_then(|v| v.as_str()))
+                                        .or_else(|| k.field("value").and_then(|v| v.as_str()))
                                 });
                                 if let (Some(vkey), Some(vval)) =
-                                    (vkey, vp.get("value").and_then(|v| v.get("value")))
+                                    (vkey, vp.field("value").and_then(|v| v.field("value")))
                                 {
                                     def.insert(vkey.to_string(), vval.clone());
                                 }
@@ -2598,7 +2599,7 @@ pub(crate) fn transform_client(
                     .unwrap_or_else(|| name.clone());
 
                 let mut prop_type = prop_def
-                    .get("type")
+                    .field("type")
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string());
                 // If no explicit type and the binding's initial value is a boolean
@@ -2612,11 +2613,11 @@ pub(crate) fn transform_client(
                 }
 
                 let mut value_props: Vec<super::js_ast::nodes::JsObjectMember> = Vec::new();
-                if let Some(attribute) = prop_def.get("attribute").and_then(|a| a.as_str()) {
+                if let Some(attribute) = prop_def.field("attribute").and_then(|a| a.as_str()) {
                     value_props.push(b::prop(&context.arena, "attribute", b::string(attribute)));
                 }
                 if prop_def
-                    .get("reflect")
+                    .field("reflect")
                     .and_then(|r| r.as_bool())
                     .unwrap_or(false)
                 {
@@ -5444,13 +5445,15 @@ fn extract_proxy_vars(script: &str) -> Vec<String> {
 /// Node types for which upstream `should_proxy` returns false (→ the value is
 /// NOT wrapped in `$.proxy(...)`). An Identifier whose binding resolves to one
 /// of these initial node types is therefore non-proxyable.
-fn is_non_proxy_node_type(nt: &str, identifier_name: Option<&str>) -> bool {
-    // The name is a parameter rather than a caller-side `||` arm because
-    // upstream's `should_proxy` answers `false` for `undefined` in the same
-    // clause as the literal types: two of four call sites had forgotten it.
-    !crate::compiler::phases::phase3_transform::client::visitors::shared::utils::should_proxy_node_type(
+fn is_non_proxy_node_type(nt: &str) -> bool {
+    matches!(
         nt,
-        identifier_name,
+        "Literal"
+            | "TemplateLiteral"
+            | "ArrowFunctionExpression"
+            | "FunctionExpression"
+            | "UnaryExpression"
+            | "BinaryExpression"
     )
 }
 
@@ -5697,8 +5700,10 @@ fn transform_module_script_runes_with_target(
                 && (b.initial_is_function
                     || b.initial_node_type
                         .as_deref()
-                        .map(|nt| is_non_proxy_node_type(nt, b.initial_identifier_name.as_deref()))
-                        .unwrap_or(false))
+                        .map(is_non_proxy_node_type)
+                        .unwrap_or(false)
+                    || (b.initial_node_type.as_deref() == Some("Identifier")
+                        && b.initial_identifier_name.as_deref() == Some("undefined")))
         })
         .map(|b| b.name.clone())
         .collect();
@@ -7001,7 +7006,7 @@ fn compute_non_proxy_scope(analysis: &ComponentAnalysis) -> NonProxyScope {
             let ok = b
                 .initial_node_type
                 .as_deref()
-                .map(|nt| is_non_proxy_node_type(nt, b.initial_identifier_name.as_deref()))
+                .map(is_non_proxy_node_type)
                 .unwrap_or(false);
             let entry = per_name.entry(b.name.clone()).or_insert((true, 0));
             if !ok {
@@ -7063,10 +7068,13 @@ fn compute_non_proxy_scope(analysis: &ComponentAnalysis) -> NonProxyScope {
                         | BindingKind::StoreSub
                 )
                 && b.import_source.is_none()
-                && b.initial_node_type
+                && (b
+                    .initial_node_type
                     .as_deref()
-                    .map(|nt| is_non_proxy_node_type(nt, b.initial_identifier_name.as_deref()))
+                    .map(is_non_proxy_node_type)
                     .unwrap_or(false)
+                    || (b.initial_node_type.as_deref() == Some("Identifier")
+                        && b.initial_identifier_name.as_deref() == Some("undefined")))
             {
                 return true;
             }
@@ -7922,7 +7930,7 @@ fn transform_instance_script_for_visitors(
                 && matches!(b.kind, BindingKind::Prop | BindingKind::BindableProp)
                 && b.initial_node_type
                     .as_deref()
-                    .map(|nt| is_non_proxy_node_type(nt, b.initial_identifier_name.as_deref()))
+                    .map(is_non_proxy_node_type)
                     .unwrap_or(false)
             {
                 v.push(b.name.clone());
