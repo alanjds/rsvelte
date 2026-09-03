@@ -10,7 +10,7 @@
 			"id": "headscale-ui/src/lib/settings/ServerSettings.svelte",
 			"issue": 4233,
 			"port": "3_transform/client",
-			"mechanism": "a String.raw tagged template attribute value is judged dynamic, so the $.set_attribute moves into a $.template_effect"
+			"mechanism": "a tagged template attribute value is judged dynamic whatever its tag, so the $.set_attribute moves into a $.template_effect"
 		},
 		{
 			"id": "immich/web/src/lib/components/asset-viewer/ActivityViewer.svelte",
@@ -60,7 +60,7 @@
 			"id": "headscale-ui/src/lib/settings/ServerSettings.svelte",
 			"issue": 4233,
 			"port": "3_transform/client",
-			"mechanism": "a String.raw tagged template attribute value is judged dynamic, so the $.set_attribute moves into a $.template_effect"
+			"mechanism": "a tagged template attribute value is judged dynamic whatever its tag, so the $.set_attribute moves into a $.template_effect"
 		},
 		{
 			"id": "huly/plugins/workbench-resources/src/components/HelpAndSupport.svelte",
