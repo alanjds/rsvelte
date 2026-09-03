@@ -46,7 +46,7 @@
 			"id": "trakt-web/projects/client/src/lib/sections/navbar/_internal/NavbarHeader.svelte",
 			"issue": 4237,
 			"port": "3_transform/client",
-			"mechanism": "a {@const} is declared once and closed over where upstream re-declares it in each block body that reads it"
+			"mechanism": "a {@const} is declared once and closed over where upstream re-declares it in the body of a snippet nested inside an element"
 		}
 	],
 	"known-failures.client-dev.json": [
@@ -132,7 +132,7 @@
 			"id": "trakt-web/projects/client/src/lib/sections/navbar/_internal/NavbarHeader.svelte",
 			"issue": 4237,
 			"port": "3_transform/client",
-			"mechanism": "a {@const} is declared once and closed over where upstream re-declares it in each block body that reads it"
+			"mechanism": "a {@const} is declared once and closed over where upstream re-declares it in the body of a snippet nested inside an element"
 		}
 	]
 }
