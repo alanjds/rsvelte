@@ -114,7 +114,7 @@
 			"id": "svelte/packages/svelte/tests/snapshot/samples/delegated-locally-declared-shadowed/index.svelte",
 			"issue": 4235,
 			"port": "3_transform/client",
-			"mechanism": "a locally declared shadow of an each index is dev-instrumented as if it were reactive state"
+			"mechanism": "a local declared inside a template event handler is dev-instrumented as reactive state, rescued only by shadowing an each name in a component with no instance script"
 		},
 		{
 			"id": "svelvet/src/lib/components/Edge/Edge.svelte",
