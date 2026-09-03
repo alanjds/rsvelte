@@ -29959,23 +29959,6 @@ pub const PSEUDO_CLASSES: &[Entry] = &[
         status: None,
     },
     Entry {
-        name: ":host",
-        description: Some(
-            "When evaluated in the context of a shadow tree, it matches the shadow tree's host element if the host element, in its normal context, matches the selector argument.",
-        ),
-        browsers: Some(&["E79", "FF63", "FFA63", "S10", "SM10", "C54", "CA54", "O41"]),
-        references: &[Reference {
-            name: "MDN Reference",
-            url: "https://developer.mozilla.org/docs/Web/CSS/:host",
-        }],
-        baseline: Some(Baseline {
-            status: BaselineStatus::High,
-            low_date: Some("2020-01-15"),
-            high_date: Some("2022-07-15"),
-        }),
-        status: None,
-    },
-    Entry {
         name: ":host-context",
         description: Some(
             "Tests whether there is an ancestor, outside the shadow tree, which matches a particular selector.",
@@ -31438,29 +31421,6 @@ pub const PSEUDO_ELEMENTS: &[Entry] = &[
             low_date: Some("2020-01-15"),
             high_date: Some("2022-07-15"),
         }),
-        status: None,
-    },
-    Entry {
-        name: "::cue",
-        description: None,
-        browsers: Some(&["E79", "FF55", "FFA55", "S7", "SM7", "C26", "CA26", "O15"]),
-        references: &[Reference {
-            name: "MDN Reference",
-            url: "https://developer.mozilla.org/docs/Web/CSS/::cue",
-        }],
-        baseline: Some(Baseline {
-            status: BaselineStatus::High,
-            low_date: Some("2020-01-15"),
-            high_date: Some("2022-07-15"),
-        }),
-        status: None,
-    },
-    Entry {
-        name: "::cue-region",
-        description: None,
-        browsers: Some(&["C", "O16", "S6"]),
-        references: &[],
-        baseline: None,
         status: None,
     },
     Entry {

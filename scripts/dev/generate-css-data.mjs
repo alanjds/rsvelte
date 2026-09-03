@@ -87,6 +87,17 @@ const optionalStrings = (items) => (items === undefined ? "None" : `Some(${slice
 const pairs = (object) =>
   slice(Object.entries(object), ([key, value]) => `(${string(key)},${string(value)})`);
 
+// `CSSDataManager.collectData` keeps the first entry it sees per name, so a
+// duplicate in the shipped data is never offered twice — rsvelte has no data
+// manager, so the collection has to happen here.
+const collect = (items) => {
+  const seen = new Map();
+  for (const item of items) {
+    if (!seen.has(item.name)) seen.set(item.name, item);
+  }
+  return [...seen.values()];
+};
+
 const references = (entry) =>
   slice(
     entry.references ?? [],
@@ -271,7 +282,14 @@ function main() {
   const colorsPath = path.join(root, COLORS_FILE);
   const entryPath = path.join(root, ENTRY_FILE);
   const loaded = require(dataPath);
-  const data = loaded.cssData ?? loaded.default ?? loaded;
+  const raw = loaded.cssData ?? loaded.default ?? loaded;
+  const data = {
+    ...raw,
+    properties: collect(raw.properties),
+    atDirectives: collect(raw.atDirectives),
+    pseudoClasses: collect(raw.pseudoClasses),
+    pseudoElements: collect(raw.pseudoElements),
+  };
   const builtin = require(builtinPath);
   const colors = require(colorsPath);
   const entryModule = require(entryPath);

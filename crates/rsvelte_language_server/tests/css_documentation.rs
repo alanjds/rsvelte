@@ -100,6 +100,31 @@ fn every_entry_documents_itself_the_way_upstream_does() {
         assert!(len > 0, "{table} is empty, so this test has no population");
     }
 
+    // `CSSDataManager.collectData` keeps the first entry per name, so a name the
+    // shipped data repeats is offered once; both sides of this comparison share
+    // the table, and only a distinctness check can see the duplicate.
+    for (table, names) in [
+        (
+            "PROPERTIES",
+            PROPERTIES.iter().map(|p| p.name).collect::<Vec<_>>(),
+        ),
+        (
+            "AT_DIRECTIVES",
+            AT_DIRECTIVES.iter().map(|e| e.name).collect::<Vec<_>>(),
+        ),
+        (
+            "PSEUDO_CLASSES",
+            PSEUDO_CLASSES.iter().map(|e| e.name).collect::<Vec<_>>(),
+        ),
+        (
+            "PSEUDO_ELEMENTS",
+            PSEUDO_ELEMENTS.iter().map(|e| e.name).collect::<Vec<_>>(),
+        ),
+    ] {
+        let distinct: std::collections::BTreeSet<&str> = names.iter().copied().collect();
+        assert_eq!(distinct.len(), names.len(), "{table} repeats a name");
+    }
+
     assert_eq!(
         actual.keys().collect::<Vec<_>>(),
         expected.keys().collect::<Vec<_>>(),
