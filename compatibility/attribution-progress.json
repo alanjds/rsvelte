@@ -4,7 +4,7 @@
 			"id": "ha-fusion/src/lib/Modal/VisibilityConfig/Index.svelte",
 			"issue": 4231,
 			"port": "3_transform/client",
-			"mechanism": "$.invalidate_inner_signals names the each item where upstream names the collection indexed by the each index"
+			"mechanism": "a reassigned outer each item is named directly in $.invalidate_inner_signals where upstream names the collection indexed by the each index"
 		},
 		{
 			"id": "headscale-ui/src/lib/settings/ServerSettings.svelte",
@@ -54,7 +54,7 @@
 			"id": "ha-fusion/src/lib/Modal/VisibilityConfig/Index.svelte",
 			"issue": 4231,
 			"port": "3_transform/client",
-			"mechanism": "$.invalidate_inner_signals names the each item where upstream names the collection indexed by the each index"
+			"mechanism": "a reassigned outer each item is named directly in $.invalidate_inner_signals where upstream names the collection indexed by the each index"
 		},
 		{
 			"id": "headscale-ui/src/lib/settings/ServerSettings.svelte",
