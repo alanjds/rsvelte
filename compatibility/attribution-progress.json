@@ -28,7 +28,7 @@
 			"id": "photon/src/lib/ui/navbar/Profile.svelte",
 			"issue": 4234,
 			"port": "3_transform/client",
-			"mechanism": "two $.reactive_import declarations are emitted in the wrong order"
+			"mechanism": "the $.reactive_import block is emitted before the hoisted snippet functions where upstream emits it after them"
 		},
 		{
 			"id": "primo/src/lib/builder/ui/Button.svelte",
@@ -90,7 +90,7 @@
 			"id": "photon/src/lib/ui/navbar/Profile.svelte",
 			"issue": 4234,
 			"port": "3_transform/client",
-			"mechanism": "two $.reactive_import declarations are emitted in the wrong order"
+			"mechanism": "the $.reactive_import block is emitted before the hoisted snippet functions where upstream emits it after them"
 		},
 		{
 			"id": "primo/src/lib/builder/ui/Button.svelte",
