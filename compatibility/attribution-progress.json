@@ -34,7 +34,7 @@
 			"id": "primo/src/lib/builder/ui/Button.svelte",
 			"issue": 4230,
 			"port": "3_transform/client",
-			"mechanism": "PROPS_IS_LAZY_INITIAL is set for a parenthesised initializer upstream calls simple"
+			"mechanism": "PROPS_IS_LAZY_INITIAL is set for an initializer that is BOTH parenthesised and JSDoc-annotated, which upstream calls simple"
 		},
 		{
 			"id": "syntaxfm-website/src/routes/(site)/guests/+page.svelte",
@@ -96,7 +96,7 @@
 			"id": "primo/src/lib/builder/ui/Button.svelte",
 			"issue": 4230,
 			"port": "3_transform/client",
-			"mechanism": "PROPS_IS_LAZY_INITIAL is set for a parenthesised initializer upstream calls simple"
+			"mechanism": "PROPS_IS_LAZY_INITIAL is set for an initializer that is BOTH parenthesised and JSDoc-annotated, which upstream calls simple"
 		},
 		{
 			"id": "svelte-bits/src/lib/components/library/Animations/MetallicPaint/MetallicPaint.svelte",
