@@ -9,11 +9,15 @@
 // located; an issue number is deferral, not achievement.
 //
 // It checks a RELATION -- one mechanism, one issue -- and says nothing about
-// whether a `mechanism` string is true. Six of the first twelve were wrong while
+// whether a `mechanism` string is true. Most of the first batch were wrong while
 // passing here: written from the carrier's spelling, from a diff hunk read as
 // order, naming one half of a conjunction, naming a symptom instead of a trigger,
-// and once with the direction reversed. Only a cell reduced from the carrier and
-// run against the oracle settles the content; until then the issue says so.
+// missing a condition, and once with the direction reversed. Only a cell reduced
+// from the carrier and run against the oracle settles the content, and reducing
+// from this string instead inherits its error; until then the issue says so.
+//
+// Nor can it see one entry carrying TWO mechanisms: the relation runs the other
+// way, and such an entry retires only when both are fixed.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
