@@ -22,7 +22,7 @@
 			"id": "musicat/src/lib/settings/SettingsPopup.svelte",
 			"issue": 4232,
 			"port": "3_transform/client",
-			"mechanism": "no $.invalidate_inner_signals is emitted beside a store mutation, while the $.store_mutate calls themselves are all present"
+			"mechanism": "a legacy <select bind:value> populates no legacy_indirect_bindings, so no $.invalidate_inner_signals is appended to mutations of the bound binding"
 		},
 		{
 			"id": "photon/src/lib/ui/navbar/Profile.svelte",
@@ -84,7 +84,7 @@
 			"id": "musicat/src/lib/settings/SettingsPopup.svelte",
 			"issue": 4232,
 			"port": "3_transform/client",
-			"mechanism": "no $.invalidate_inner_signals is emitted beside a store mutation, while the $.store_mutate calls themselves are all present"
+			"mechanism": "a legacy <select bind:value> populates no legacy_indirect_bindings, so no $.invalidate_inner_signals is appended to mutations of the bound binding"
 		},
 		{
 			"id": "photon/src/lib/ui/navbar/Profile.svelte",
